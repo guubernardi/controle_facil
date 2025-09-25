@@ -1,62 +1,308 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8" />
-  <title>Devoluções</title>
-  <link rel="stylesheet" href="css/index.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Devoluções - Gestão Inteligente</title>
+    <meta name="description" content="Sistema completo para gerenciamento de devoluções de produtos com interface moderna e intuitiva">
+    <meta name="author" content="Sistema Devoluções">
+    <meta name="keywords" content="devoluções, gestão, produtos, e-commerce, sistema">
+    
+    <meta property="og:title" content="Sistema de Devoluções - Gestão Inteligente">
+    <meta property="og:description" content="Gerencie todas as devoluções com eficiência e praticidade">
+    <meta property="og:type" content="website">
+
+    <link rel="stylesheet" href="css/navbar.css">
+    <link rel="stylesheet" href="css/index.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>Registro de Produtos</h1>
+    <!-- Header -->
+    <header id="cabecalho" class="cabecalho">
+        <div class="container">
+            <div class="cabecalho-conteudo">
+                <div class="logo-area">
+                    <div class="icone-sistema">
+                        <img src="assets/img/logo_rf.png" alt="Logo" class="icone-principal">
+                        <div class="badge-status">
+                            <svg class="icone-raio" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 2a.5.5 0 0 1 .5.5v5.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 8.293V2.5A.5.5 0 0 1 8 2z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="titulo-area">
+                        <h1 class="titulo-principal">Retorna Facil</h1>
+                        <p class="subtitulo">
+                            <svg class="icone-trending" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M0 11.5a.5.5 0 0 1 .5-.5h2.279l4.471-4.471a.5.5 0 0 1 .708 0L10.5 9.5l3.646-3.646a.5.5 0 0 1 .708.708l-4 4a.5.5 0 0 1-.708 0L7.604 8.061 3.5 12.165A.5.5 0 0 1 3 12.5h-2.5a.5.5 0 0 1-.5-.5z"/>
+                            </svg>
+                            Gerencie todas as devoluções de produtos
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="acoes-header">
+                    <button id="botao-nova-devolucao" class="botao botao-principal">
+                        <svg class="icone" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 0a.5.5 0 0 1 .5.5v7h7a.5.5 0 0 1 0 1h-7v7a.5.5 0 0 1-1 0v-7h-7a.5.5 0 0 1 0-1h7v-7A.5.5 0 0 1 8 0z"/>
+                        </svg>
+                        Nova Devolução
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
 
-  <label>Data da Compra
-    <input type="date" id="data_compra" />
-  </label>
+    <main id="conteudo-principal" class="conteudo-principal">
+        <div class="container">
+            <!-- Cards de Estatísticas -->
+            <section id="estatisticas" class="secao-estatisticas">
+                <div class="grade-cards">
+                    <div class="card-estatistica fade-in">
+                        <div class="card-header">
+                            <span class="card-titulo">Total de Devoluções</span>
+                            <svg class="icone-card" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/>
+                            </svg>
+                        </div>
+                        <div class="card-conteudo">
+                            <div id="total-devolucoes" class="numero-principal">0</div>
+                            <p class="descricao-card">Todas as devoluções registradas</p>
+                        </div>
+                    </div>
 
-  <label>ID VENDA
-    <input type="text" id="id_venda" placeholder="Ex.: 1" />
-  </label>
+                    <div class="card-estatistica fade-in" style="animation-delay: 0.1s;">
+                        <div class="card-header">
+                            <span class="card-titulo">Pendentes</span>
+                            <svg class="icone-card icone-accent" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                                <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3.5a.5.5 0 0 1-.5-.5v-3.5A.5.5 0 0 1 8 4z"/>
+                            </svg>
+                        </div>
+                        <div class="card-conteudo">
+                            <div id="pendentes-count" class="numero-principal numero-accent">0</div>
+                            <p class="descricao-card">Aguardando análise</p>
+                        </div>
+                    </div>
 
-  <label>Loja (auto)
-    <input type="text" id="loja_auto" readonly />
-  </label>
+                    <div class="card-estatistica fade-in" style="animation-delay: 0.2s;">
+                        <div class="card-header">
+                            <span class="card-titulo">Aprovadas</span>
+                            <svg class="icone-card icone-secondary" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/>
+                            </svg>
+                        </div>
+                        <div class="card-conteudo">
+                            <div id="aprovadas-count" class="numero-principal numero-secondary">0</div>
+                            <p class="descricao-card">Devoluções autorizadas</p>
+                        </div>
+                    </div>
 
-  <label>SKU
-    <input type="text" id="sku" />
-  </label>
+                    <div class="card-estatistica fade-in" style="animation-delay: 0.3s;">
+                        <div class="card-header">
+                            <span class="card-titulo">Rejeitadas</span>
+                            <svg class="icone-card icone-destructive" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </div>
+                        <div class="card-conteudo">
+                            <div id="rejeitadas-count" class="numero-principal numero-destructive">0</div>
+                            <p class="descricao-card">Devoluções negadas</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
 
-  <label>Tipo Reclamação
-    <input type="text" id="tipo_reclamacao" placeholder="avaria, defeito..." />
-  </label>
+            <!-- Filtros e Pesquisa -->
+            <section id="filtros" class="secao-filtros">
+                <div class="card-filtros slide-up">
+                    <div class="filtros-conteudo">
+                        <div class="campo-pesquisa">
+                            <svg class="icone-pesquisa" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+                            </svg>
+                            <input type="text" id="campo-pesquisa" class="input-pesquisa" placeholder="Pesquisar por cliente, pedido ou produto...">
+                        </div>
+                        
+                        <div class="campo-filtro">
+                            <select id="filtro-status" class="select-filtro">
+                                <option value="todos">Todos os Status</option>
+                                <option value="pendente">Pendentes</option>
+                                <option value="aprovado">Aprovadas</option>
+                                <option value="rejeitado">Rejeitadas</option>
+                            </select>
+                        </div>
 
-  <label>Status
-    <input type="text" id="status" placeholder="retornou, reembolso..." />
-  </label>
+                        <button id="botao-exportar" class="botao botao-outline">
+                            <svg class="icone" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                                <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+                            </svg>
+                            Exportar
+                        </button>
+                    </div>
+                </div>
+            </section>
 
-  <label>Valor Produto
-    <input type="number" step="0.01" id="valor_produto" />
-  </label>
+            <!-- Lista de Devoluções -->
+            <section id="lista-devolucoes" class="secao-lista">
+                <div id="container-devolucoes" class="container-devolucoes">
+                    <!-- As devoluções serão inseridas aqui via JavaScript -->
+                </div>
+                
+                <div id="mensagem-vazia" class="mensagem-vazia" style="display: none;">
+                    <div class="card-vazio">
+                        <svg class="icone-vazio" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/>
+                        </svg>
+                        <h3 class="titulo-vazio">Nenhuma devolução encontrada</h3>
+                        <p id="descricao-vazia" class="descricao-vazio">Nenhuma devolução foi registrada ainda</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
 
-  <label>Valor Frete
-    <input type="number" step="0.01" id="valor_frete" />
-  </label>
+    <!-- Modal Nova Devolução -->
+    <div id="modal-nova-devolucao" class="modal" style="display: none;">
+        <div class="modal-overlay">
+            <div class="modal-conteudo">
+                <div class="modal-header">
+                    <h2 class="modal-titulo">Criar Nova Devolução</h2>
+                    <p class="modal-descricao">Preencha os dados para registrar uma nova devolução</p>
+                    <button id="botao-fechar-modal" class="botao-fechar">
+                        <svg viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                        </svg>
+                    </button>
+                </div>
+                
+                        <!-- Modal Detalhes / Edição -->
+                        <div id="modal-detalhes" class="modal" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
+                            <div class="modal-overlay">
+                                <div class="modal-conteudo" role="document">
 
-  <label>Reclamação
-    <textarea id="reclamacao"></textarea>
-  </label>
+                                    <!-- header -->
+                                    <div class="modal-header">
+                                        <h2 class="modal-titulo"><span id="md-titulo">Detalhes da devolução</span></h2>
+                                        <button id="md-fechar" class="botao-fechar" title="Fechar" aria-label="Fechar modal">
+                                            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                                            </svg>
+                                        </button>
+                                    </div>
 
-  <button id="btnSalvar">Salvar</button>
+                                    <!-- body: agrupado em grid -->
+                                    <form id="md-form" class="modal-form" novalidate>
+                                        <input type="hidden" id="md-id" name="id">
 
-  <h2>Devoluções recentes</h2>
-  <table border="1" cellspacing="0" cellpadding="6">
-    <thead>
-      <tr>
-        <th>ID</th><th>Data compra</th><th>ID venda</th><th>Loja</th>
-        <th>SKU</th><th>Tipo</th><th>Status</th><th>R$ Produto</th><th>R$ Frete</th><th>Criado em</th>
-      </tr>
-    </thead>
-    <tbody id="lista"></tbody>
-  </table>
+                                        <div class="modal-body">
+                                            <div class="grid-2">
+                                                <div class="campo-form">
+                                                    <label for="md-numero" class="label-form">Número do Pedido</label>
+                                                    <input id="md-numero" name="numero" class="input-form" disabled>
+                                                </div>
 
-  <script src="/js/index.js"></script>
+                                                <div class="campo-form">
+                                                    <label for="md-loja" class="label-form">Loja</label>
+                                                    <input id="md-loja" name="loja" class="input-form" disabled>
+                                                </div>
+                                            </div>
+
+                                            <div class="grid-3">
+                                                <div class="campo-form">
+                                                    <label for="md-status" class="label-form">Status</label>
+                                                    <select id="md-status" name="status" class="select-filtro" disabled>
+                                                        <option value="pendente">Pendente</option>
+                                                        <option value="aprovado">Aprovado</option>
+                                                        <option value="rejeitado">Rejeitado</option>
+                                                    </select>
+                                                </div>
+
+                                                <div class="campo-form">
+                                                    <label for="md-valor-prod" class="label-form">Valor do Produto (R$)</label>
+                                                    <input id="md-valor-prod" name="valor_prod" type="number" step="0.01" class="input-form" disabled>
+                                                </div>
+
+                                                <div class="campo-form">
+                                                    <label for="md-valor-frete" class="label-form">Valor do Frete (R$)</label>
+                                                    <input id="md-valor-frete" name="valor_frete" type="number" step="0.01" class="input-form" disabled>
+                                                </div>
+                                            </div>
+
+                                            <div class="campo-form">
+                                                <label for="md-reclamacao" class="label-form">Motivo / Reclamação</label>
+                                                <textarea id="md-reclamacao" name="reclamacao" class="textarea-form" rows="4" disabled></textarea>
+                                            </div>
+                                        </div>
+
+                                        <!-- footer / ações -->
+                                        <div class="modal-acoes">
+                                            <button type="button" id="md-excluir" class="botao botao-outline">Excluir</button>
+                                            <div style="flex:1"></div>
+                                            <button type="button" id="md-editar" class="botao botao-outline">Editar</button>
+                                            <button type="submit" id="md-salvar" class="botao botao-principal" style="display:none;">Salvar</button>
+                                            <button type="button" id="md-cancelar" class="botao botao-outline" style="display:none;">Cancelar</button>
+                                        </div>
+                                    </form>
+
+                                </div>
+                            </div>
+                        </div>
+
+
+                
+                <form id="form-nova-devolucao" class="modal-form">
+                    <div class="campo-form">
+                        <label for="numero-pedido" class="label-form">Número do Pedido *</label>
+                        <input type="text" id="numero-pedido" class="input-form" placeholder="Ex: PED-001" required>
+                    </div>
+                    
+                    <div class="campo-form">
+                        <label for="nome-cliente" class="label-form">Cliente *</label>
+                        <input type="text" id="nome-cliente" class="input-form" placeholder="Nome do cliente" required>
+                    </div>
+                    
+                    <div class="campo-form">
+                        <label for="nome-produto" class="label-form">Produto *</label>
+                        <input type="text" id="nome-produto" class="input-form" placeholder="Nome do produto" required>
+                    </div>
+                    
+                    <div class="campo-form">
+                        <label for="valor-produto" class="label-form">Valor do Produto</label>
+                        <input type="number" id="valor-produto" class="input-form" step="0.01" placeholder="0.00">
+                    </div>
+                    
+                    <div class="campo-form">
+                        <label for="motivo-devolucao" class="label-form">Motivo da Devolução</label>
+                        <textarea id="motivo-devolucao" class="textarea-form" placeholder="Descreva o motivo da devolução..."></textarea>
+                    </div>
+                    
+                    <div class="modal-acoes">
+                        <button type="button" id="botao-cancelar" class="botao botao-outline">Cancelar</button>
+                        <button type="submit" class="botao botao-principal">Criar Devolução</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast de Notificação -->
+    <div id="toast" class="toast" style="display: none;">
+        <div class="toast-conteudo">
+            <div class="toast-icone">
+                <svg viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/>
+                </svg>
+            </div>
+            <div class="toast-texto">
+                <div id="toast-titulo" class="toast-titulo"></div>
+                <div id="toast-descricao" class="toast-descricao"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/index.js"></script>
+    <script src="js/header.js"></script>
 </body>
 </html>

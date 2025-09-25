@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Registros — Sistema de Devoluções</title>
+  <link rel="stylesheet" href="css/index.css"/>
+  <link rel="stylesheet" href="css/navbar.css"/>
+</head>
+<body>
+  <main class="conteudo-principal">
+    <div class="container">
+      <section class="secao-filtros">
+        <div class="card-filtros">
+          <div class="filtros-conteudo">
+            <input id="busca" class="input-pesquisa" placeholder="Buscar por SKU, loja ou NF..." />
+            <select id="filtro" class="select-filtro">
+              <option value="">Todos os status</option>
+              <option value="pendente">Pendente</option>
+              <option value="aprovado">Aprovado</option>
+              <option value="rejeitado">Rejeitado</option>
+            </select>
+            <button id="btnBuscar" class="botao botao-principal">Buscar</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="secao-lista">
+        <div class="card-estatistica">
+          <div id="tabela"></div>
+          <div id="paginacao" style="margin-top:1rem; display:flex; gap:.5rem;"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Modal de Edição -->
+<div id="modal-editar" class="modal" style="display:none;">
+  <div class="modal-overlay"></div>
+  <div class="modal-conteudo" style="max-width:720px;">
+    <div class="modal-header">
+      <h2 class="modal-titulo">Editar devolução</h2>
+      <p class="modal-descricao">Atualize os campos necessários e salve as alterações.</p>
+      <button id="fechar-editar" class="botao-fechar" aria-label="Fechar">
+        <svg viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
+          <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+        </svg>
+      </button>
+    </div>
+
+    <form id="form-editar" class="modal-form">
+      <input type="hidden" id="edit-id">
+
+      <div style="display:grid; gap:1rem; grid-template-columns: 1fr 1fr;">
+        <div class="campo-form">
+          <label class="label-form" for="edit-status">Status</label>
+          <select id="edit-status" class="input-form">
+            <option value="pendente">Pendente</option>
+            <option value="aprovado">Aprovado</option>
+            <option value="rejeitado">Rejeitado</option>
+          </select>
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-data">Data da compra</label>
+          <input id="edit-data" class="input-form" type="date">
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-loja">Loja (nome)</label>
+          <input id="edit-loja" class="input-form" placeholder="Ex.: Mercado Livre">
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-sku">SKU</label>
+          <input id="edit-sku" class="input-form" placeholder="SKU">
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-valor-prod">Valor do produto (R$)</label>
+          <input id="edit-valor-prod" class="input-form" type="number" step="0.01" inputmode="decimal">
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-valor-frete">Valor do frete (R$)</label>
+          <input id="edit-valor-frete" class="input-form" type="number" step="0.01" inputmode="decimal">
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-tipo">Tipo de reclamação</label>
+          <input id="edit-tipo" class="input-form" placeholder="Defeito, arrependimento...">
+        </div>
+
+        <div class="campo-form">
+          <label class="label-form" for="edit-nfe-num">NF-e (número)</label>
+          <input id="edit-nfe-num" class="input-form" placeholder="Número da nota">
+        </div>
+
+        <div class="campo-form" style="grid-column: 1 / -1;">
+          <label class="label-form" for="edit-nfe-chave">NF-e (chave)</label>
+          <input id="edit-nfe-chave" class="input-form" placeholder="Chave NF-e (44 dígitos)">
+        </div>
+
+        <div class="campo-form" style="grid-column: 1 / -1;">
+          <label class="label-form" for="edit-reclamacao">Descrição / Observação</label>
+          <textarea id="edit-reclamacao" class="textarea-form" rows="4" placeholder="Detalhes da devolução..."></textarea>
+        </div>
+      </div>
+
+        <div class="modal-acoes">
+            <button type="button" id="cancelar-editar" class="botao     botao-outline">Cancelar</button>
+            <button type="submit" class="botao botao-principal">Salvar alterações</button>
+        </div>
+        </form>
+    </div>
+    </div>
+
+
+  <script src="js/header.js"></script>
+  <script src="js/registros.js"></script>
+</body>
+</html>
