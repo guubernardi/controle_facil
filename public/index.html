@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Devoluções</title>
+  <link rel="stylesheet" href="css/index.css" />
+</head>
+<body>
+  <h1>Registro de Produtos</h1>
+
+  <label>Data da Compra
+    <input type="date" id="data_compra" />
+  </label>
+
+  <label>ID VENDA
+    <input type="text" id="id_venda" placeholder="Ex.: 1" />
+  </label>
+
+  <label>Loja (auto)
+    <input type="text" id="loja_auto" readonly />
+  </label>
+
+  <label>SKU
+    <input type="text" id="sku" />
+  </label>
+
+  <label>Tipo Reclamação
+    <input type="text" id="tipo_reclamacao" placeholder="avaria, defeito..." />
+  </label>
+
+  <label>Status
+    <input type="text" id="status" placeholder="retornou, reembolso..." />
+  </label>
+
+  <label>Valor Produto
+    <input type="number" step="0.01" id="valor_produto" />
+  </label>
+
+  <label>Valor Frete
+    <input type="number" step="0.01" id="valor_frete" />
+  </label>
+
+  <label>Reclamação
+    <textarea id="reclamacao"></textarea>
+  </label>
+
+  <button id="btnSalvar">Salvar</button>
+
+  <h2>Devoluções recentes</h2>
+  <table border="1" cellspacing="0" cellpadding="6">
+    <thead>
+      <tr>
+        <th>ID</th><th>Data compra</th><th>ID venda</th><th>Loja</th>
+        <th>SKU</th><th>Tipo</th><th>Status</th><th>R$ Produto</th><th>R$ Frete</th><th>Criado em</th>
+      </tr>
+    </thead>
+    <tbody id="lista"></tbody>
+  </table>
+
+  <script src="/js/index.js"></script>
+</body>
+</html>

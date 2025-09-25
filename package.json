@@ -1,0 +1,16 @@
+{
+  "name": "devolucoes-buscou",
+  "version": "0.1.0",
+  "main": "server/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node server/server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.4",
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
