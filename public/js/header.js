@@ -1,10 +1,29 @@
 (function injectHeader() {
+  // Normaliza caminho (pode ser /, /index.html, /dashboard.html, etc.)
+  const rawPath = location.pathname || '/index.html';
+  const path = rawPath === '/' ? '/index.html' : rawPath;
+  const isIndex = path.endsWith('index.html');
+
+  // ações específicas por página
+  const actionsHtml = isIndex ? `
+      <!-- ação rápida: botão Nova Devolução (preserva id usado pelo frontend) -->
+      <div class="acoes-header">
+        <button id="botao-nova-devolucao" class="botao botao-principal">
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0a.5.5 0 0 1 .5.5v7h7a.5.5 0 0 1 0 1h-7v7a.5.5 0 0 1-1 0v-7h-7a.5.5 0 0 1 0-1h7v-7A.5.5 0 0 1 8 0z"/>
+          </svg>
+          <span>Nova Devolução</span>
+        </button>
+      </div>
+  ` : '';
+
+  // HTML do navbar (usado para injetar ou substituir headers existentes)
   const html = `
   <header class="navbar" role="banner">
     <div class="container nav-inner">
       <a href="/index.html" class="brand" aria-label="Ir para a página inicial">
         <img src="assets/img/logo_rf.png" alt="Logotipo do sistema" />
-        <span>Sistema de Devoluções</span>
+        <span>Retorno Facil</span>
       </a>
       <button class="nav-toggle" aria-label="Abrir menu" aria-expanded="false">
         <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
@@ -27,22 +46,32 @@
           <span>Registros</span>
         </a>
       </nav>
+
+      ${actionsHtml}
     </div>
   </header>`;
-  document.body.insertAdjacentHTML('afterbegin', html);
 
-  // destacar link ativo
-  // Normaliza caminho (pode ser /, /index.html, /dashboard.html, etc.)
-  const rawPath = location.pathname || '/index.html';
-  const path = rawPath === '/' ? '/index.html' : rawPath;
+  const existingNavbar = document.querySelector('.navbar');
+  const existingCabecalho = document.getElementById('cabecalho') || document.querySelector('.cabecalho');
+
+  // Se já existe um navbar, não alteramos
+  if (existingNavbar) return;
+
+  // Se existe um header estático (cabecalho), substituímos pelo navbar padronizado
+  if (existingCabecalho) {
+    existingCabecalho.outerHTML = html;
+  } else {
+    // senão, injetamos no início do body
+    document.body.insertAdjacentHTML('afterbegin', html);
+  }
+
+  // destacar link ativo (reutiliza a variável `path` já calculada acima)
   const isDash = path.endsWith('dashboard.html');
-  const isIndex = path.endsWith('index.html');
   const isRegistros = path.endsWith('registros.html');
 
   document.querySelectorAll('.nav-links a').forEach(a => {
     const key = a.getAttribute('data-active');
-  a.classList.toggle('active', (key === 'dashboard' && isDash) || (key === 'index' && isIndex) || (key === 'registros' && isRegistros));
-    // add aria-current for accessibility
+    a.classList.toggle('active', (key === 'dashboard' && isDash) || (key === 'index' && isIndex) || (key === 'registros' && isRegistros));
     if (a.classList.contains('active')) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });

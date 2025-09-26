@@ -25,7 +25,8 @@ class SistemaDevolucoes {
 
   async carregarDevolucoesDoServidor() {
     try {
-      const rows = await this.getJSON('/api/returns?limit=100');
+      const res = await this.getJSON('/api/returns?page=1&pageSize=100');
+      const rows = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
       this.devolucoes = rows.map((row) => ({
         id: String(row.id),
         numeroPedido: String(row.id_venda ?? ''),
@@ -37,8 +38,7 @@ class SistemaDevolucoes {
           ? String(row.data_compra).slice(0, 10)
           : new Date(row.created_at).toISOString().slice(0, 10),
         valorProduto: row.valor_produto != null ? Number(row.valor_produto) : 0,
-        valorFrete: row.valor_frete != null ? Number(row.valor_frete) : 0, // <<< adicionado
-
+        valorFrete: row.valor_frete != null ? Number(row.valor_frete) : 0,
         lojaNome: row.loja_nome || null,
         lojaId: row.loja_id || null,
       }));
@@ -58,6 +58,12 @@ class SistemaDevolucoes {
         loja_nome: data.lojaNome || null,
       };
       if (data.lojaNome) {
+        // Se o campo "número do pedido" estiver vazio (caso o usuário tenha digitado outro identificador),
+        // tenta preencher com o "numeroPedido" retornado pelo backend.
+        const inputNumero = document.getElementById('numero-pedido');
+        if (inputNumero && !inputNumero.value && data.numeroPedido) {
+          inputNumero.value = data.numeroPedido;
+        }
         this.mostrarToast('Loja encontrada', `Usaremos: ${data.lojaNome}`, 'sucesso');
       } else {
         this.mostrarToast('Sem nome de loja', 'Não veio nome; salvaremos sem loja.', 'erro');
@@ -79,8 +85,14 @@ class SistemaDevolucoes {
 
   // ----------- UI / Eventos -----------
   configurarEventListeners() {
-    const botaoNova = document.getElementById('botao-nova-devolucao');
-    if (botaoNova) botaoNova.addEventListener('click', () => this.abrirModal());
+    // botão nova devolução (delegação para evitar timing com header injetado)
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('#botao-nova-devolucao');
+      if (btn) {
+        e.preventDefault();
+        this.abrirModal();
+      }
+    });
 
     const modal = document.getElementById('modal-nova-devolucao');
     const botaoFechar = document.getElementById('botao-fechar-modal');
@@ -105,15 +117,35 @@ class SistemaDevolucoes {
         e.preventDefault();
         await this.criarNovaDevolucao();
       });
+
+      // número do pedido → tenta descobrir loja
       const inputNumero = document.getElementById('numero-pedido');
       if (inputNumero) {
-        inputNumero.addEventListener('change', () => {
-          const val = inputNumero.value.trim();
-          if (val) this.descobrirLojaPorNumeroPedido(val);
-        });
-        inputNumero.addEventListener('blur', () => {
-          const val = inputNumero.value.trim();
-          if (val) this.descobrirLojaPorNumeroPedido(val);
+        const go = () => {
+          const v = inputNumero.value.trim();
+          if (v) this.descobrirLojaPorNumeroPedido(v);
+        };
+        inputNumero.addEventListener('change', go);
+        inputNumero.addEventListener('blur', go);
+      }
+
+      // número da nota → auto-preenche dados (cliente, valor, chave, pedido/loja)
+      const inputNota = document.getElementById('numero-nota');
+      if (inputNota) {
+        const go = () => {
+          const v = inputNota.value.trim();
+          if (v) this.buscarPorNotaFiscal(v);
+        };
+        inputNota.addEventListener('change', go);
+        inputNota.addEventListener('blur', go);
+      }
+
+      // chave de acesso → auto-preenche dados (cliente, valor, pedido/loja)
+      const inputChave = document.getElementById('chave-nota');
+      if (inputChave) {
+        inputChave.addEventListener('blur', () => {
+          const v = inputChave.value.trim();
+          if (v && v.replace(/\D/g, '').length >= 44) this.buscarPorChaveNFe(v);
         });
       }
     }
@@ -139,7 +171,7 @@ class SistemaDevolucoes {
       botaoExportar.addEventListener('click', () => this.exportarDados());
     }
 
-    // delegação para o botão "olho" dos cards
+    // olho do card → abre detalhes
     const lista = document.getElementById('container-devolucoes');
     if (lista) {
       lista.addEventListener('click', (e) => {
@@ -151,7 +183,7 @@ class SistemaDevolucoes {
       });
     }
 
-    // listeners do modal de detalhes
+    // modal de detalhes
     const md = document.getElementById('modal-detalhes');
     if (md) {
       document.getElementById('md-fechar')?.addEventListener('click', () => this.fecharModalDetalhes());
@@ -163,15 +195,13 @@ class SistemaDevolucoes {
         if (e.target === md || e.target.classList.contains('modal-overlay')) this.fecharModalDetalhes();
       });
     }
-  } // <<< FECHA configurarEventListeners
+  }
 
   // ------- Modal Detalhes/Edição -------
   abrirModalDetalhes(id) {
     const it = this.devolucoes.find((d) => String(d.id) === String(id));
-    if (!it) {
-      this.mostrarToast('Erro', 'Registro não encontrado.', 'erro');
-      return;
-    }
+    if (!it) return this.mostrarToast('Erro', 'Registro não encontrado.', 'erro');
+
     document.getElementById('md-id').value = it.id;
     document.getElementById('md-titulo').textContent = `Devolução #${it.id}`;
     document.getElementById('md-numero').value = it.numeroPedido || '';
@@ -193,7 +223,6 @@ class SistemaDevolucoes {
     document.body.style.overflow = '';
   }
 
-  // alterna read-only / edição
   setModoEdicao(edit) {
     const dis = !edit;
     ['md-status', 'md-valor-prod', 'md-valor-frete', 'md-reclamacao', 'md-loja'].forEach((id) => {
@@ -205,7 +234,6 @@ class SistemaDevolucoes {
     document.getElementById('md-cancelar').style.display = edit ? '' : 'none';
   }
 
-  // PATCH no backend e atualiza o item em memória
   async salvarEdicaoDetalhes(e) {
     e.preventDefault();
     const id = document.getElementById('md-id').value;
@@ -246,6 +274,7 @@ class SistemaDevolucoes {
   async excluirDevolucaoAtual() {
     const id = document.getElementById('md-id').value;
     if (!confirm('Excluir este registro?')) return;
+
     try {
       await fetch(`/api/returns/${id}`, { method: 'DELETE' });
       this.devolucoes = this.devolucoes.filter((d) => String(d.id) !== String(id));
@@ -458,15 +487,20 @@ class SistemaDevolucoes {
     const produto = document.getElementById('nome-produto')?.value.trim();
     const valorProduto = parseFloat(document.getElementById('valor-produto')?.value) || 0;
     const motivo = document.getElementById('motivo-devolucao')?.value.trim() || null;
+    const numeroNota = document.getElementById('numero-nota')?.value.trim();
 
-    if (!numeroPedido || !cliente || !produto) {
-      this.mostrarToast('Erro', 'Preencha Número do Pedido, Cliente e Produto.', 'erro');
+    if (!numeroPedido && !numeroNota) {
+      this.mostrarToast('Erro', 'Informe o Número do Pedido ou o Número da Nota.', 'erro');
+      return;
+    }
+    if (!cliente || !produto) {
+      this.mostrarToast('Erro', 'Preencha Cliente e Produto.', 'erro');
       return;
     }
 
     const payload = {
       data_compra: null,
-      id_venda: numeroPedido,
+      id_venda: numeroPedido || null,
       loja_id: this.lojaDetectada.loja_id,
       loja_nome: this.lojaDetectada.loja_nome,
       sku: null,
@@ -475,6 +509,8 @@ class SistemaDevolucoes {
       valor_produto: valorProduto || null,
       valor_frete: null,
       reclamacao: motivo,
+      nfe_numero: numeroNota || null,
+      nfe_chave: document.getElementById('chave-nota')?.value.trim() || null,
       created_by: 'front-web',
     };
 
@@ -482,7 +518,7 @@ class SistemaDevolucoes {
       const r = await this.salvarDevolucaoNoServidor(payload);
       this.devolucoes.unshift({
         id: String(r.id),
-        numeroPedido,
+        numeroPedido: numeroPedido || '(sem nº)',
         cliente,
         produto,
         motivo,
@@ -502,6 +538,81 @@ class SistemaDevolucoes {
     }
   }
 
+  // ------- Busca por NFe (preenche cliente/valor/chave e também pedido/loja) -------
+  async buscarPorNotaFiscal(numeroNota) {
+    try {
+      // 1) dados principais da nota
+      const r = await fetch(`/api/invoice/${encodeURIComponent(numeroNota)}`);
+      if (r.ok) {
+        const data = await r.json();
+        if (data.lojaNome) {
+          this.lojaDetectada.loja_nome = data.lojaNome;
+          this.mostrarToast('Loja encontrada', `Loja: ${data.lojaNome}`, 'sucesso');
+        }
+        if (data.valor_total != null) {
+          document.getElementById('valor-produto').value = Number(data.valor_total).toFixed(2);
+        }
+        if (data.cliente) {
+          document.getElementById('nome-cliente').value = data.cliente;
+        }
+        if (data.chave) {
+          document.getElementById('chave-nota').value = data.chave;
+        }
+      }
+
+      // 2) localizar a venda relacionada pelo número da NFe
+      try {
+        const sale = await this.getJSON(`/api/sales/by-invoice/${encodeURIComponent(numeroNota)}?account=${encodeURIComponent(this.accountPadrao)}`);
+        const inputNumero = document.getElementById('numero-pedido');
+        if (inputNumero && sale?.numeroPedido) inputNumero.value = sale.numeroPedido;
+        if (sale?.lojaNome) {
+          this.lojaDetectada.loja_nome = sale.lojaNome;
+          this.mostrarToast('Pedido encontrado', `#${sale.numeroPedido} • ${sale.lojaNome}`, 'sucesso');
+        }
+      } catch (_) {
+        // silencioso: pode não haver pedido ligado; tudo bem
+      }
+    } catch (e) {
+      console.log('Nota fiscal não encontrada via API:', e.message || e);
+    }
+  }
+
+  async buscarPorChaveNFe(chave) {
+    try {
+      // 1) dados principais pela chave
+      const r = await fetch(`/api/invoice/chave/${encodeURIComponent(chave)}`);
+      if (r.ok) {
+        const data = await r.json();
+        if (data.lojaNome) {
+          this.lojaDetectada.loja_nome = data.lojaNome;
+          this.mostrarToast('Loja encontrada', `Loja: ${data.lojaNome}`, 'sucesso');
+        }
+        if (data.valor_total != null) {
+          document.getElementById('valor-produto').value = Number(data.valor_total).toFixed(2);
+        }
+        if (data.cliente) {
+          document.getElementById('nome-cliente').value = data.cliente;
+        }
+      }
+
+      // 2) localizar a venda relacionada pela **chave** da NFe
+      try {
+        const sale = await this.getJSON(`/api/sales/by-chave/${encodeURIComponent(chave)}?account=${encodeURIComponent(this.accountPadrao)}`);
+        const inputNumero = document.getElementById('numero-pedido');
+        if (inputNumero && sale?.numeroPedido) inputNumero.value = sale.numeroPedido;
+        if (sale?.lojaNome) {
+          this.lojaDetectada.loja_nome = sale.lojaNome;
+          this.mostrarToast('Pedido encontrado', `#${sale.numeroPedido} • ${sale.lojaNome}`, 'sucesso');
+        }
+      } catch (_) {
+        // silencioso
+      }
+    } catch (e) {
+      console.log('Chave NFe não encontrada via API:', e.message || e);
+    }
+  }
+
+  // ------- utilitários / UI -------
   mostrarToast(titulo, descricao, tipo = 'sucesso') {
     const toast = document.getElementById('toast');
     const toastTitulo = document.getElementById('toast-titulo');

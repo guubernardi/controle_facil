@@ -3,40 +3,25 @@
 // API de Devoluções + Bling OAuth/consulta
 // ---------------------------------------------
 
-// Carrega variáveis de ambiente (.env)
 require('dotenv').config();
 
-// Deps gerais
 const express = require('express');
 const path = require('path');
 const axios = require('axios');
 const dayjs = require('dayjs');
-
-// DB helper (usa pool configurado em ./db)
 const { query } = require('./db');
 
-// ----------------------------------------------------------------------------
-// App e middlewares
-// ----------------------------------------------------------------------------
 const app = express();
-
-// Parse de JSON no body
 app.use(express.json());
-
-// Serve arquivos estáticos do frontend (pasta /public)
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Aviso básico caso o .env esteja faltando alguma variável crítica
+// Aviso de variáveis de ambiente ausentes
 ['BLING_AUTHORIZE_URL','BLING_TOKEN_URL','BLING_API_BASE','BLING_CLIENT_ID','BLING_CLIENT_SECRET','BLING_REDIRECT_URI']
-  .forEach(k => {
-    if (!process.env[k]) {
-      console.warn(`[WARN] .env faltando ${k}`);
-    }
-  });
+  .forEach(k => { if (!process.env[k]) console.warn(`[WARN] .env faltando ${k}`); });
 
-// ----------------------------------------------------------------------------
-// Health + Ping DB (diagnóstico rápido)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------
+// Health / DB
+// ---------------------------------------------
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
@@ -51,18 +36,15 @@ app.get('/api/db/ping', async (_req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// Helpers de OAuth/REST do Bling
-// ----------------------------------------------------------------------------
-
-// Monta o header Basic requerido pelo endpoint de token do Bling
+// ---------------------------------------------
+// Bling helpers
+// ---------------------------------------------
 function cabecalhoBasicAuth() {
   const cru = `${process.env.BLING_CLIENT_ID}:${process.env.BLING_CLIENT_SECRET}`;
   const base64 = Buffer.from(cru).toString('base64');
   return `Basic ${base64}`;
 }
 
-// Salva tokens no banco e retorna o registro inserido
 async function salvarTokens({ apelido, access_token, refresh_token, expires_in }) {
   const expires_at = dayjs().add(expires_in, 'second').toDate();
   const sql = `
@@ -74,7 +56,6 @@ async function salvarTokens({ apelido, access_token, refresh_token, expires_in }
   return rows[0];
 }
 
-// Pega um access_token válido; se estiver quase expirando, renova pelo refresh_token
 async function getAccessTokenValido(apelido) {
   const { rows } = await query(
     `select id, access_token, refresh_token, expires_at
@@ -84,27 +65,18 @@ async function getAccessTokenValido(apelido) {
       limit 1`,
     [apelido]
   );
-
   if (!rows[0]) throw new Error('Nenhum token encontrado. Autorize a conta primeiro.');
 
   const t = rows[0];
   const expiraMs = new Date(t.expires_at).getTime() - Date.now();
-  const margemMs = 120 * 1000; // 2 min de margem de segurança
+  const margemMs = 120 * 1000;
 
-  // Se ainda tem validade suficiente, tranquilo
   if (expiraMs > margemMs) return t.access_token;
-
-  // Senão, renova usando o refresh_token mais recente
   return await refreshAccessToken(apelido, t.refresh_token);
 }
 
-// Renova o access_token usando refresh_token (salva o novo no banco)
 async function refreshAccessToken(apelido, refresh_token) {
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token
-  });
-
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token });
   const { data } = await axios.post(process.env.BLING_TOKEN_URL, body.toString(), {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -114,7 +86,6 @@ async function refreshAccessToken(apelido, refresh_token) {
     timeout: 15000
   });
 
-  // Salva o token novo (às vezes o refresh_token vem igual)
   await salvarTokens({
     apelido,
     access_token: data.access_token,
@@ -125,8 +96,6 @@ async function refreshAccessToken(apelido, refresh_token) {
   return data.access_token;
 }
 
-// GET no Bling com token válido.
-// Se tomar 401/invalid_token, a gente força um refresh real e tenta de novo.
 async function blingGet(apelido, url) {
   let token = await getAccessTokenValido(apelido);
 
@@ -145,7 +114,6 @@ async function blingGet(apelido, url) {
     const precisaRefresh = st === 401 || (msg && String(msg).includes('invalid_token'));
     if (!precisaRefresh) throw e;
 
-    // Força refresh usando o refresh_token mais recente
     const rtk = await query(
       `select refresh_token from bling_accounts 
         where apelido=$1 order by id desc limit 1`,
@@ -154,28 +122,22 @@ async function blingGet(apelido, url) {
     if (!rtk.rows[0]?.refresh_token) throw e;
 
     token = await refreshAccessToken(apelido, rtk.rows[0].refresh_token);
-
     const r2 = await doGet(token);
     return r2.data;
   }
 }
 
-// ----------------------------------------------------------------------------
-// Lookup de loja por ID (com cache local + fallback listagem)
-// ----------------------------------------------------------------------------
-
-// Busca nome da loja pelo ID: primeiro no cache, depois tenta a API,
-// e por fim varre algumas páginas da listagem se o endpoint direto não existir.
+// ---------------------------------------------
+// Loja helpers (cache + heurística)
+// ---------------------------------------------
 async function pegarNomeLojaPorId(apelido, lojaId) {
   if (lojaId === null || lojaId === undefined) return null;
 
-  // 1) cache local
   const cache = await query('select nome from lojas_bling where id = $1', [lojaId]);
   if (cache.rows[0]?.nome) return cache.rows[0].nome;
 
   const base = process.env.BLING_API_BASE;
 
-  // 2) tenta endpoint direto
   try {
     const data = await blingGet(apelido, `${base}/lojas/${encodeURIComponent(lojaId)}`);
     const item = data?.data;
@@ -196,10 +158,10 @@ async function pegarNomeLojaPorId(apelido, lojaId) {
     }
   }
 
-  // 3) fallback: varre as primeiras páginas da listagem
+  const baseUrl = `${base}/lojas`;
   for (let pagina = 1; pagina <= 5; pagina++) {
     try {
-      const data = await blingGet(apelido, `${base}/lojas?pagina=${pagina}&limite=100`);
+      const data = await blingGet(apelido, `${baseUrl}?pagina=${pagina}&limite=100`);
       const arr = Array.isArray(data?.data) ? data.data : [];
       const item = arr.find((x) => String(x.id) === String(lojaId));
       const nomeApi = item?.nome || item?.descricao || item?.apelido || null;
@@ -212,28 +174,20 @@ async function pegarNomeLojaPorId(apelido, lojaId) {
         );
         return nomeApi;
       }
-      if (arr.length < 100) break; // acabou as páginas
+      if (arr.length < 100) break;
     } catch (err) {
-      console.warn(
-        '[LOJA LOOKUP] listagem status:',
-        err?.response?.status,
-        'payload:',
-        err?.response?.data || err.message
-      );
+      console.warn('[LOJA LOOKUP] listagem status:', err?.response?.status, 'payload:', err?.response?.data || err.message);
       break;
     }
   }
-
-  return null; // sem nome → handler aplica fallback “Loja #ID”
+  return null;
 }
 
-// Heurística: tenta deduzir marketplace com base no numeroLoja
 function deduzirNomeLojaPelosPadroes(numeroLoja, sugestaoAtual = null) {
   if (sugestaoAtual) return sugestaoAtual;
   const s = String(numeroLoja || '').toUpperCase().trim();
   if (!s) return null;
 
-  // Ordem do mais específico pro mais genérico
   const PADROES_LOJAS = [
     { nome: 'Mercado Livre RLD',  test: (t) => t.includes('RLD') },
     { nome: 'Mercado Livre',      test: (t) => t.startsWith('MLB') || t.includes('MERCADO LIVRE') },
@@ -258,21 +212,18 @@ function deduzirNomeLojaPelosPadroes(numeroLoja, sugestaoAtual = null) {
   return hit ? hit.nome : null;
 }
 
-// ----------------------------------------------------------------------------
-// OAuth Bling: authorize + callback
-// ----------------------------------------------------------------------------
-
-// Redireciona para a tela de autorização do Bling
+// ---------------------------------------------
+// OAuth Bling
+// ---------------------------------------------
 app.get('/auth/bling', (req, res) => {
-  const apelido = String(req.query.account || 'Conta de Teste'); // identificador da conta
+  const apelido = String(req.query.account || 'Conta de Teste');
   const url = new URL(process.env.BLING_AUTHORIZE_URL);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', process.env.BLING_CLIENT_ID);
-  url.searchParams.set('state', encodeURIComponent(apelido)); // vou e volto com esse state
+  url.searchParams.set('state', encodeURIComponent(apelido));
   return res.redirect(url.toString());
 });
 
-// Callback do Bling: troca code -> tokens e salva
 app.get('/callback', async (req, res) => {
   try {
     const { code, state, error, error_description } = req.query;
@@ -315,16 +266,15 @@ app.get('/callback', async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// Vendas (consulta no Bling por ID interno ou número visível)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------
+// Vendas por ID/numero
+// ---------------------------------------------
 async function handlerBuscarVenda(req, res) {
   try {
     const idOuNumero = String(req.params.id);
     const apelido = String(req.query.account || 'Conta de Teste');
     const base = process.env.BLING_API_BASE;
 
-    // 1) tenta como ID interno
     let pedido = null;
     try {
       const d1 = await blingGet(apelido, `${base}/pedidos/vendas/${encodeURIComponent(idOuNumero)}`);
@@ -335,7 +285,6 @@ async function handlerBuscarVenda(req, res) {
       }
     }
 
-    // 2) se não achou por ID, tenta pelo número (UI)
     if (!pedido) {
       try {
         const d2 = await blingGet(apelido, `${base}/pedidos/vendas?numero=${encodeURIComponent(idOuNumero)}`);
@@ -358,15 +307,11 @@ async function handlerBuscarVenda(req, res) {
     const numeroLoja = pedido?.numeroLoja ?? '';
     const numero     = pedido?.numero ?? null;
 
-    // 3) nome da loja: pedido → lookup por id → heurística → fallback
     let lojaNome = pedido?.loja?.nome || pedido?.loja?.descricao || null;
-
     if (!lojaNome && lojaId !== null) {
       lojaNome = await pegarNomeLojaPorId(apelido, lojaId);
     }
-
     lojaNome = deduzirNomeLojaPelosPadroes(numeroLoja, lojaNome);
-
     if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
     if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
 
@@ -389,24 +334,246 @@ app.get('/api/sales/:id',  handlerBuscarVenda);
 app.get('/api/vendas/:id', handlerBuscarVenda);
 
 // ----------------------------------------------------------------------------
-// Devoluções (CRUD + Dashboard)
+// Consulta por Nota Fiscal (NFe)
 // ----------------------------------------------------------------------------
+async function handlerBuscarNotaPorNumero(req, res) {
+  try {
+    const numero = String(req.params.numero);
+    const apelido = String(req.query.account || 'Conta de Teste');
+    const base = process.env.BLING_API_BASE;
 
-// Cria uma devolução
+    let nota = null;
+
+    // 1) tenta endpoint de notas por número
+    try {
+      const r1 = await blingGet(apelido, `${base}/notas?numero=${encodeURIComponent(numero)}`);
+      const arr = Array.isArray(r1?.data) ? r1.data : [];
+      nota = arr[0] || null;
+    } catch (_) {}
+
+    // 2) fallback: algumas contas expõem o número da nota na venda
+    if (!nota) {
+      try {
+        const r2 = await blingGet(apelido, `${base}/pedidos/vendas?numeroNota=${encodeURIComponent(numero)}`);
+        const arr = Array.isArray(r2?.data) ? r2.data : [];
+        nota = arr[0] || null;
+      } catch (_) {}
+    }
+
+    if (!nota) return res.status(404).json({ error: 'Nota não encontrada' });
+
+    const lojaNome   = nota?.loja?.nome || nota?.loja?.descricao || null;
+    const cliente    = nota?.cliente?.nome || nota?.destinatario?.nome || nota?.cliente_nome || null;
+    const valor_total= nota?.valor_total || nota?.total || null;
+    const chave      = nota?.chave || nota?.access_key || null;
+
+    res.json({ lojaNome, cliente, valor_total, chave, debug: { found: true } });
+  } catch (e) {
+    console.error('Erro ao buscar nota por número:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao consultar nota.' });
+  }
+}
+
+async function handlerBuscarNotaPorChave(req, res) {
+  try {
+    const chave = String(req.params.chave);
+    const apelido = String(req.query.account || 'Conta de Teste');
+    const base = process.env.BLING_API_BASE;
+
+    // 1) tenta /notas/{chave}
+    try {
+      const r = await blingGet(apelido, `${base}/notas/${encodeURIComponent(chave)}`);
+      const nota = r?.data || null;
+      if (nota) {
+        const lojaNome   = nota?.loja?.nome || nota?.loja?.descricao || null;
+        const cliente    = nota?.cliente?.nome || nota?.destinatario?.nome || nota?.cliente_nome || null;
+        const valor_total= nota?.valor_total || nota?.total || null;
+        return res.json({ lojaNome, cliente, valor_total, chave });
+      }
+    } catch (_) {}
+
+    // 2) tenta /notas?chave=
+    try {
+      const r2 = await blingGet(apelido, `${base}/notas?chave=${encodeURIComponent(chave)}`);
+      const arr = Array.isArray(r2?.data) ? r2.data : [];
+      const nota = arr[0] || null;
+      if (!nota) return res.status(404).json({ error: 'Nota não encontrada' });
+      const lojaNome   = nota?.loja?.nome || nota?.loja?.descricao || null;
+      const cliente    = nota?.cliente?.nome || nota?.destinatario?.nome || nota?.cliente_nome || null;
+      const valor_total= nota?.valor_total || nota?.total || null;
+      return res.json({ lojaNome, cliente, valor_total, chave });
+    } catch (e) {
+      console.error('Erro ao buscar nota por chave:', e?.response?.data || e);
+      return res.status(500).json({ error: 'Falha ao consultar nota por chave.' });
+    }
+  } catch (e) {
+    console.error('Erro geral invoice/chave:', e);
+    res.status(500).json({ error: 'Falha ao consultar nota por chave.' });
+  }
+}
+
+// Rotas de invoice (única definição)
+app.get('/api/invoice/:numero', handlerBuscarNotaPorNumero);
+app.get('/api/invoice/chave/:chave', handlerBuscarNotaPorChave);
+
+// ---------- localizar PEDIDO pela NFe (por número ou por chave) ----------
+async function resolverPedidoAPartirDaNota(apelido, notaOuVenda) {
+  const base = process.env.BLING_API_BASE;
+
+  // 1) se já é um pedido (fallback da busca por numeroNota pode retornar vendas)
+  if (notaOuVenda?.itens && (notaOuVenda?.numero || notaOuVenda?.id)) {
+    return notaOuVenda; // já é uma venda
+  }
+
+  // 2) tenta campos comuns que podem vir na nota
+  const possiveisIds = [
+    notaOuVenda?.pedido?.id,
+    notaOuVenda?.pedidoVenda?.id,
+    notaOuVenda?.id_pedido,
+    notaOuVenda?.venda_id,
+  ].filter(Boolean);
+
+  for (const cand of possiveisIds) {
+    try {
+      const d = await blingGet(apelido, `${base}/pedidos/vendas/${encodeURIComponent(cand)}`);
+      if (d?.data) return d.data;
+    } catch (_) {}
+  }
+
+  // 3) tenta localizar por numero da nota
+  const numeroNota = notaOuVenda?.numero || notaOuVenda?.numero_nota || notaOuVenda?.nota_numero;
+  if (numeroNota) {
+    try {
+      const r = await blingGet(apelido, `${base}/pedidos/vendas?numeroNota=${encodeURIComponent(numeroNota)}`);
+      const arr = Array.isArray(r?.data) ? r.data : [];
+      if (arr[0]) return arr[0];
+    } catch (_) {}
+  }
+
+  // 4) tenta localizar por chave
+  const chave = notaOuVenda?.chave || notaOuVenda?.access_key;
+  if (chave) {
+    try {
+      const r = await blingGet(apelido, `${base}/pedidos/vendas?chave=${encodeURIComponent(chave)}`);
+      const arr = Array.isArray(r?.data) ? r.data : [];
+      if (arr[0]) return arr[0];
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+// GET /api/sales/by-invoice/:numero  -> acha a venda pelo número da NFe
+app.get('/api/sales/by-invoice/:numero', async (req, res) => {
+  try {
+    const numero = String(req.params.numero);
+    const apelido = String(req.query.account || 'Conta de Teste');
+    const base = process.env.BLING_API_BASE;
+
+    // 1) pegar a nota
+    let nota = null;
+    try {
+      const r1 = await blingGet(apelido, `${base}/notas?numero=${encodeURIComponent(numero)}`);
+      const arr = Array.isArray(r1?.data) ? r1.data : [];
+      nota = arr[0] || null;
+    } catch (_) {}
+
+    // 2) se não achou nota, tenta /pedidos/vendas?numeroNota=...
+    if (!nota) {
+      const r2 = await blingGet(apelido, `${base}/pedidos/vendas?numeroNota=${encodeURIComponent(numero)}`);
+      const arr = Array.isArray(r2?.data) ? r2.data : [];
+      if (!arr[0]) return res.status(404).json({ error: 'Nenhum pedido encontrado para esta nota.' });
+      // já veio a venda
+      return await responderPedidoPadronizado(apelido, arr[0], res, { via: 'vendas?numeroNota' });
+    }
+
+    // 3) com a nota em mãos, resolve o pedido
+    const pedido = await resolverPedidoAPartirDaNota(apelido, nota);
+    if (!pedido) return res.status(404).json({ error: 'Não foi possível relacionar esta nota a um pedido.' });
+
+    return await responderPedidoPadronizado(apelido, pedido, res, { via: 'nota->pedido' });
+  } catch (e) {
+    console.error('by-invoice erro:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao localizar pedido pela nota.' });
+  }
+});
+
+// GET /api/sales/by-chave/:chave  -> acha a venda pela chave da NFe
+app.get('/api/sales/by-chave/:chave', async (req, res) => {
+  try {
+    const chave = String(req.params.chave);
+    const apelido = String(req.query.account || 'Conta de Teste');
+    const base = process.env.BLING_API_BASE;
+
+    // 1) tentar nota por chave
+    let nota = null;
+    try {
+      const r = await blingGet(apelido, `${base}/notas/${encodeURIComponent(chave)}`);
+      nota = r?.data || null;
+    } catch (_) {
+      try {
+        const r2 = await blingGet(apelido, `${base}/notas?chave=${encodeURIComponent(chave)}`);
+        const arr = Array.isArray(r2?.data) ? r2.data : [];
+        nota = arr[0] || null;
+      } catch (_) {}
+    }
+
+    // 2) se não achou nota, tenta vendas?chave=...
+    if (!nota) {
+      const r3 = await blingGet(apelido, `${base}/pedidos/vendas?chave=${encodeURIComponent(chave)}`);
+      const arr = Array.isArray(r3?.data) ? r3.data : [];
+      if (!arr[0]) return res.status(404).json({ error: 'Nenhum pedido encontrado para esta chave.' });
+      return await responderPedidoPadronizado(apelido, arr[0], res, { via: 'vendas?chave' });
+    }
+
+    // 3) com a nota, resolve o pedido
+    const pedido = await resolverPedidoAPartirDaNota(apelido, nota);
+    if (!pedido) return res.status(404).json({ error: 'Não foi possível relacionar esta chave a um pedido.' });
+
+    return await responderPedidoPadronizado(apelido, pedido, res, { via: 'nota->pedido' });
+  } catch (e) {
+    console.error('by-chave erro:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao localizar pedido pela chave da nota.' });
+  }
+});
+
+// monta resposta no mesmo padrão do /api/sales/:id
+async function responderPedidoPadronizado(apelido, pedido, res, debugExtra = {}) {
+  try {
+    const lojaId     = pedido?.loja?.id ?? null;
+    const numeroLoja = pedido?.numeroLoja ?? '';
+    const numero     = pedido?.numero ?? null;
+
+    let lojaNome = pedido?.loja?.nome || pedido?.loja?.descricao || null;
+    if (!lojaNome && lojaId !== null) {
+      lojaNome = await pegarNomeLojaPorId(apelido, lojaId);
+    }
+    lojaNome = deduzirNomeLojaPelosPadroes(numeroLoja, lojaNome);
+    if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
+    if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
+
+    return res.json({
+      idVenda: String(pedido.id || ''),
+      numeroPedido: numero,
+      lojaId,
+      lojaNome,
+      numeroLoja,
+      debug: debugExtra
+    });
+  } catch (e) {
+    console.error('responderPedidoPadronizado erro:', e);
+    return res.status(500).json({ error: 'Falha ao formatar resposta.' });
+  }
+}
+
+// ---------------------------------------------
+// Devoluções (CRUD + Dashboard)
+// ---------------------------------------------
 app.post('/api/returns', async (req, res) => {
   try {
     const {
-      data_compra,
-      id_venda,
-      loja_id,
-      loja_nome,
-      sku,
-      tipo_reclamacao,
-      status,
-      valor_produto,
-      valor_frete,
-      reclamacao,
-      created_by
+      data_compra, id_venda, loja_id, loja_nome, sku, tipo_reclamacao,
+      status, valor_produto, valor_frete, reclamacao, created_by
     } = req.body;
 
     const sql = `
@@ -417,17 +584,9 @@ app.post('/api/returns', async (req, res) => {
       returning id, created_at
     `;
     const params = [
-      data_compra || null,
-      id_venda,
-      loja_id || null,
-      loja_nome || null,
-      sku || null,
-      tipo_reclamacao || null,
-      status || null,
-      valor_produto || null,
-      valor_frete || null,
-      reclamacao || null,
-      created_by || 'app-local'
+      data_compra || null, id_venda, loja_id || null, loja_nome || null, sku || null,
+      tipo_reclamacao || null, status || null, valor_produto || null, valor_frete || null,
+      reclamacao || null, created_by || 'app-local'
     ];
 
     const { rows } = await query(sql, params);
@@ -438,21 +597,18 @@ app.post('/api/returns', async (req, res) => {
   }
 });
 
-// Dashboard: totais, top SKUs e série diária (com filtro de datas)
 app.get('/api/dashboard', async (req, res) => {
   try {
     const from = req.query.from ? new Date(req.query.from) : null;
     const to   = req.query.to   ? new Date(req.query.to)   : null;
     const limitTop = Math.max(1, Math.min(parseInt(req.query.limitTop || '5', 10), 20));
 
-    // WHERE dinâmico por data (opcional)
     const whereParts = [];
     const params = [];
     if (from) { params.push(from); whereParts.push(`created_at >= $${params.length}`); }
     if (to)   { params.push(to);   whereParts.push(`created_at <  $${params.length}`); }
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    // Totais + prejuízo
     const sqlTotals = `
       SELECT
         COUNT(*)::int                                     AS total,
@@ -464,7 +620,6 @@ app.get('/api/dashboard', async (req, res) => {
       ${where};
     `;
 
-    // Ranking de SKUs
     const sqlTop = `
       SELECT
         COALESCE(NULLIF(TRIM(sku),''), '(sem SKU)') AS sku,
@@ -477,7 +632,6 @@ app.get('/api/dashboard', async (req, res) => {
       LIMIT $${params.push(limitTop)};
     `;
 
-    // Série diária
     const sqlDaily = `
       SELECT
         DATE_TRUNC('day', created_at)::date AS dia,
@@ -504,8 +658,8 @@ app.get('/api/dashboard', async (req, res) => {
         rejeitadas:   totalsQ.rows[0]?.rejeitadas || 0,
         prejuizo_total: totalsQ.rows[0]?.prejuizo_total || 0
       },
-      top_items: topQ.rows, // [{ sku, devolucoes, prejuizo }]
-      daily:     dailyQ.rows // [{ dia, devolucoes, prejuizo }]
+      top_items: topQ.rows,
+      daily:     dailyQ.rows
     });
   } catch (e) {
     console.error('GET /api/dashboard ERRO:', e);
@@ -513,22 +667,17 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
-// Lista devoluções (paginada + filtros de busca e status)
-// GET /api/returns?search=&status=&page=1&pageSize=20
 app.get('/api/returns', async (req, res) => {
   try {
     const page     = Math.max(parseInt(req.query.page || '1', 10), 1);
     const pageSize = Math.min(Math.max(parseInt(req.query.pageSize || '20', 10), 1), 100);
     const search   = (req.query.search || '').trim();
-    const status   = (req.query.status || '').trim(); // 'pendente'|'aprovado'|'rejeitado'|''
+    const status   = (req.query.status || '').trim();
 
     const where = [];
     const args  = [];
 
-    if (status) {
-      args.push(status);
-      where.push(`status = $${args.length}`);
-    }
+    if (status) { args.push(status); where.push(`status = $${args.length}`); }
 
     if (search) {
       args.push(`%${search}%`);
@@ -560,7 +709,6 @@ app.get('/api/returns', async (req, res) => {
   }
 });
 
-// Detalhe de uma devolução
 app.get('/api/returns/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -578,13 +726,11 @@ app.get('/api/returns/:id', async (req, res) => {
   }
 });
 
-// Atualiza campos de uma devolução
 app.patch('/api/returns/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'ID inválido.' });
 
-    // Campos que aceitamos atualizar
     const allow = new Set([
       'status','loja_nome','sku','tipo_reclamacao','valor_produto','valor_frete',
       'reclamacao','nfe_numero','nfe_chave','data_compra'
@@ -599,7 +745,6 @@ app.patch('/api/returns/:id', async (req, res) => {
       }
     });
 
-    // Se quiser guardar quem atualizou
     if (req.body?.updated_by) {
       args.push(req.body.updated_by);
       sets.push(`updated_by = $${args.length}`);
@@ -622,7 +767,6 @@ app.patch('/api/returns/:id', async (req, res) => {
   }
 });
 
-// Exclui uma devolução
 app.delete('/api/returns/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -635,14 +779,9 @@ app.delete('/api/returns/:id', async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// Cache de lojas (CRUD mínimo pra preencher manualmente quando precisar)
-// ----------------------------------------------------------------------------
 app.get('/api/lojas', async (_req, res) => {
   try {
-    const { rows } = await query(
-      `select id, nome, updated_at from lojas_bling order by id asc`
-    );
+    const { rows } = await query(`select id, nome, updated_at from lojas_bling order by id asc`);
     res.json(rows);
   } catch (e) {
     console.error('GET /api/lojas ERRO:', e);
@@ -669,9 +808,9 @@ app.post('/api/lojas', async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// Sobe o servidor
-// ----------------------------------------------------------------------------
+// ---------------------------------------------
+// Start
+// ---------------------------------------------
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Servidor rodando em http://localhost:${port}`);

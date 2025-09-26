@@ -1,0 +1,1 @@
+{"page":1,"pageSize":5,"total":1,"items":[{"id":"1","data_compra":"2025-09-24T03:00:00.000Z","id_venda":"1","loja_id":null,"loja_nome":null,"sku":"001","tipo_reclamacao":"Defeito","status":"finalizado","valor_produto":"10.00","valor_frete":"122.00","nfe_numero":null,"nfe_chave":null,"created_at":"2025-09-25T00:31:29.119Z","updated_at":"2025-09-26T14:26:03.337Z"}]}

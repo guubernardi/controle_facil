@@ -278,8 +278,8 @@ body {
 .card-estatistica:hover {
     box-shadow: var(--shadow-lg);
     transform: translateY(-2px);
-    background: #f97e272c;
-    cursor: pointer;
+    /* background removed to keep only elevation on hover */
+    background: transparent;
 }
 
 .card-header {
@@ -819,5 +819,112 @@ body {
     
     .botao {
         justify-content: center;
+    }
+}
+
+/* Gráficos e ranking */
+.grafico-wrap {
+    width: 100%;
+    min-height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem 0;
+}
+.grafico-wrap canvas {
+    width: 100% !important;
+    max-width: 100%;
+    height: 260px !important;
+    display: block;
+}
+
+/* Ajuste responsivo para telas grandes */
+@media (min-width: 1200px) {
+    .grafico-wrap canvas {
+        height: 360px !important;
+    }
+    .card-estatistica {
+        min-height: 360px;
+    }
+}
+
+/* Ranking list */
+.ranking-lista {
+    padding: 0.75rem;
+    display:flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 360px;
+    overflow-y: auto;
+}
+.ranking-item {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:0.5rem;
+    padding:0.5rem;
+    border-radius: 0.5rem;
+    border:1px solid var(--border);
+    background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(0,0,0,0));
+}
+.ranking-item .meta {
+    display:flex;
+    align-items:center;
+    gap:0.5rem;
+}
+.ranking-item .pos {
+    font-weight:700;
+    color:var(--muted-foreground);
+}
+.ranking-item .nome {
+    font-weight:600;
+    color:var(--foreground);
+}
+.ranking-item .valor {
+    font-weight:700;
+    color:var(--primary);
+}
+/* Estatísticas dentro do item */
+.ranking-item .stats {
+    display:flex;
+    align-items:center;
+    gap:0.75rem;
+    text-align:right;
+}
+.ranking-item .devol {
+    font-weight:700;
+    color:var(--muted-foreground);
+}
+
+/* Destaques para top 3 */
+.ranking-item.top-1 {
+    border: 1px solid rgba(255, 160, 0, 0.18);
+    background: linear-gradient(90deg, rgba(255,160,0,0.06), rgba(255,160,0,0.02));
+    box-shadow: 0 4px 10px rgba(255,160,0,0.05);
+}
+.ranking-item.top-2 {
+    border: 1px solid rgba(59,130,246,0.08);
+    background: linear-gradient(90deg, rgba(59,130,246,0.03), rgba(59,130,246,0.01));
+}
+.ranking-item.top-3 {
+    border: 1px solid rgba(34,197,94,0.08);
+    background: linear-gradient(90deg, rgba(34,197,94,0.03), rgba(34,197,94,0.01));
+}
+
+/* Hover: leve elevação */
+.ranking-item:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+}
+
+/* Acomodações em telas pequenas */
+@media (max-width: 768px) {
+    .ranking-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .ranking-item .stats {
+        width: 100%;
+        justify-content: space-between;
     }
 }

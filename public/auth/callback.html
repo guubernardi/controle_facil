@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Conectando ao Bling…</title>
+  <link rel="icon" href="assets/img/logo_rf.png">
+    <link rel="stylesheet" href="../css/callback.css">
+</head>
+<body>
+  <div class="cartao" id="caixa">
+    <div class="cabecalho-cartao">
+  <div class="logo"><img src="../assets/img/logo_rf.png" alt="logo" style="width:100%;height:100%;object-fit:cover"></div>
+      <div>
+        <div class="titulo">Conexão com Bling</div>
+        <div class="subtitulo">Retornando para o aplicativo…</div>
+      </div>
+    </div>
+
+    <div class="conteudo" id="conteudo">
+      <div class="status-caixa" id="status-caixa">
+        <div class="spinner-caixa" id="spin"></div>
+        <div>
+          <div class="titulo-msg" id="titulo-msg">Validando autorização</div>
+          <div class="descricao-msg" id="descricao-msg">Aguarde enquanto processamos as informações de retorno.</div>
+        </div>
+      </div>
+
+      <div class="mono" id="debug" style="display:none"></div>
+
+      <div class="acoes" id="acoes" style="display:none">
+        <button class="botao botao-principal" id="btnBack">Voltar ao app</button>
+        <button class="botao" id="btnClose">Fechar janela</button>
+      </div>
+      <div class="pequeno" id="rodape" style="display:none">Você pode fechar esta janela com segurança.</div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const qs = new URLSearchParams(location.search);
+      const code  = qs.get('code');
+      const state = qs.get('state');
+      const error = qs.get('error') || qs.get('error_description');
+
+  const el = id => document.getElementById(id);
+  const statusBox = el('status-caixa');
+  const title = el('titulo-msg');
+  const desc  = el('descricao-msg');
+  const spin  = el('spin');
+  const actions = el('acoes');
+  const debug = el('debug');
+  const foot = el('rodape');
+  const btnBack = el('btnBack');
+  const btnClose = el('btnClose');
+
+      // util: mostra conteúdo extra (útil pra debug). Só exibe se houver conteúdo relevante.
+      function showDebug(obj){
+        try {
+          if (!obj || (typeof obj === 'object' && Object.keys(obj).length === 0)) return;
+          if (!debug) return;
+          debug.style.display = 'block';
+          debug.textContent = JSON.stringify(obj, null, 2);
+        } catch (e) { /* noop */ }
+      }
+
+      // envia mensagem para a janela que abriu o popup (se existir)
+      function notifyParent(payload){
+        try {
+          if (window.opener) {
+            window.opener.postMessage({ source:'bling-oauth', ...payload }, '*');
+          } else if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ source:'bling-oauth', ...payload }, '*');
+          }
+        } catch (e) {}
+      }
+
+      function setStatus(kind, t, d){
+        try {
+          if (statusBox) {
+            statusBox.classList.remove('ok','warn','err');
+            if (kind) statusBox.classList.add(kind);
+          }
+          if (title) title.textContent = t;
+          if (desc)  desc.textContent  = d || '';
+        } catch (e) { /* noop */ }
+      }
+
+      // define ação padrão do botão Voltar
+      if (btnBack) btnBack.onclick = () => { window.location.href = '/'; };
+      if (btnClose) btnClose.onclick = () => window.close();
+
+      // fluxo
+      if (error) {
+        spin.style.display = 'none';
+        setStatus('err', 'Autorização negada', String(error));
+        actions.style.display = 'flex';
+        foot.style.display = 'block';
+        notifyParent({ ok:false, error:String(error) });
+        showDebug({ error });
+        return;
+      }
+
+      if (!code) {
+        spin.style.display = 'none';
+        setStatus('warn', 'Retorno inválido', 'Não recebemos o código de autorização.');
+        actions.style.display = 'flex';
+        foot.style.display = 'block';
+        notifyParent({ ok:false, error:'missing_code' });
+        showDebug({ query:Object.fromEntries(qs.entries()) });
+        return;
+      }
+
+      // Sucesso (tem code). Opcional: trocar code por token no backend
+  setStatus('', 'Validando autorização', 'Contactando o servidor para concluir a conexão…');
+
+      // >>> Ajuste a URL abaixo para seu endpoint que faz a troca do code pelo token <<<
+      const url = `/auth/bling/exchange?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state||'')}`;
+
+      fetch(url, { credentials:'include' })
+        .then(r => r.json().catch(() => ({})).then(j => ({ ok:r.ok, status:r.status, body:j })))
+        .then(({ ok, status, body }) => {
+          spin.style.display = 'none';
+          if (ok) {
+            setStatus('ok', 'Conta conectada com sucesso!', 'Você já pode voltar ao aplicativo.');
+            actions.style.display = 'flex';
+            foot.style.display = 'block';
+            notifyParent({ ok:true, code, state, data: body });
+            showDebug({ status, response: body });
+
+            // se for popup: fecha sozinho depois de 1.2s
+            if (window.opener) setTimeout(() => window.close(), 1200);
+          } else {
+            setStatus('err', 'Falha ao concluir a conexão', body?.error || `Status ${status}`);
+            actions.style.display = 'flex';
+            foot.style.display = 'block';
+            notifyParent({ ok:false, error: body?.error || 'exchange_failed', status });
+            showDebug({ status, response: body });
+          }
+        })
+        .catch(err => {
+          spin.style.display = 'none';
+          setStatus('err', 'Erro de comunicação', 'Não foi possível falar com o servidor.');
+          actions.style.display = 'flex';
+          foot.style.display = 'block';
+          notifyParent({ ok:false, error: 'network_error' });
+          showDebug({ error: String(err) });
+        });
+
+      // segurança básica: impedir navegação acidental pelo teclado
+      window.addEventListener('keydown', (e) => {
+        if (['Escape'].includes(e.key) && window.opener) {
+          e.preventDefault();
+          window.close();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

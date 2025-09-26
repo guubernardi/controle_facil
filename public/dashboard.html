@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Dashboard — Sistema de Devoluções</title>
+  <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
   <link rel="stylesheet" href="css/index.css"/>
   <link rel="stylesheet" href="css/navbar.css"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
@@ -55,12 +56,25 @@
       <section class="secao-dashboard">
         <div class="grade-cards">
           <div class="card-estatistica">
-            <div class="card-header"><span class="card-titulo">Itens com mais devolução</span></div>
+            <div class="card-header"><span class="card-titulo"><strong>Itens com mais devolução</strong></span></div>
             <div id="ranking-lista" class="ranking-lista"></div>
           </div>
           <div class="card-estatistica">
-            <div class="card-header"><span class="card-titulo">Prejuízo diário (R$)</span></div>
-            <div id="grafico-prejuizo" class="grafico-placeholder"></div>
+            <div class="card-header"><span class="card-titulo">Prejuízo (R$)</span></div>
+            <div class="card-conteudo">
+                <div class="grafico-controls">
+                  <button id="btn-graf-dia" class="botao botao-outline">Últimos 30 dias</button>
+                  <button id="btn-graf-mes" class="botao botao-outline">Mês atual</button>
+                  <button id="btn-graf-6mes" class="botao botao-outline">Últimos 6 meses</button>
+                  <button id="btn-graf-status" class="botao botao-outline">Status</button>
+                </div>
+                <div class="grafico-wrap">
+                  <canvas id="chart-prejuizo-dia" style="max-width:100%;"></canvas>
+                  <canvas id="chart-prejuizo-mes" style="max-width:100%;display:none;"></canvas>
+                  <canvas id="chart-prejuizo-6mes" style="max-width:100%;display:none;"></canvas>
+                  <canvas id="chart-status" style="max-width:100%;display:none;"></canvas>
+                </div>
+            </div>
           </div>
           <div class="card-estatistica">
             <div class="card-header"><span class="card-titulo">Resumo do período</span></div>
@@ -73,6 +87,7 @@
   </main>
 
   <script src="js/header.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="js/dashboard.js"></script>
 </body>
 </html>
