@@ -3,8 +3,18 @@ class SistemaDevolucoes {
     this.devolucoes = [];
     this.filtros = { pesquisa: '', status: 'todos' };
     this.lojaDetectada = { loja_id: null, loja_nome: null };
+    this.dp = { open: false, activeIndex: -1, data: [], el: null };
     this.accountPadrao = 'Conta de Teste';
     this.inicializar();
+  }
+
+  // debounce simples
+  debounce(fn, ms = 250) {
+    let t;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(this, args), ms);
+    };
   }
 
   async inicializar() {
@@ -41,6 +51,7 @@ class SistemaDevolucoes {
         valorFrete: row.valor_frete != null ? Number(row.valor_frete) : 0,
         lojaNome: row.loja_nome || null,
         lojaId: row.loja_id || null,
+        sku: row.sku || null,
       }));
     } catch (e) {
       console.warn('Falha ao carregar devoluções:', e.message);
@@ -58,8 +69,6 @@ class SistemaDevolucoes {
         loja_nome: data.lojaNome || null,
       };
       if (data.lojaNome) {
-        // Se o campo "número do pedido" estiver vazio (caso o usuário tenha digitado outro identificador),
-        // tenta preencher com o "numeroPedido" retornado pelo backend.
         const inputNumero = document.getElementById('numero-pedido');
         if (inputNumero && !inputNumero.value && data.numeroPedido) {
           inputNumero.value = data.numeroPedido;
@@ -85,7 +94,7 @@ class SistemaDevolucoes {
 
   // ----------- UI / Eventos -----------
   configurarEventListeners() {
-    // botão nova devolução (delegação para evitar timing com header injetado)
+    // abrir modal
     document.addEventListener('click', (e) => {
       const btn = e.target.closest && e.target.closest('#botao-nova-devolucao');
       if (btn) {
@@ -109,7 +118,10 @@ class SistemaDevolucoes {
     }
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.fecharModal();
+      if (e.key === 'Escape') {
+        this.fecharModal();
+        this.fecharDropdown();
+      }
     });
 
     if (form) {
@@ -118,7 +130,7 @@ class SistemaDevolucoes {
         await this.criarNovaDevolucao();
       });
 
-      // número do pedido → tenta descobrir loja
+      // número do pedido
       const inputNumero = document.getElementById('numero-pedido');
       if (inputNumero) {
         const go = () => {
@@ -129,7 +141,7 @@ class SistemaDevolucoes {
         inputNumero.addEventListener('blur', go);
       }
 
-      // número da nota → auto-preenche dados (cliente, valor, chave, pedido/loja)
+      // número da nota
       const inputNota = document.getElementById('numero-nota');
       if (inputNota) {
         const go = () => {
@@ -140,7 +152,7 @@ class SistemaDevolucoes {
         inputNota.addEventListener('blur', go);
       }
 
-      // chave de acesso → auto-preenche dados (cliente, valor, pedido/loja)
+      // chave NFe
       const inputChave = document.getElementById('chave-nota');
       if (inputChave) {
         inputChave.addEventListener('blur', () => {
@@ -148,6 +160,68 @@ class SistemaDevolucoes {
           if (v && v.replace(/\D/g, '').length >= 44) this.buscarPorChaveNFe(v);
         });
       }
+
+      // ---------- Autocomplete Produto ----------
+      const inpProduto = document.getElementById('nome-produto');
+      if (inpProduto) {
+        // pega o dropdown já criado no HTML
+        this.dp.el = document.getElementById('lista-produtos');
+        // garante posição relativa no wrapper
+        const campo = inpProduto.closest('.campo-form') || inpProduto.parentElement;
+        campo.style.position = 'relative';
+
+        const buscar = this.debounce(async () => {
+          const q = inpProduto.value.trim();
+          if (q.length < 2) {
+            this.fecharDropdown();
+            return;
+          }
+          try {
+            const itens = await this.buscarProdutosRemoto(q);
+            this.renderizarSugestoesProdutos(itens);
+          } catch {
+            this.fecharDropdown();
+          }
+        }, 300);
+
+        inpProduto.addEventListener('input', buscar);
+        inpProduto.addEventListener('focus', buscar);
+
+        // navegação teclado
+        inpProduto.addEventListener('keydown', (e) => {
+          if (!this.dp.open) return;
+          const max = this.dp.data.length - 1;
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            this.setAtivo(Math.min(max, this.dp.activeIndex + 1));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            this.setAtivo(Math.max(0, this.dp.activeIndex - 1));
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (this.dp.activeIndex >= 0) this.selecionarSugestao(this.dp.activeIndex);
+          } else if (e.key === 'Escape') {
+            this.fecharDropdown();
+          }
+        });
+
+        // clique fora
+        document.addEventListener('click', (ev) => {
+          if (!this.dp.open) return;
+          if (!this.dp.el.contains(ev.target) && ev.target !== inpProduto) {
+            this.fecharDropdown();
+          }
+        });
+
+        // captura antes do blur
+        this.dp.el.addEventListener('mousedown', (ev) => {
+          const li = ev.target.closest('li[data-idx]');
+          if (!li) return;
+          ev.preventDefault();
+          this.selecionarSugestao(parseInt(li.dataset.idx, 10));
+        });
+      }
+      // ---------- fim autocomplete ----------
     }
 
     const campoPesquisa = document.getElementById('campo-pesquisa');
@@ -171,7 +245,7 @@ class SistemaDevolucoes {
       botaoExportar.addEventListener('click', () => this.exportarDados());
     }
 
-    // olho do card → abre detalhes
+    // abrir detalhes
     const lista = document.getElementById('container-devolucoes');
     if (lista) {
       lista.addEventListener('click', (e) => {
@@ -183,7 +257,7 @@ class SistemaDevolucoes {
       });
     }
 
-    // modal de detalhes
+    // modal detalhes
     const md = document.getElementById('modal-detalhes');
     if (md) {
       document.getElementById('md-fechar')?.addEventListener('click', () => this.fecharModalDetalhes());
@@ -435,7 +509,7 @@ class SistemaDevolucoes {
               <path d="M0 1.5A.5.5 0 0 1 .5 1H2a.5.5 0 0 1 .485.379L2.89 3H14.5a.5.5 0 0 1 .491.592l-1.5 8A.5.5 0 0 1 13 12H4a.5.5 0 0 1-.491-.408L2.01 3.607 1.61 2H.5a.5.5 0 0 1-.5-.5z"/>
             </svg>
             <span class="campo-label">Produto:</span>
-            <span class="campo-valor">${d.produto || '—'}</span>
+            <span class="campo-valor">${(d.produto || '—') + (d.sku ? ' • ' + d.sku : '')}</span>
           </div>
         </div>
 
@@ -479,12 +553,14 @@ class SistemaDevolucoes {
     document.body.style.overflow = '';
     form?.reset();
     this.lojaDetectada = { loja_id: null, loja_nome: null };
+    this.fecharDropdown();
   }
 
   async criarNovaDevolucao() {
     const numeroPedido = document.getElementById('numero-pedido')?.value.trim();
     const cliente = document.getElementById('nome-cliente')?.value.trim();
     const produto = document.getElementById('nome-produto')?.value.trim();
+    const sku = document.getElementById('sku-produto')?.value.trim() || null;
     const valorProduto = parseFloat(document.getElementById('valor-produto')?.value) || 0;
     const motivo = document.getElementById('motivo-devolucao')?.value.trim() || null;
     const numeroNota = document.getElementById('numero-nota')?.value.trim();
@@ -503,7 +579,7 @@ class SistemaDevolucoes {
       id_venda: numeroPedido || null,
       loja_id: this.lojaDetectada.loja_id,
       loja_nome: this.lojaDetectada.loja_nome,
-      sku: null,
+      sku: sku || null,
       tipo_reclamacao: null,
       status: 'pendente',
       valor_produto: valorProduto || null,
@@ -521,6 +597,7 @@ class SistemaDevolucoes {
         numeroPedido: numeroPedido || '(sem nº)',
         cliente,
         produto,
+        sku,
         motivo,
         valorProduto,
         status: 'pendente',
@@ -538,10 +615,9 @@ class SistemaDevolucoes {
     }
   }
 
-  // ------- Busca por NFe (preenche cliente/valor/chave e também pedido/loja) -------
+  // ------- Busca por NFe -------
   async buscarPorNotaFiscal(numeroNota) {
     try {
-      // 1) dados principais da nota
       const r = await fetch(`/api/invoice/${encodeURIComponent(numeroNota)}`);
       if (r.ok) {
         const data = await r.json();
@@ -552,26 +628,21 @@ class SistemaDevolucoes {
         if (data.valor_total != null) {
           document.getElementById('valor-produto').value = Number(data.valor_total).toFixed(2);
         }
-        if (data.cliente) {
-          document.getElementById('nome-cliente').value = data.cliente;
-        }
-        if (data.chave) {
-          document.getElementById('chave-nota').value = data.chave;
-        }
+        if (data.cliente) document.getElementById('nome-cliente').value = data.cliente;
+        if (data.chave) document.getElementById('chave-nota').value = data.chave;
       }
 
-      // 2) localizar a venda relacionada pelo número da NFe
       try {
-        const sale = await this.getJSON(`/api/sales/by-invoice/${encodeURIComponent(numeroNota)}?account=${encodeURIComponent(this.accountPadrao)}`);
+        const sale = await this.getJSON(
+          `/api/sales/by-invoice/${encodeURIComponent(numeroNota)}?account=${encodeURIComponent(this.accountPadrao)}`
+        );
         const inputNumero = document.getElementById('numero-pedido');
         if (inputNumero && sale?.numeroPedido) inputNumero.value = sale.numeroPedido;
         if (sale?.lojaNome) {
           this.lojaDetectada.loja_nome = sale.lojaNome;
           this.mostrarToast('Pedido encontrado', `#${sale.numeroPedido} • ${sale.lojaNome}`, 'sucesso');
         }
-      } catch (_) {
-        // silencioso: pode não haver pedido ligado; tudo bem
-      }
+      } catch {}
     } catch (e) {
       console.log('Nota fiscal não encontrada via API:', e.message || e);
     }
@@ -579,7 +650,6 @@ class SistemaDevolucoes {
 
   async buscarPorChaveNFe(chave) {
     try {
-      // 1) dados principais pela chave
       const r = await fetch(`/api/invoice/chave/${encodeURIComponent(chave)}`);
       if (r.ok) {
         const data = await r.json();
@@ -590,27 +660,126 @@ class SistemaDevolucoes {
         if (data.valor_total != null) {
           document.getElementById('valor-produto').value = Number(data.valor_total).toFixed(2);
         }
-        if (data.cliente) {
-          document.getElementById('nome-cliente').value = data.cliente;
-        }
+        if (data.cliente) document.getElementById('nome-cliente').value = data.cliente;
       }
 
-      // 2) localizar a venda relacionada pela **chave** da NFe
       try {
-        const sale = await this.getJSON(`/api/sales/by-chave/${encodeURIComponent(chave)}?account=${encodeURIComponent(this.accountPadrao)}`);
+        const sale = await this.getJSON(
+          `/api/sales/by-chave/${encodeURIComponent(chave)}?account=${encodeURIComponent(this.accountPadrao)}`
+        );
         const inputNumero = document.getElementById('numero-pedido');
         if (inputNumero && sale?.numeroPedido) inputNumero.value = sale.numeroPedido;
         if (sale?.lojaNome) {
           this.lojaDetectada.loja_nome = sale.lojaNome;
           this.mostrarToast('Pedido encontrado', `#${sale.numeroPedido} • ${sale.lojaNome}`, 'sucesso');
         }
-      } catch (_) {
-        // silencioso
-      }
+      } catch {}
     } catch (e) {
       console.log('Chave NFe não encontrada via API:', e.message || e);
     }
   }
+
+  // --------- AUTOCOMPLETE DE PRODUTOS ---------
+  async buscarProdutosRemoto(q) {
+    try {
+      const url1 = `/api/bling/products?q=${encodeURIComponent(q)}&limit=10&account=${encodeURIComponent(this.accountPadrao)}`;
+      const r1 = await fetch(url1);
+      if (r1.ok) return await r1.json();
+    } catch {}
+    try {
+      const url2 = `/api/products/search?q=${encodeURIComponent(q)}&limit=10&account=${encodeURIComponent(this.accountPadrao)}`;
+      const r2 = await fetch(url2);
+      if (r2.ok) return await r2.json();
+    } catch {}
+    return [];
+  }
+
+  abrirDropdown() {
+    if (!this.dp.el) return;
+    this.dp.el.style.display = 'block';
+    this.dp.open = true;
+  }
+
+  fecharDropdown() {
+    if (!this.dp.el) return;
+    this.dp.el.style.display = 'none';
+    this.dp.open = false;
+    this.dp.activeIndex = -1;
+    const ul = this.dp.el.querySelector('ul');
+    if (ul) ul.innerHTML = '';
+  }
+
+  setAtivo(i) {
+    this.dp.activeIndex = i;
+    const ul = this.dp.el.querySelector('ul');
+    if (!ul) return;
+    [...ul.children].forEach((li, idx) => {
+      li.classList.toggle('active', idx === i);
+      if (idx === i) li.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  renderizarSugestoesProdutos(lista) {
+    if (!this.dp.el) return;
+    const ul = this.dp.el.querySelector('ul');
+    if (!ul) return;
+
+    // normaliza (aceita string ou objeto)
+    this.dp.data = (Array.isArray(lista) ? lista : []).map(x =>
+      (x && typeof x === 'object') ? x : { nome: String(x), sku: '', preco: null }
+    );
+
+    ul.innerHTML = '';
+
+    if (!this.dp.data.length) {
+      ul.innerHTML = `<li><div class="dp-empty">Nenhum produto encontrado</div></li>`;
+      this.abrirDropdown();
+      return;
+    }
+
+    this.dp.data.forEach((p, idx) => {
+      const li = document.createElement('li');
+      li.setAttribute('data-idx', String(idx));
+      li.innerHTML = `
+        <div class="dp-left">
+          <div class="dp-title">${this.escapeHTML(p.nome || p.title || '(sem nome)')}</div>
+          <div class="dp-meta">
+            ${p.sku ? `<span class="dp-badge">SKU: ${this.escapeHTML(p.sku)}</span>` : ''}
+            ${p.gtin ? `<span class="dp-badge">GTIN: ${this.escapeHTML(p.gtin)}</span>` : ''}
+          </div>
+        </div>
+        <div class="dp-right">
+          ${p.estoque != null ? `<div>Estoque: ${Number(p.estoque)}</div>` : '<div>&nbsp;</div>'}
+          ${p.preco != null ? `<div class="dp-price">R$ ${Number(p.preco).toFixed(2).replace('.', ',')}</div>` : ''}
+        </div>
+      `;
+      ul.appendChild(li);
+    });
+
+    this.setAtivo(0);
+    this.abrirDropdown();
+  }
+
+  selecionarSugestao(idx) {
+    const p = this.dp.data[idx];
+    if (!p) return;
+    const nomeInput = document.getElementById('nome-produto');
+    const skuInput  = document.getElementById('sku-produto');
+    const valorInput= document.getElementById('valor-produto');
+
+    if (nomeInput)  nomeInput.value  = p.nome || p.title || '';
+    if (skuInput)   skuInput.value   = p.sku  || '';
+    if (valorInput && p.preco != null) valorInput.value = Number(p.preco).toFixed(2);
+
+    this.fecharDropdown();
+  }
+
+  escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+  // --------- FIM AUTOCOMPLETE ---------
 
   // ------- utilitários / UI -------
   mostrarToast(titulo, descricao, tipo = 'sucesso') {
@@ -637,9 +806,7 @@ class SistemaDevolucoes {
     }
 
     toast.style.display = 'block';
-    setTimeout(() => {
-      toast.style.display = 'none';
-    }, 4000);
+    setTimeout(() => { toast.style.display = 'none'; }, 4000);
   }
 
   exportarDados() {

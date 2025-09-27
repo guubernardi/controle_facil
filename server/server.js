@@ -537,6 +537,90 @@ app.get('/api/sales/by-chave/:chave', async (req, res) => {
   }
 });
 
+// Busca de produtos no Bling (autocomplete) 
+app.get('/api/products/search', async (req, res) => {
+  try {
+    const q       = String(req.query.q || '').trim();
+    const apelido = String(req.query.account || 'Conta de Teste');
+    if (!q) return res.json([]);
+
+    const base = process.env.BLING_API_BASE;
+    const out  = [];
+
+    // tentamos algumas formas comuns de busca no v3
+    // 1) por descricao/nome
+    for (let pagina = 1; pagina <= 3; pagina++) {
+      try {
+        const url = `${base}/produtos?descricao=${encodeURIComponent(q)}&pagina=${pagina}&limite=50`;
+        const r   = await blingGet(apelido, url);
+        const arr = Array.isArray(r?.data) ? r.data : [];
+        for (const p of arr) {
+          out.push({
+            id:     p.id ?? null,
+            nome:   p.nome || p.descricao || '',
+            sku:    p.codigo || p.sku || '',
+            gtin:   p.gtin || p.ean || '',
+            preco:  p.preco?.preco ?? p.preco ?? null,
+            estoque: p.estoque?.saldo ?? p.estoqueAtual ?? null
+          });
+        }
+        if (arr.length < 50) break;
+      } catch (_) { break; }
+    }
+
+    // 2) se vazia, tenta por codigo exato
+    if (!out.length) {
+      try {
+        const url2 = `${base}/produtos?codigo=${encodeURIComponent(q)}`;
+        const r2   = await blingGet(apelido, url2);
+        const arr2 = Array.isArray(r2?.data) ? r2.data : [];
+        for (const p of arr2) {
+          out.push({
+            id:     p.id ?? null,
+            nome:   p.nome || p.descricao || '',
+            sku:    p.codigo || p.sku || '',
+            gtin:   p.gtin || p.ean || '',
+            preco:  p.preco?.preco ?? p.preco ?? null,
+            estoque: p.estoque?.saldo ?? p.estoqueAtual ?? null
+          });
+        }
+      } catch (_) {}
+    }
+
+    // respostas enxutas
+    res.json(out.slice(0, 20));
+  } catch (e) {
+    console.error('products/search erro:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao buscar produtos no Bling.' });
+  }
+});
+
+// pegar produto por ID/código para detalhes
+app.get('/api/products/:codigo', async (req, res) => {
+  try {
+    const codigo  = String(req.params.codigo);
+    const apelido = String(req.query.account || 'Conta de Teste');
+    const base    = process.env.BLING_API_BASE;
+
+    const r = await blingGet(apelido, `${base}/produtos?codigo=${encodeURIComponent(codigo)}`);
+    const p = Array.isArray(r?.data) ? r.data[0] : null;
+    if (!p) return res.status(404).json({ error: 'Produto não encontrado' });
+
+    res.json({
+      id: p.id ?? null,
+      nome: p.nome || p.descricao || '',
+      sku: p.codigo || p.sku || '',
+      gtin: p.gtin || p.ean || '',
+      preco: p.preco?.preco ?? p.preco ?? null,
+      estoque: p.estoque?.saldo ?? p.estoqueAtual ?? null
+    });
+  } catch (e) {
+    console.error('products/:codigo erro:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao consultar produto.' });
+  }
+});
+
+
 // monta resposta no mesmo padrão do /api/sales/:id
 async function responderPedidoPadronizado(apelido, pedido, res, debugExtra = {}) {
   try {

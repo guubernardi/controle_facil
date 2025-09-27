@@ -200,6 +200,15 @@
           <div class="campo-form">
             <label for="nome-produto" class="label-form">Produto *</label>
             <input type="text" id="nome-produto" class="input-form" placeholder="Nome do produto" required/>
+            <!-- dropdown gerenciado via JS -->
+            <div id="lista-produtos" class="dropdown-sugestoes" style="display:none;">
+              <ul></ul>
+            </div>
+          </div>
+
+          <div class="campo-form">
+            <label for="sku-produto" class="label-form">SKU do Produto</label>
+            <input type="text" id="sku-produto" class="input-form" placeholder="Ex: PS5-001"/>
           </div>
 
           <div class="campo-form">
@@ -289,7 +298,7 @@
     </div>
   </div>
 
-  <!-- Toast de Notificação -->
+  <!-- Toast -->
   <div id="toast" class="toast" style="display:none;">
     <div class="toast-conteudo">
       <div class="toast-icone">

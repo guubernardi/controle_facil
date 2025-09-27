@@ -1,7 +1,9 @@
+@charset "UTF-8";
+
 /* Todas as cores em HSL para consistência total */
 
 :root {
-    /* Cores Principais - Paleta azul profissional */
+    /* Cores Principais */
     --background: hsl(0, 0%, 100%);
     --foreground: hsl(222, 84%, 4.9%);
     
@@ -278,7 +280,6 @@ body {
 .card-estatistica:hover {
     box-shadow: var(--shadow-lg);
     transform: translateY(-2px);
-    /* background removed to keep only elevation on hover */
     background: transparent;
 }
 
@@ -529,6 +530,155 @@ body {
     line-height: 1.4;
 }
 
+/* Caixa do dropdown */
+.dropdown-sugestoes {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(100% + 6px);
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  max-height: 320px;
+  display: none;         /* controlado via JS */
+  z-index: 140;          /* acima do conteúdo do modal */
+  animation: dp-fade-in .16s ease-out;
+}
+
+
+/* Animação de entrada */
+@keyframes dp-fade-in {
+  from { transform: translateY(4px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+/* Lista interna */
+.dropdown-sugestoes ul {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Scrollbar sutil */
+.dropdown-sugestoes ul::-webkit-scrollbar {
+  width: 10px;
+}
+.dropdown-sugestoes ul::-webkit-scrollbar-track {
+  background: var(--muted);
+  border-radius: calc(var(--radius) / 1.5);
+}
+.dropdown-sugestoes ul::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: calc(var(--radius) / 1.5);
+  border: 2px solid var(--muted);
+}
+.dropdown-sugestoes ul:hover::-webkit-scrollbar-thumb {
+  background: hsl(214, 31.8%, 82%);
+}
+
+/* Item */
+.dropdown-sugestoes li {
+  padding: 10px 12px;
+  border-radius: calc(var(--radius) - 4px);
+  transition: var(--transition-fast);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px 16px;
+  align-items: center;
+}
+
+/* Hover / foco */
+.dropdown-sugestoes li:hover,
+.dropdown-sugestoes li:focus-within,
+.dropdown-sugestoes li.active {
+  background: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--input);
+}
+
+/* Coluna da esquerda (título + meta) */
+.dp-left {
+  min-width: 0;
+}
+.dp-title {
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dp-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+/* Badges de SKU/GTIN */
+.dp-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+}
+
+/* Coluna da direita (estoque + preço) */
+.dp-right {
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+}
+.dp-price {
+  font-weight: 600;
+  color: var(--primary);
+}
+
+/* Estados “carregando” e “vazio” (opcionais) */
+.dropdown-sugestoes .dp-empty,
+.dropdown-sugestoes .dp-loading {
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+/* Input destacado quando o dropdown está aberto (opcional) */
+.campo-form.is-open .input-form {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px hsl(214 88% 27% / 0.1);
+  transition: var(--transition-smooth);
+}
+
+/* Acessibilidade (enter/space) */
+.dropdown-sugestoes li button,
+.dropdown-sugestoes li a {
+  all: unset;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Responsivo */
+@media (max-width: 480px) {
+  .dropdown-sugestoes {
+    max-height: 280px;
+  }
+  .dp-title { font-size: 14px; }
+}
+
+
 /* Badges de Status */
 .badge {
     display: inline-flex;
@@ -560,21 +710,23 @@ body {
 }
 
 /* Modal */
+/* Modal */
 .modal {
     position: fixed;
     inset: 0;
     z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
+    display: none;            /* controlado via JS (abre com display:flex) */
 }
 
 .modal-overlay {
     position: absolute;
     inset: 0;
-    background: hsl(0, 0%, 0%, 0.5);
+    background: hsl(0 0% 0% / 0.5);
     backdrop-filter: blur(4px);
+    display: flex;            /* centraliza o conteúdo */
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;            /* respiro nas bordas */
 }
 
 .modal-conteudo {
@@ -582,15 +734,15 @@ body {
     background: var(--card);
     border-radius: var(--radius);
     box-shadow: var(--shadow-lg);
-    width: 100%;
-    max-width: 500px;
-    max-height: 90vh;
+    width: min(880px, 96vw);  /* maior e responsivo */
+    max-height: 92vh;         /* cabe na viewport */
     overflow-y: auto;
+    border: 1px solid var(--border);
     animation: modalSlideIn 0.3s ease-out;
 }
 
 .modal-header {
-    padding: 1.5rem 1.5rem 1rem 1.5rem;
+    padding: 1.25rem 1.5rem 1rem;
     border-bottom: 1px solid var(--border);
     position: relative;
 }
@@ -607,6 +759,70 @@ body {
     color: var(--muted-foreground);
     margin: 0;
 }
+
+.botao-fechar {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    border-radius: 0.25rem;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: var(--muted-foreground);
+    transition: var(--transition-fast);
+}
+
+.botao-fechar:hover {
+    background: var(--muted);
+    color: var(--foreground);
+}
+
+.botao-fechar svg {
+    height: 1rem;
+    width: 1rem;
+}
+
+.modal-form {
+    padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.campo-form {
+    margin-bottom: 1rem;
+}
+
+.label-form {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--foreground);
+    margin-bottom: 0.5rem;
+}
+
+.textarea-form {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.modal-acoes {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+}
+
+/* em telas maiores, pode organizar grupos de campos em 2–3 colunas */
+@media (min-width: 900px) {
+  .modal-form .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .modal-form .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+}
+
+/* Animação do modal (mantida) */
+@keyframes modalSlideIn {
+    from { opacity: 0; transform: scale(0.98) translateY(6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
 
 .botao-fechar {
     position: absolute;

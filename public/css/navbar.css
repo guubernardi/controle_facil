@@ -58,14 +58,27 @@
     gap: .65rem;
 }
 
-.nav-links a .nav-ico { opacity: .95; transition: transform .18s ease, color .18s ease; color: var(--muted-foreground); width:18px; height:18px; }
-.nav-links a span { display:inline-block; vertical-align:middle; }
+.nav-links a .nav-ico { 
+    opacity: .95; 
+    transition: transform .18s ease, color .18s ease; color: var(--muted-foreground); 
+    width:18px; 
+    height:18px; 
+}
+
+.nav-links a span { 
+    display:inline-block; 
+    vertical-align:middle; 
+}
 
 .nav-links a:hover {
     background: var(--muted);
     color: var(--foreground);
 }
-.nav-links a:hover .nav-ico { color: var(--accent); transform: translateX(6px); }
+
+.nav-links a:hover .nav-ico { 
+    color: var(--accent); 
+    transform: translateX(6px); 
+}
 
 .nav-links a.active {
     background: var(--gradient-primary);
@@ -82,15 +95,49 @@
     margin-left: 0.75rem;
 }
 
-.acoes-header .botao { padding: .6rem 1rem; border-radius: 10px; }
-.acoes-header .botao.botao-principal { background: var(--primary); color: var(--primary-foreground); box-shadow: var(--shadow-card); }
-.acoes-header .botao.botao-outline { border: 1px solid var(--input); }
-.acoes-header .botao .icone { width: 16px; height: 16px; margin-right: .45rem; }
+.acoes-header .botao { 
+    padding: .6rem 1rem; 
+    border-radius: 10px; 
+}
+
+.acoes-header .botao.botao-principal { 
+    background: var(--primary); 
+    color: var(--primary-foreground); 
+    box-shadow: var(--shadow-card); 
+}
+
+.acoes-header .botao.botao-outline { 
+    border: 1px solid var(--input); 
+}
+
+.acoes-header .botao .icone { 
+    width: 16px; 
+    height: 16px; 
+    margin-right: .45rem; 
+}
 
 /* toggle button (hamburger) */
-.nav-toggle { background: transparent; border: 0; padding: 10px; display: none; color: var(--foreground); cursor: pointer; border-radius: 8px; }
-.nav-toggle svg { display:block; }
-.nav-toggle .bar { transition: transform .22s cubic-bezier(.2,.9,.2,1), opacity .18s ease; transform-origin: center; stroke: currentColor; }
+.nav-toggle { 
+    background: transparent; 
+    border: 0; 
+    padding: 10px; 
+    display: none; 
+    color: var(--foreground); 
+    cursor: pointer; 
+    border-radius: 8px; 
+}
+
+.nav-toggle svg { 
+    display:block; 
+}
+
+.nav-toggle .bar { 
+    transition: transform .22s 
+    cubic-bezier(.2,.9,.2,1), opacity .18s ease; 
+    transform-origin: 
+    center; 
+    stroke: currentColor; 
+}
 
 /* quando aberto, o botão vira X (usa atributo aria-expanded) */
 .nav-toggle[aria-expanded="true"] .bar1 { transform: translateY(5px) rotate(45deg); }
