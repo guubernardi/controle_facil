@@ -710,105 +710,170 @@ body {
 }
 
 /* Modal */
-/* Modal */
 .modal {
     position: fixed;
     inset: 0;
     z-index: 100;
-    display: none;            /* controlado via JS (abre com display:flex) */
+    display: none;
 }
 
 .modal-overlay {
     position: absolute;
     inset: 0;
-    background: hsl(0 0% 0% / 0.5);
+    background: hsl(0, 0%, 0%, .45);
     backdrop-filter: blur(4px);
-    display: flex;            /* centraliza o conteúdo */
+    display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2rem;            /* respiro nas bordas */
+    padding: 2rem;
 }
 
 .modal-conteudo {
-    position: relative;
-    background: var(--card);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-lg);
-    width: min(880px, 96vw);  /* maior e responsivo */
-    max-height: 92vh;         /* cabe na viewport */
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    animation: modalSlideIn 0.3s ease-out;
+  position: relative;
+  width: 100%;           /* garante que use toda a largura disponível */
+  max-width: 960px;      /* largura máxima do modal */
+  max-height: 92vh;      /* altura máx. responsiva */
+  overflow-y: auto;      /* rolagem só vertical */
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 20px 50px hsl(214 88% 27% / .15);
+  animation: modalSlideIn 0.3s ease-out;
 }
 
+/* opcional: em telas bem grandes, um pouco mais largo */
+@media (min-width: 1280px) {
+  .modal-conteudo { max-width: 1100px; }
+}
+
+
 .modal-header {
-    padding: 1.25rem 1.5rem 1rem;
+    padding: 1.5rem 1.75rem 1rem;
     border-bottom: 1px solid var(--border);
     position: relative;
+    display: flex;
+    gap: .75rem;
+    align-items: center;
+}
+
+.modal-hero {
+    width: 40px;
+    height: 40px;
+    border-radius: .75rem;
+    display: grid;
+    place-items: center;
+    color: var(--primary-foreground);
+    background: var(--gradient-primary);
+    box-shadow: var(--shadow-glow);
+    flex: 0 0 auto;
+}
+
+.modal-hero svg {
+    width: 20px;
+    height: 20px;
+}
+
+.modal-tittles {
+    display: grid;
+    gap: .25rem;
 }
 
 .modal-titulo {
-    font-size: 1.25rem;
-    font-weight: 600;
+    font-size: 1.35rem;
+    font-weight: 700;
     color: var(--foreground);
-    margin: 0 2rem 0.5rem 0;
 }
 
 .modal-descricao {
-    font-size: 0.875rem;
+    font-size: 0.925rem;
     color: var(--muted-foreground);
     margin: 0;
 }
 
 .botao-fechar {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    background: none;
-    border: none;
-    border-radius: 0.25rem;
-    padding: 0.5rem;
-    cursor: pointer;
-    color: var(--muted-foreground);
-    transition: var(--transition-fast);
+  position: absolute; top: 1rem; 
+  right: 1rem; 
+  border: 0; 
+  background: transparent;
+  color: var(--muted-foreground); 
+  padding: .5rem; 
+  border-radius: .5rem; 
+  cursor: pointer;
 }
 
-.botao-fechar:hover {
-    background: var(--muted);
-    color: var(--foreground);
+.botao-fechar:hover { 
+    background: var(--muted); 
+    color: var(--foreground); 
 }
 
-.botao-fechar svg {
-    height: 1rem;
-    width: 1rem;
+.botao-fechar svg { 
+    width: 1rem; 
+    height: 1rem; 
 }
 
-.modal-form {
-    padding: 1.25rem 1.5rem 1.5rem;
+.modal-form { 
+    padding: 1.25rem 1.75rem 1.75rem; 
 }
 
-.campo-form {
-    margin-bottom: 1rem;
+.grid-2 { 
+    display: grid; 
+    grid-template-columns: 1fr; 
+    gap: 1rem; 
 }
 
-.label-form {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--foreground);
-    margin-bottom: 0.5rem;
+@media (min-width: 900px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
+
+.grid-1 { 
+    display: grid; 
+    gap: 1rem; 
 }
 
-.textarea-form {
-    min-height: 80px;
-    resize: vertical;
+/* Input group com ícone/prefixo */
+.input-group {
+    position: relative; 
 }
 
+.input-group .input-form { 
+    padding-left: 2.5rem; 
+}
+
+.input-icon {
+  position: absolute; 
+  left: .75rem; 
+  top: 50%; 
+  transform: translateY(-50%);
+  width: 1rem; height: 1rem; color: var(--muted-foreground);
+}
+
+.input-prefix {
+  position: absolute; 
+  left: .75rem; 
+  top: 50%; 
+  transform: translateY(-50%);
+  font-size: .875rem; color: var(--muted-foreground);
+}
+
+.input-prefix + .input-form { 
+    padding-left: 2rem; 
+}
+
+.textarea-form { 
+    min-height: 120px; 
+}
+
+/* ===== Rodapé de ações ===== */
 .modal-acoes {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 1.5rem;
+  display: flex; 
+  gap: .75rem; 
+  justify-content: flex-end; 
+  margin-top: 1rem;
+  padding-top: 1rem; 
+  border-top: 1px solid var(--border);
+}
+
+/*  Dropdown do autocomplete acima do conteúdo  */
+.dropdown-sugestoes { 
+    z-index: 140; 
 }
 
 /* em telas maiores, pode organizar grupos de campos em 2–3 colunas */
@@ -817,7 +882,7 @@ body {
   .modal-form .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
 }
 
-/* Animação do modal (mantida) */
+/* Animação do modal */
 @keyframes modalSlideIn {
     from { opacity: 0; transform: scale(0.98) translateY(6px); }
     to   { opacity: 1; transform: scale(1) translateY(0); }

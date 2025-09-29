@@ -163,72 +163,118 @@
   </main>
 
   <!-- Modal: Nova Devolução -->
-  <div id="modal-nova-devolucao" class="modal" style="display:none;">
-    <div class="modal-overlay">
-      <div class="modal-conteudo">
-        <div class="modal-header">
+<div id="modal-nova-devolucao" class="modal" style="display:none;">
+  <div class="modal-overlay">
+    <div class="modal-conteudo">
+      <div class="modal-header">
+        <div class="modal-hero" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2a2.5 2.5 0 012.5 2.5V5h4A2.5 2.5 0 0121 7.5v9A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9A2.5 2.5 0 015.5 5h4v-.5A2.5 2.5 0 0112 2zM9 5h6v-.5a1.5 1.5 0 00-3 0V5z"/>
+          </svg>
+        </div>
+        <div class="modal-titles">
           <h2 class="modal-titulo">Criar Nova Devolução</h2>
           <p class="modal-descricao">Preencha os dados para registrar uma nova devolução</p>
-          <button id="botao-fechar-modal" class="botao-fechar" aria-label="Fechar">
-            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
-            </svg>
-          </button>
         </div>
+        <button id="botao-fechar-modal" class="botao-fechar" aria-label="Fechar">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 01.708 0L8 7.293l2.646-2.647a.5.5 0 11.708.708L8.707 8l2.647 2.646a.5.5 0 01-.708.708L8 8.707l-2.646 2.647a.5.5 0 11-.708-.708L7.293 8 4.646 5.354a.5.5 0 010-.708z"/></svg>
+        </button>
+      </div>
 
-        <form id="form-nova-devolucao" class="modal-form" novalidate>
+      <form id="form-nova-devolucao" class="modal-form" novalidate>
+        <!-- linha 1 -->
+        <div class="grid-2">
           <div class="campo-form">
             <label for="numero-pedido" class="label-form">Número do Pedido *</label>
-            <input type="text" id="numero-pedido" class="input-form" placeholder="Ex: PED-001" required/>
+            <div class="input-group">
+              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M3 4a1 1 0 011-1h8a1 1 0 011 1v9H3V4zm1 0v1h8V4H4z"/>
+              </svg>
+              <input type="text" id="numero-pedido" class="input-form" placeholder="Ex: PED-001" required/>
+            </div>
           </div>
 
           <div class="campo-form">
-            <label for="numero-nota" class="label-form">Número da Nota Fiscal (NFe)</label>
-            <input type="text" id="numero-nota" class="input-form" placeholder="Ex: 12345 ou 1/2025"/>
+            <label for="numero-nota" class="label-form">Número da Nota Fiscal</label>
+            <div class="input-group">
+              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2 2h12v12H2zM3 4h10v1H3zM3 6h10v1H3zM3 8h7v1H3z"/>
+              </svg>
+              <input type="text" id="numero-nota" class="input-form" placeholder="Ex: 12345 ou 1/2025"/>
+            </div>
           </div>
+        </div>
 
+        <!-- linha 2 -->
+        <div class="grid-1">
           <div class="campo-form">
-            <label for="chave-nota" class="label-form">Chave de Acesso (opcional)</label>
-            <input type="text" id="chave-nota" class="input-form" placeholder="Chave de acesso da NFe (44 dígitos)"/>
+            <label for="chave-nota" class="label-form">Chave de Acesso (44 dígitos)</label>
+            <div class="input-group">
+              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M3 1a2 2 0 00-2 2v10l3-2 3 2 3-2 3 2V3a2 2 0 00-2-2H3z"/>
+              </svg>
+              <input type="text" id="chave-nota" class="input-form" placeholder="Chave da NFe"/>
+            </div>
           </div>
+        </div>
 
+        <!-- linha 3 -->
+        <div class="grid-2">
           <div class="campo-form">
             <label for="nome-cliente" class="label-form">Cliente *</label>
-            <input type="text" id="nome-cliente" class="input-form" placeholder="Nome do cliente" required/>
+            <div class="input-group">
+              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 8a3 3 0 100-6 3 3 0 000 6zm4 7s-1 1-4 1-4-1-4-1 1-4 4-4 4 4 4 4z"/>
+              </svg>
+              <input type="text" id="nome-cliente" class="input-form" placeholder="Nome do cliente" required/>
+            </div>
           </div>
 
           <div class="campo-form">
             <label for="nome-produto" class="label-form">Produto *</label>
-            <input type="text" id="nome-produto" class="input-form" placeholder="Nome do produto" required/>
-            <!-- dropdown gerenciado via JS -->
-            <div id="lista-produtos" class="dropdown-sugestoes" style="display:none;">
-              <ul></ul>
+            <div class="input-group">
+              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2 2h12v5H2zM2 9h12v5H2z"/>
+              </svg>
+              <input type="text" id="nome-produto" class="input-form" placeholder="Nome do produto" required/>
+              <div id="lista-produtos" class="dropdown-sugestoes"></div>
             </div>
           </div>
+        </div>
 
+        <!-- linha 4 -->
+        <div class="grid-2">
           <div class="campo-form">
             <label for="sku-produto" class="label-form">SKU do Produto</label>
             <input type="text" id="sku-produto" class="input-form" placeholder="Ex: PS5-001"/>
           </div>
 
           <div class="campo-form">
-            <label for="valor-produto" class="label-form">Valor do Produto</label>
-            <input type="number" id="valor-produto" class="input-form" step="0.01" placeholder="0.00"/>
+            <label for="valor-produto" class="label-form">Valor do Produto (R$)</label>
+            <div class="input-group">
+              <span class="input-prefix">$</span>
+              <input type="number" id="valor-produto" class="input-form" step="0.01" placeholder="0,00"/>
+            </div>
           </div>
+        </div>
 
+        <!-- motivo -->
+        <div class="grid-1">
           <div class="campo-form">
             <label for="motivo-devolucao" class="label-form">Motivo da Devolução</label>
             <textarea id="motivo-devolucao" class="textarea-form" placeholder="Descreva o motivo da devolução..."></textarea>
           </div>
+        </div>
 
-          <div class="modal-acoes">
-            <button type="button" id="botao-cancelar" class="botao botao-outline">Cancelar</button>
-            <button type="submit" class="botao botao-principal">Criar Devolução</button>
-          </div>
-        </form>
-      </div>
+        <div class="modal-acoes">
+          <button type="button" id="botao-cancelar" class="botao botao-outline">Cancelar</button>
+          <button type="submit" class="botao botao-principal">Criar Devolução</button>
+        </div>
+      </form>
     </div>
   </div>
+</div>
+
 
   <!-- Modal: Detalhes / Edição -->
   <div id="modal-detalhes" class="modal" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
