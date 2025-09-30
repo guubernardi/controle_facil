@@ -1,12 +1,18 @@
 (function injectHeader() {
-  // Normaliza caminho (pode ser /, /index.html, /dashboard.html, etc.)
+  // Redireciona favoritos antigos de /registros.html (opcional)
   const rawPath = location.pathname || '/index.html';
+  if (rawPath.endsWith('registros.html')) {
+    location.replace('/index.html');
+    return;
+  }
+
+  // Normaliza caminho
   const path = rawPath === '/' ? '/index.html' : rawPath;
   const isIndex = path.endsWith('index.html');
+  const isDash  = path.endsWith('dashboard.html');
 
   // ações específicas por página
   const actionsHtml = isIndex ? `
-      <!-- ação rápida: botão Nova Devolução (preserva id usado pelo frontend) -->
       <div class="acoes-header">
         <button id="botao-nova-devolucao" class="botao botao-principal">
           <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -17,7 +23,7 @@
       </div>
   ` : '';
 
-  // HTML do navbar (usado para injetar ou substituir headers existentes)
+  // HTML do navbar (sem o link de Registros)
   const html = `
   <header class="navbar" role="banner">
     <div class="container nav-inner">
@@ -41,10 +47,6 @@
           <svg class="nav-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 2h5v5H2V2zm7 0h5v9h-5V2zM2 9h5v5H2V9z" fill="currentColor"/></svg>
           <span>Dashboard</span>
         </a>
-        <a data-active="registros" href="/registros.html">
-          <svg class="nav-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 2h10v2H3V2zm0 3h10v9H3V5zm2 2v5h2V7H5z" fill="currentColor"/></svg>
-          <span>Registros</span>
-        </a>
       </nav>
 
       ${actionsHtml}
@@ -54,26 +56,20 @@
   const existingNavbar = document.querySelector('.navbar');
   const existingCabecalho = document.getElementById('cabecalho') || document.querySelector('.cabecalho');
 
-  // Se já existe um navbar, não alteramos
   if (existingNavbar) return;
 
-  // Se existe um header estático (cabecalho), substituímos pelo navbar padronizado
   if (existingCabecalho) {
     existingCabecalho.outerHTML = html;
   } else {
-    // senão, injetamos no início do body
     document.body.insertAdjacentHTML('afterbegin', html);
   }
 
-  // destacar link ativo (reutiliza a variável `path` já calculada acima)
-  const isDash = path.endsWith('dashboard.html');
-  const isRegistros = path.endsWith('registros.html');
-
+  // destacar link ativo
   document.querySelectorAll('.nav-links a').forEach(a => {
     const key = a.getAttribute('data-active');
-    a.classList.toggle('active', (key === 'dashboard' && isDash) || (key === 'index' && isIndex) || (key === 'registros' && isRegistros));
-    if (a.classList.contains('active')) a.setAttribute('aria-current', 'page');
-    else a.removeAttribute('aria-current');
+    const active = (key === 'dashboard' && isDash) || (key === 'index' && isIndex);
+    a.classList.toggle('active', active);
+    if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
 
   // toggle menu (mobile)

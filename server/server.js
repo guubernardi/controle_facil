@@ -3,6 +3,8 @@
 // API de Devoluções + Bling OAuth/consulta
 // ---------------------------------------------
 
+'use strict';
+
 require('dotenv').config();
 
 const express = require('express');
@@ -16,8 +18,39 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Aviso de variáveis de ambiente ausentes
-['BLING_AUTHORIZE_URL','BLING_TOKEN_URL','BLING_API_BASE','BLING_CLIENT_ID','BLING_CLIENT_SECRET','BLING_REDIRECT_URI']
-  .forEach(k => { if (!process.env[k]) console.warn(`[WARN] .env faltando ${k}`); });
+[
+  'BLING_AUTHORIZE_URL',
+  'BLING_TOKEN_URL',
+  'BLING_API_BASE',
+  'BLING_CLIENT_ID',
+  'BLING_CLIENT_SECRET',
+  'BLING_REDIRECT_URI',
+  'DATABASE_URL'
+].forEach(k => {
+  if (!process.env[k]) console.warn(`[WARN] .env faltando ${k}`);
+});
+
+// ---------------------------------------------
+// Helpers
+// ---------------------------------------------
+function safeParseJson(s) {
+  if (s == null) return null;
+  if (typeof s === 'object') return s;
+  try { return JSON.parse(String(s)); } catch { return null; }
+}
+
+async function addReturnEvent({ returnId, type, title = null, message = null, meta = null, createdBy = 'system' }) {
+  const metaStr = meta ? JSON.stringify(meta) : null;
+  const sql = `
+    INSERT INTO return_events (return_id, type, title, message, meta, created_by, created_at)
+    VALUES ($1,$2,$3,$4,$5,$6, now())
+    RETURNING id, return_id AS "returnId", type, title, message, meta, created_by AS "createdBy", created_at AS "createdAt"
+  `;
+  const { rows } = await query(sql, [returnId, type, title, message, metaStr, createdBy]);
+  const ev = rows[0];
+  ev.meta = safeParseJson(ev.meta);
+  return ev;
+}
 
 // ---------------------------------------------
 // Health / DB
@@ -110,7 +143,7 @@ async function blingGet(apelido, url) {
     return r.data;
   } catch (e) {
     const st  = e?.response?.status;
-    const msg = e?.response?.data; // fix: variável correta
+    const msg = e?.response?.data;
     const precisaRefresh = st === 401 || (msg && String(msg).includes('invalid_token'));
     if (!precisaRefresh) throw e;
 
@@ -315,7 +348,6 @@ async function handlerBuscarVenda(req, res) {
     if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
     if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
 
-    // novo: dedução do cliente
     const clienteNome =
       pedido?.cliente?.nome ||
       pedido?.contato?.nome ||
@@ -354,14 +386,12 @@ async function handlerBuscarNotaPorNumero(req, res) {
 
     let nota = null;
 
-    // 1) tenta endpoint de notas por número
     try {
       const r1 = await blingGet(apelido, `${base}/notas?numero=${encodeURIComponent(numero)}`);
       const arr = Array.isArray(r1?.data) ? r1.data : [];
       nota = arr[0] || null;
     } catch (_) {}
 
-    // 2) fallback: algumas contas expõem o número da nota na venda
     if (!nota) {
       try {
         const r2 = await blingGet(apelido, `${base}/pedidos/vendas?numeroNota=${encodeURIComponent(numero)}`);
@@ -390,7 +420,6 @@ async function handlerBuscarNotaPorChave(req, res) {
     const apelido = String(req.query.account || 'Conta de Teste');
     const base = process.env.BLING_API_BASE;
 
-    // 1) tenta /notas/{chave}
     try {
       const r = await blingGet(apelido, `${base}/notas/${encodeURIComponent(chave)}`);
       const nota = r?.data || null;
@@ -402,7 +431,6 @@ async function handlerBuscarNotaPorChave(req, res) {
       }
     } catch (_) {}
 
-    // 2) tenta /notas?chave=
     try {
       const r2 = await blingGet(apelido, `${base}/notas?chave=${encodeURIComponent(chave)}`);
       const arr = Array.isArray(r2?.data) ? r2.data : [];
@@ -422,7 +450,6 @@ async function handlerBuscarNotaPorChave(req, res) {
   }
 }
 
-// Rotas de invoice (única definição)
 app.get('/api/invoice/:numero', handlerBuscarNotaPorNumero);
 app.get('/api/invoice/chave/:chave', handlerBuscarNotaPorChave);
 
@@ -430,12 +457,10 @@ app.get('/api/invoice/chave/:chave', handlerBuscarNotaPorChave);
 async function resolverPedidoAPartirDaNota(apelido, notaOuVenda) {
   const base = process.env.BLING_API_BASE;
 
-  // 1) se já é um pedido (fallback da busca por numeroNota pode retornar vendas)
   if (notaOuVenda?.itens && (notaOuVenda?.numero || notaOuVenda?.id)) {
-    return notaOuVenda; // já é uma venda
+    return notaOuVenda;
   }
 
-  // 2) tenta campos comuns que podem vir na nota
   const possiveisIds = [
     notaOuVenda?.pedido?.id,
     notaOuVenda?.pedidoVenda?.id,
@@ -450,7 +475,6 @@ async function resolverPedidoAPartirDaNota(apelido, notaOuVenda) {
     } catch (_) {}
   }
 
-  // 3) tenta localizar por numero da nota
   const numeroNota = notaOuVenda?.numero || notaOuVenda?.numero_nota || notaOuVenda?.nota_numero;
   if (numeroNota) {
     try {
@@ -460,7 +484,6 @@ async function resolverPedidoAPartirDaNota(apelido, notaOuVenda) {
     } catch (_) {}
   }
 
-  // 4) tenta localizar por chave
   const chave = notaOuVenda?.chave || notaOuVenda?.access_key;
   if (chave) {
     try {
@@ -473,13 +496,48 @@ async function resolverPedidoAPartirDaNota(apelido, notaOuVenda) {
   return null;
 }
 
-// GET /api/sales/by-invoice/:numero  -> acha a venda pelo número da NFe
+async function responderPedidoPadronizado(apelido, pedido, res, debugExtra = {}) {
+  try {
+    const lojaId     = pedido?.loja?.id ?? null;
+    const numeroLoja = pedido?.numeroLoja ?? '';
+    const numero     = pedido?.numero ?? null;
+
+    let lojaNome = pedido?.loja?.nome || pedido?.loja?.descricao || null;
+    if (!lojaNome && lojaId !== null) {
+      lojaNome = await pegarNomeLojaPorId(apelido, lojaId);
+    }
+    lojaNome = deduzirNomeLojaPelosPadroes(numeroLoja, lojaNome);
+    if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
+    if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
+
+    const clienteNome =
+      pedido?.cliente?.nome ||
+      pedido?.contato?.nome ||
+      pedido?.destinatario?.nome ||
+      pedido?.cliente_nome ||
+      pedido?.cliente?.fantasia ||
+      null;
+
+    return res.json({
+      idVenda: String(pedido.id || ''),
+      numeroPedido: numero,
+      lojaId,
+      lojaNome,
+      numeroLoja,
+      clienteNome,
+      debug: debugExtra
+    });
+  } catch (e) {
+    console.error('responderPedidoPadronizado erro:', e);
+    return res.status(500).json({ error: 'Falha ao formatar resposta.' });
+  }
+}
+
 app.get('/api/sales/by-invoice/:numero', async (req, res) => {
   try {
     const numero = String(req.params.numero);
     const apelido = String(req.query.account || 'Conta de Teste');
 
-    // 1) pegar a nota
     let nota = null;
     try {
       const r1 = await blingGet(apelido, `${process.env.BLING_API_BASE}/notas?numero=${encodeURIComponent(numero)}`);
@@ -487,16 +545,13 @@ app.get('/api/sales/by-invoice/:numero', async (req, res) => {
       nota = arr[0] || null;
     } catch (_) {}
 
-    // 2) se não achou nota, tenta /pedidos/vendas?numeroNota=...
     if (!nota) {
       const r2 = await blingGet(apelido, `${process.env.BLING_API_BASE}/pedidos/vendas?numeroNota=${encodeURIComponent(numero)}`);
       const arr = Array.isArray(r2?.data) ? r2.data : [];
       if (!arr[0]) return res.status(404).json({ error: 'Nenhum pedido encontrado para esta nota.' });
-      // já veio a venda
       return await responderPedidoPadronizado(apelido, arr[0], res, { via: 'vendas?numeroNota' });
     }
 
-    // 3) com a nota em mãos, resolve o pedido
     const pedido = await resolverPedidoAPartirDaNota(apelido, nota);
     if (!pedido) return res.status(404).json({ error: 'Não foi possível relacionar esta nota a um pedido.' });
 
@@ -507,14 +562,12 @@ app.get('/api/sales/by-invoice/:numero', async (req, res) => {
   }
 });
 
-// GET /api/sales/by-chave/:chave  -> acha a venda pela chave da NFe
 app.get('/api/sales/by-chave/:chave', async (req, res) => {
   try {
     const chave = String(req.params.chave);
     const apelido = String(req.query.account || 'Conta de Teste');
     const base = process.env.BLING_API_BASE;
 
-    // 1) tentar nota por chave
     let nota = null;
     try {
       const r = await blingGet(apelido, `${base}/notas/${encodeURIComponent(chave)}`);
@@ -527,7 +580,6 @@ app.get('/api/sales/by-chave/:chave', async (req, res) => {
       } catch (_) {}
     }
 
-    // 2) se não achou nota, tenta vendas?chave=...
     if (!nota) {
       const r3 = await blingGet(apelido, `${base}/pedidos/vendas?chave=${encodeURIComponent(chave)}`);
       const arr = Array.isArray(r3?.data) ? r3.data : [];
@@ -535,7 +587,6 @@ app.get('/api/sales/by-chave/:chave', async (req, res) => {
       return await responderPedidoPadronizado(apelido, arr[0], res, { via: 'vendas?chave' });
     }
 
-    // 3) com a nota, resolve o pedido
     const pedido = await resolverPedidoAPartirDaNota(apelido, nota);
     if (!pedido) return res.status(404).json({ error: 'Não foi possível relacionar esta chave a um pedido.' });
 
@@ -547,10 +598,8 @@ app.get('/api/sales/by-chave/:chave', async (req, res) => {
 });
 
 // ---------------------------------------------
-// Autocomplete/Produtos/Estoque (Bling) — compat com o frontend
+// Autocomplete/Produtos/Estoque (Bling)
 // ---------------------------------------------
-
-// pequeno cache em memória
 const _cache = new Map();
 const setCache = (k, v, ttl = 10000) => _cache.set(k, { v, exp: Date.now() + ttl });
 const getCache = (k) => {
@@ -560,15 +609,13 @@ const getCache = (k) => {
   return h.v;
 };
 
-// Compat: rota que o frontend tenta primeiro
-// GET /api/bling/products?q=texto&pagina=1&limit=10&account=Conta%20de%20Teste
 app.get('/api/bling/products', async (req, res) => {
   try {
     const q       = String(req.query.q || '').trim();
     const pagina  = Math.max(parseInt(req.query.pagina || '1', 10), 1);
     const limit   = Math.max(1, Math.min(parseInt(req.query.limit || '10', 10), 50));
     const apelido = String(req.query.account || 'Conta de Teste');
-    if (!q) return res.json([]); // front espera ARRAY direto
+    if (!q) return res.json([]);
 
     const key = `prod:${apelido}:${q}:${pagina}:${limit}`;
     const hit = getCache(key);
@@ -577,7 +624,6 @@ app.get('/api/bling/products', async (req, res) => {
     const base = process.env.BLING_API_BASE;
     const out  = [];
 
-    // 1) busca por descrição/nome (3 páginas max)
     for (let p = pagina; p < pagina + 3; p++) {
       const url = `${base}/produtos?descricao=${encodeURIComponent(q)}&pagina=${p}&limite=${limit}`;
       try {
@@ -596,7 +642,6 @@ app.get('/api/bling/products', async (req, res) => {
       } catch (_) { break; }
     }
 
-    // 2) se nada veio, tenta por código exato
     if (!out.length) {
       try {
         const r2   = await blingGet(apelido, `${base}/produtos?codigo=${encodeURIComponent(q)}`);
@@ -615,15 +660,13 @@ app.get('/api/bling/products', async (req, res) => {
 
     const resp = out.slice(0, limit);
     setCache(key, resp, 10000);
-    res.json(resp); // ARRAY (sem {data})
+    res.json(resp);
   } catch (e) {
     console.error('GET /api/bling/products ERRO:', e?.response?.data || e);
     res.status(500).json({ error: 'Falha ao consultar produtos.' });
   }
 });
 
-// Badge de estoque por SKU (opcional, útil no modal)
-// GET /api/bling/stock?sku=ABC123
 app.get('/api/bling/stock', async (req, res) => {
   try {
     const sku     = String(req.query.sku || '').trim();
@@ -635,7 +678,6 @@ app.get('/api/bling/stock', async (req, res) => {
     if (hit) return res.json(hit);
 
     const base = process.env.BLING_API_BASE;
-    // ajuste o caminho se sua conta usar outra rota de estoque
     const r = await blingGet(apelido, `${base}/estoques/saldos?codigo=${encodeURIComponent(sku)}`);
     setCache(key, r, 10000);
     res.json(r);
@@ -646,7 +688,7 @@ app.get('/api/bling/stock', async (req, res) => {
 });
 
 // ---------------------------------------------
-// Busca de produtos no Bling (autocomplete) — fallback já existente
+// Busca de produtos no Bling (fallback)
 // ---------------------------------------------
 app.get('/api/products/search', async (req, res) => {
   try {
@@ -657,8 +699,6 @@ app.get('/api/products/search', async (req, res) => {
     const base = process.env.BLING_API_BASE;
     const out  = [];
 
-    // tentamos algumas formas comuns de busca no v3
-    // 1) por descricao/nome
     for (let pagina = 1; pagina <= 3; pagina++) {
       try {
         const url = `${base}/produtos?descricao=${encodeURIComponent(q)}&pagina=${pagina}&limite=50`;
@@ -678,7 +718,6 @@ app.get('/api/products/search', async (req, res) => {
       } catch (_) { break; }
     }
 
-    // 2) se vazia, tenta por codigo exato
     if (!out.length) {
       try {
         const url2 = `${base}/produtos?codigo=${encodeURIComponent(q)}`;
@@ -697,7 +736,6 @@ app.get('/api/products/search', async (req, res) => {
       } catch (_) {}
     }
 
-    // respostas enxutas
     res.json(out.slice(0, 20));
   } catch (e) {
     console.error('products/search erro:', e?.response?.data || e);
@@ -705,7 +743,6 @@ app.get('/api/products/search', async (req, res) => {
   }
 });
 
-// pegar produto por ID/código para detalhes
 app.get('/api/products/:codigo', async (req, res) => {
   try {
     const codigo  = String(req.params.codigo);
@@ -730,44 +767,74 @@ app.get('/api/products/:codigo', async (req, res) => {
   }
 });
 
-// monta resposta no mesmo padrão do /api/sales/:id
-async function responderPedidoPadronizado(apelido, pedido, res, debugExtra = {}) {
+// ---------------------------------------------
+// EVENTS API (return_events) — GET/POST
+// ---------------------------------------------
+app.get('/api/returns/:id/events', async (req, res) => {
   try {
-    const lojaId     = pedido?.loja?.id ?? null;
-    const numeroLoja = pedido?.numeroLoja ?? '';
-    const numero     = pedido?.numero ?? null;
-
-    let lojaNome = pedido?.loja?.nome || pedido?.loja?.descricao || null;
-    if (!lojaNome && lojaId !== null) {
-      lojaNome = await pegarNomeLojaPorId(apelido, lojaId);
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) {
+      return res.status(400).json({ error: 'return_id inválido' });
     }
-    lojaNome = deduzirNomeLojaPelosPadroes(numeroLoja, lojaNome);
-    if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
-    if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
 
-    // novo: dedução do cliente
-    const clienteNome =
-      pedido?.cliente?.nome ||
-      pedido?.contato?.nome ||
-      pedido?.destinatario?.nome ||
-      pedido?.cliente_nome ||
-      pedido?.cliente?.fantasia ||
-      null;
+    const limit  = Math.min(parseInt(req.query.limit || '50', 10), 200);
+    const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
 
-    return res.json({
-      idVenda: String(pedido.id || ''),
-      numeroPedido: numero,
-      lojaId,
-      lojaNome,
-      numeroLoja,
-      clienteNome,
-      debug: debugExtra
-    });
-  } catch (e) {
-    console.error('responderPedidoPadronizado erro:', e);
-    return res.status(500).json({ error: 'Falha ao formatar resposta.' });
+    const sql = `
+      SELECT
+        id,
+        return_id AS "returnId",
+        type,
+        title,
+        message,
+        meta,
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+      FROM return_events
+      WHERE return_id = $1
+      ORDER BY created_at ASC, id ASC
+      LIMIT $2 OFFSET $3
+    `;
+    const { rows } = await query(sql, [returnId, limit, offset]);
+    const items = rows.map(r => ({ ...r, meta: safeParseJson(r.meta) }));
+    res.json({ items, limit, offset });
+  } catch (err) {
+    console.error('GET /api/returns/:id/events error:', err);
+    res.status(500).json({ error: 'Falha ao listar eventos' });
   }
-}
+});
+
+// body: { type: 'status'|'note'|'refund', title?, message?, meta?, created_by? }
+app.post('/api/returns/:id/events', async (req, res) => {
+  try {
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) {
+      return res.status(400).json({ error: 'return_id inválido' });
+    }
+
+    const { type, title, message, meta, created_by } = req.body || {};
+    if (!['status','note','refund'].includes(type)) {
+      return res.status(400).json({ error: 'type inválido. Use: status | note | refund' });
+    }
+
+    const r = await query(`SELECT id FROM devolucoes WHERE id = $1`, [returnId]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Devolução não encontrada' });
+
+    const ev = await addReturnEvent({
+      returnId,
+      type,
+      title,
+      message,
+      meta,
+      createdBy: created_by || 'system'
+    });
+
+    res.status(201).json(ev);
+  } catch (err) {
+    console.error('POST /api/returns/:id/events error:', err);
+    res.status(500).json({ error: 'Falha ao criar evento' });
+  }
+});
 
 // ---------------------------------------------
 // Devoluções (CRUD + Dashboard)
@@ -777,7 +844,7 @@ app.post('/api/returns', async (req, res) => {
     const {
       data_compra, id_venda, loja_id, loja_nome, sku, tipo_reclamacao,
       status, valor_produto, valor_frete, reclamacao, created_by,
-      cliente_nome // novo
+      cliente_nome
     } = req.body;
 
     const sql = `
@@ -795,6 +862,19 @@ app.post('/api/returns', async (req, res) => {
     ];
 
     const { rows } = await query(sql, params);
+
+    // Evento "status inicial" opcional (se veio status)
+    if (status) {
+      await addReturnEvent({
+        returnId: rows[0].id,
+        type: 'status',
+        title: 'Status inicial',
+        message: `Status inicial definido como "${status}"`,
+        meta: { status },
+        createdBy: created_by || 'app-local'
+      });
+    }
+
     return res.status(201).json({ ok: true, id: rows[0].id, created_at: rows[0].created_at });
   } catch (e) {
     console.error('POST /api/returns ERRO:', e);
@@ -959,10 +1039,15 @@ app.get('/api/returns/:id', async (req, res) => {
   }
 });
 
+// PATCH com evento automático de status
 app.patch('/api/returns/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'ID inválido.' });
+
+    const currentQ = await query(`SELECT id, status FROM devolucoes WHERE id=$1`, [id]);
+    const current = currentQ.rows[0];
+    if (!current) return res.status(404).json({ error: 'Devolução não encontrada.' });
 
     const allow = new Set([
       'status','loja_nome','sku','tipo_reclamacao','valor_produto','valor_frete',
@@ -993,7 +1078,23 @@ app.patch('/api/returns/:id', async (req, res) => {
       RETURNING *`;
     const r = await query(sql, args);
     if (!r.rows[0]) return res.status(404).json({ error: 'Registro não encontrado.' });
-    res.json(r.rows[0]);
+
+    const updated = r.rows[0];
+
+    // Evento automático se status mudou
+    const newStatus = req.body?.status;
+    if (newStatus && newStatus !== current.status) {
+      await addReturnEvent({
+        returnId: id,
+        type: 'status',
+        title: 'Status atualizado',
+        message: `Status alterado de "${current.status}" para "${newStatus}"`,
+        meta: { from: current.status, to: newStatus },
+        createdBy: req.body?.updated_by || 'system'
+      });
+    }
+
+    res.json(updated);
   } catch (e) {
     console.error('PATCH /api/returns/:id ERRO:', e);
     res.status(400).json({ error: 'Falha ao atualizar.' });

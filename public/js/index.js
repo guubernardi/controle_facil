@@ -1,4 +1,4 @@
-// index.js — Sistema de Devoluções (com motivo codificado e cálculo de prejuízo)
+import RULES from './rules.config.js';
 
 class SistemaDevolucoes {
   constructor() {
@@ -22,6 +22,51 @@ class SistemaDevolucoes {
     endereco_errado_cliente: 'no_cost',
     ausencia_receptor: 'no_cost',
     cancelou_antes_envio: 'no_cost',
+  };
+
+  // ===== Responsável pelo custo por motivo =====
+  // - Motivos do cliente → Plataforma
+  // - Demais → Loja (fallback)
+  MOTIVO_CUSTO = {
+    arrependimento: 'plataforma',
+    compra_errada: 'plataforma',
+    nao_serviu: 'plataforma',
+    mudou_de_ideia: 'plataforma',
+    endereco_errado_cliente: 'plataforma',
+    ausencia_receptor: 'plataforma',
+    cancelou_antes_envio: 'plataforma',
+  };
+
+  // ===== Sugestões de descrição por motivo =====
+  DESCRICOES_SUGERIDAS = {
+    // Cliente
+    arrependimento: 'Arrependimento de compra dentro do prazo. Produto sem uso e com embalagem original.',
+    compra_errada: 'Cliente relata compra equivocada (modelo/tamanho/cor) e opta por devolução.',
+    nao_serviu: 'Produto não serviu quanto a tamanho/cor/modelo conforme preferência do cliente.',
+    mudou_de_ideia: 'Cliente mudou de ideia e optou por não permanecer com o produto.',
+    endereco_errado_cliente: 'Endereço informado pelo cliente incorreto/incompleto; pedido devolvido.',
+    ausencia_receptor: 'Ausência do recebedor nas tentativas de entrega registradas pela transportadora.',
+    cancelou_antes_envio: 'Cancelamento solicitado pelo cliente antes do envio do pedido.',
+
+    // Produto / Fabricante
+    defeito: 'Cliente reporta defeito de fábrica. Testes preliminares indicam falha no funcionamento.',
+    produto_danificado: 'Produto recebido com avaria aparente no corpo/embalagem. Cliente enviou fotos.',
+    peca_faltando: 'Relato de peça/acessório ausente na embalagem. Solicita envio do item ou devolução.',
+
+    // Logística / Transporte
+    avaria_transporte: 'Avaria ocasionada no transporte. Cliente registrou no ato do recebimento.',
+    extravio: 'Pedido extraviado pela transportadora; não houve entrega ao cliente.',
+    atraso_entrega: 'Entrega fora do prazo estimado. Cliente optou pela devolução.',
+    devolvido_transportadora: 'Objeto devolvido ao remetente pela transportadora.',
+
+    // Anúncio / Loja
+    anuncio_errado: 'Divergência entre anúncio/variação e produto enviado.',
+    descricao_divergente: 'Descrição do anúncio não condiz com o produto recebido.',
+    sku_envio_errado: 'Erro de expedição: SKU/variação incorreta enviada ao cliente.',
+    preco_errado: 'Preço anunciado incorreto motivou cancelamento/devolução.',
+
+    // Outros
+    outros: 'Cliente solicita devolução por motivo não listado. Detalhes:'
   };
 
   // ----- Motivos (lista completa) -----
@@ -81,7 +126,7 @@ class SistemaDevolucoes {
   async inicializar() {
     this.configurarEventListeners();
     this.prepararAnimacoesIniciais();
-    this.popularSelectMotivos(); // popula o <select id="motivo-codigo">
+    this.popularSelectMotivos();
     await this.carregarDevolucoesDoServidor();
     this.atualizarEstatisticas();
     this.renderizarDevolucoes();
@@ -230,17 +275,42 @@ class SistemaDevolucoes {
         });
       }
 
-      // motivo rápido
+      // ===== Campos do modal de criação =====
       const selMotivo = document.getElementById('motivo-codigo');
-      const txtMotivo = document.getElementById('motivo-devolucao'); // opcional (textarea)
+      const txtMotivo = document.getElementById('motivo-devolucao'); // textarea (opcional)
+      const selCusto = document.getElementById('responsavel-custo'); // <select id="responsavel-custo">
+
+      // marca quando o usuário mexe no custo manualmente (pra não sobrescrever depois)
+      if (selCusto) {
+        selCusto.addEventListener('change', () => { selCusto.dataset.custoManual = '1'; });
+      }
+      // se o usuário digitar na descrição, não sobrescrevemos sugestões
+      if (txtMotivo) {
+        txtMotivo.addEventListener('input', () => { delete txtMotivo.dataset.autofill; });
+      }
+
+      // motivo -> preenche descrição + custo automaticamente
       if (selMotivo) {
-        selMotivo.addEventListener('change', () => {
-          if (txtMotivo && !txtMotivo.value.trim() && selMotivo.options[selMotivo.selectedIndex]) {
-            const label = selMotivo.options[selMotivo.selectedIndex].textContent.trim();
-            txtMotivo.value = label;
+        const aplicarMotivo = () => {
+          const opt = selMotivo.options[selMotivo.selectedIndex];
+          const rotulo = opt ? opt.textContent.trim() : '';
+          const cod = String(selMotivo.value || '').toLowerCase();
+
+          // descrição sugerida (sem brigar com o que o usuário já escreveu)
+          const sugestao = this.gerarDescricaoPorMotivo(cod, rotulo);
+          if (txtMotivo && (!txtMotivo.value.trim() || txtMotivo.dataset.autofill === '1')) {
+            txtMotivo.value = sugestao;
+            txtMotivo.dataset.autofill = '1';
           }
-          this.aplicarHintPolitica(selMotivo.value);
-        });
+
+          // custo sugerido (não sobrescreve se usuário já escolheu manualmente)
+          this.aplicarCustoPorMotivo(cod);
+
+          // políticas visuais
+          this.aplicarHintPolitica(cod);
+        };
+
+        selMotivo.addEventListener('change', aplicarMotivo);
       }
 
       // ---------- Autocomplete Produto ----------
@@ -248,7 +318,7 @@ class SistemaDevolucoes {
       if (inpProduto) {
         // pega o dropdown já criado no HTML
         this.dp.el = document.getElementById('lista-produtos');
-        // garante que exita uma ul dentro do dropdown
+        // garante que exista uma ul dentro do dropdown
         if (!this.dp.el.querySelector('ul')) {
           const ul = document.createElement('ul');
           this.dp.el.appendChild(ul);
@@ -359,6 +429,49 @@ class SistemaDevolucoes {
     }
   }
 
+  // Gera descrição sugerida por motivo (inclui extras úteis)
+  gerarDescricaoPorMotivo(codigo, rotuloFallback = '') {
+    const base =
+      this.DESCRICOES_SUGERIDAS[String(codigo || '').toLowerCase()] ||
+      rotuloFallback ||
+      'Motivo informado pelo cliente.';
+    const sku = document.getElementById('sku-produto')?.value.trim();
+    const pedido = document.getElementById('numero-pedido')?.value.trim();
+    const extras = [];
+    if (sku) extras.push(`SKU: ${sku}`);
+    if (pedido) extras.push(`Pedido: ${pedido}`);
+    return extras.length ? `${base} ${extras.join(' · ')}.` : base;
+  }
+
+  // Aplica o responsável pelo custo com base no motivo
+  aplicarCustoPorMotivo(cod) {
+    const selCusto = document.getElementById('responsavel-custo');
+    if (!selCusto) return;
+
+    // não sobrescreve se usuário marcou manualmente
+    if (selCusto.dataset.custoManual === '1') return;
+
+    const alvo = (this.MOTIVO_CUSTO[cod] || 'loja').toLowerCase();
+
+    // tenta por value; se não achar, tenta por label
+    let idx = -1;
+    for (let i = 0; i < selCusto.options.length; i++) {
+      const opt = selCusto.options[i];
+      const val = String(opt.value || '').toLowerCase();
+      const txt = String(opt.textContent || '').toLowerCase();
+      if (val === alvo || txt.includes(alvo)) {
+        idx = i; break;
+      }
+    }
+    if (idx >= 0) {
+      selCusto.selectedIndex = idx;
+      // dica visual para devolução grátis/compra garantida
+      if (alvo === 'plataforma') {
+        this.mostrarToast('Custo automático', 'Para devolução grátis/Compra Garantida, selecionamos: Plataforma.', 'sucesso');
+      }
+    }
+  }
+
   // Popula <select id="motivo-codigo"> no modal "Nova Devolução"
   popularSelectMotivos() {
     const sel = document.getElementById('motivo-codigo'); // <select> precisa existir no HTML do modal
@@ -392,9 +505,79 @@ class SistemaDevolucoes {
     document.getElementById('md-reclamacao').value = it.motivo || '';
 
     this.setModoEdicao(false);
+
+    // liga timeline para este ID
+    this.wireTimeline(it.id);
+
+    // abre modal
     const md = document.getElementById('modal-detalhes');
     md.style.display = 'flex';
     document.body.style.overflow = 'hidden';
+  }
+
+  // 🔧 método de classe: cuida das TABS e do histórico
+  wireTimeline(returnId) {
+    // Tab default: Detalhes visível, Histórico oculto
+    const tabs = document.querySelectorAll('.tab-btn');
+    tabs.forEach(b =>
+      b.setAttribute('aria-selected', b.dataset.tab === 'detalhes' ? 'true' : 'false')
+    );
+    const abaDet = document.getElementById('aba-detalhes');
+    const abaHist = document.getElementById('aba-historico');
+    if (abaDet)  abaDet.hidden  = false;
+    if (abaHist) abaHist.hidden = true;
+
+    // Botão "Adicionar nota"
+    const btn = document.getElementById('btnAddNote');
+    if (btn) {
+      btn.onclick = async () => {
+        const title   = document.getElementById('evTitle')?.value || '';
+        const message = document.getElementById('evMessage')?.value || '';
+        if (!message.trim()) { this.mostrarToast('Atenção', 'Escreva uma mensagem.', 'aviso'); return; }
+        try {
+          const res = await fetch(`/api/returns/${returnId}/events`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'note', title: title || null, message, created_by: 'app' })
+          });
+          if (!res.ok) throw new Error('Falha ao criar nota');
+          const t = document.getElementById('evTitle');  if (t) t.value = '';
+          const m = document.getElementById('evMessage');if (m) m.value = '';
+          this.mostrarToast('OK', 'Nota adicionada!', 'sucesso');
+          await carregarEventos(returnId);
+        } catch (e) {
+          console.error(e);
+          this.mostrarToast('Erro', 'Não foi possível adicionar a nota.', 'erro');
+        }
+      };
+    }
+
+    // Select de status: PATCH + recarrega histórico (evento "status" nasce automático no backend)
+    const sel = document.getElementById('md-status');
+    if (sel) {
+      sel.onchange = async () => {
+        const novo = sel.value;
+        try {
+          const res = await fetch(`/api/returns/${returnId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: novo, updated_by: 'app' })
+          });
+          if (!res.ok) throw new Error('Falha ao atualizar status');
+          this.mostrarToast('OK', 'Status atualizado!', 'sucesso');
+          await carregarEventos(returnId);
+        } catch (e) {
+          console.error(e);
+          this.mostrarToast('Erro', 'Não foi possível alterar o status.', 'erro');
+        }
+      };
+    }
+
+    // Carregar eventos ao abrir
+    carregarEventos(returnId).catch(err => {
+      console.error(err);
+      this.mostrarToast('Erro', 'Falha ao carregar histórico.', 'erro');
+    });
   }
 
   fecharModalDetalhes() {
@@ -538,9 +721,16 @@ class SistemaDevolucoes {
     const cod     = String(d?.motivoCodigo || '').toLowerCase();
     const texto   = String(d?.motivo || '');
 
-    if (statusVoltouCD.includes(status)) return frete; // voltou CD => só frete
-    if (MOTIVOS_CLIENTE_COBRE.has(cod) || motivoClienteRegex.test(texto)) return 0; // cliente => 0
+    // rejeitado = sem reembolso (prejuízo 0)
+    if (status === 'rejeitado') return 0;
 
+    // voltou ao CD ⇒ só frete
+    if (statusVoltouCD.includes(status)) return frete;
+
+    // cliente arcado pela plataforma ⇒ 0
+    if (MOTIVOS_CLIENTE_COBRE.has(cod) || motivoClienteRegex.test(texto)) return 0;
+
+    // padrão
     return produto + frete;
   }
 
@@ -696,6 +886,11 @@ class SistemaDevolucoes {
     if (modal) modal.style.display = 'none';
     document.body.style.overflow = '';
     form?.reset();
+    // limpa flags de auto-preenchimento quando fecha
+    document.getElementById('motivo-devolucao')?.removeAttribute('data-autofill');
+    const selCusto = document.getElementById('responsavel-custo');
+    if (selCusto) delete selCusto.dataset.custoManual;
+
     this.lojaDetectada = { loja_id: null, loja_nome: null };
     this.fecharDropdown();
   }
@@ -714,10 +909,11 @@ class SistemaDevolucoes {
     const produto = document.getElementById('nome-produto')?.value.trim();
     const sku = document.getElementById('sku-produto')?.value.trim() || null;
     let valorProduto = parseFloat(document.getElementById('valor-produto')?.value) || 0;
-    let valorFrete = parseFloat(document.getElementById('valor-frete')?.value) || 0; // opcional (se existir)
-    const motivo = document.getElementById('motivo-devolucao')?.value?.trim() || null; // opcional
+    let valorFrete = parseFloat(document.getElementById('valor-frete')?.value) || 0;
+    const motivo = document.getElementById('motivo-devolucao')?.value?.trim() || null;
     const motivoCodigo = document.getElementById('motivo-codigo')?.value || '';
     const numeroNota = document.getElementById('numero-nota')?.value.trim();
+    const responsavelCusto = document.getElementById('responsavel-custo')?.value || null;
 
     if (!numeroPedido && !numeroNota) {
       this.mostrarToast('Erro', 'Informe o Número do Pedido ou o Número da Nota.', 'erro');
@@ -751,6 +947,7 @@ class SistemaDevolucoes {
       motivo_codigo: motivoCodigo || null,
       nfe_numero: numeroNota || null,
       nfe_chave: document.getElementById('chave-nota')?.value.trim() || null,
+      responsavel_custo: responsavelCusto || null, // opcional
       created_by: 'front-web',
       cliente_nome: cliente || null,
     };
@@ -1029,6 +1226,132 @@ class SistemaDevolucoes {
   }
 }
 
+// ===== TIMELINE: helpers =====
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
+function renderMeta(meta) {
+  if (!meta) return '';
+  if (meta.from || meta.to) {
+    return `<div class="timeline-msg"><b>Mudança:</b> ${escapeHtml(meta.from || '?')} → ${escapeHtml(meta.to || '?')}</div>`;
+  }
+  if (meta.status) {
+    return `<div class="timeline-msg"><b>Status:</b> ${escapeHtml(meta.status)}</div>`;
+  }
+  if (meta.impacto) {
+    const i = meta.impacto;
+    return `<div class="timeline-msg"><b>Regra:</b> ${escapeHtml(i.regra)} · <b>Total:</b> R$ ${Number(i.total || 0).toFixed(2)}</div>`;
+  }
+  return `<pre class="timeline-msg">${escapeHtml(JSON.stringify(meta, null, 2))}</pre>`;
+}
+
+function renderTimeline(items) {
+  const list = document.getElementById('timelineList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (!items.length) {
+    list.innerHTML = `<li class="timeline-item"><div class="timeline-card"><div class="timeline-msg">Sem eventos ainda.</div></div></li>`;
+    return;
+  }
+
+  const fmt  = (s) => { try { return new Date(s).toLocaleString(); } catch { return s; } };
+  const icon = (t) => t === 'status' ? '🔄' : t === 'note' ? '📝' : '💸';
+
+  items.forEach(ev => {
+    const li = document.createElement('li');
+    li.className = `timeline-item ${ev.type}`;
+    li.innerHTML = `
+      <span class="dot"></span>
+      <div class="timeline-card">
+        <div class="timeline-head">
+          <span class="timeline-type ${ev.type}">${icon(ev.type)} ${ev.type.toUpperCase()}</span>
+          <span class="timeline-title">${ev.title ? escapeHtml(ev.title) : ''}</span>
+          <span class="timeline-meta">· ${fmt(ev.createdAt)} ${ev.createdBy ? ' · ' + escapeHtml(ev.createdBy) : ''}</span>
+        </div>
+        <div class="timeline-msg">${ev.message ? escapeHtml(ev.message) : ''}</div>
+        ${renderMeta(ev.meta)}
+      </div>
+    `;
+    list.appendChild(li);
+  });
+}
+
+async function carregarEventos(returnId) {
+  const list = document.getElementById('timelineList');
+  if (list) list.innerHTML = '<li class="timeline-item"><div class="timeline-card">Carregando…</div></li>';
+  const res = await fetch(`/api/returns/${returnId}/events`);
+  if (!res.ok) throw new Error('Falha ao carregar eventos');
+  const data = await res.json();
+  renderTimeline(data.items || []);
+}
+
+async function adicionarNota(returnId, title, message) {
+  const res = await fetch(`/api/returns/${returnId}/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'note', title: title || null, message: message || '', created_by: 'app' })
+  });
+  if (!res.ok) throw new Error('Falha ao criar nota');
+  window.sistemaDevolucoes?.mostrarToast('OK', 'Nota adicionada!', 'sucesso');
+  await carregarEventos(returnId);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   window.sistemaDevolucoes = new SistemaDevolucoes();
 });
+
+// ===== TABS do modal Detalhes/Historico =====
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  const isHist = btn.dataset.tab === 'historico';
+
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+  });
+
+  const abaDetalhes  = document.getElementById('aba-detalhes');
+  const abaHistorico = document.getElementById('aba-historico');
+  if (abaDetalhes && abaHistorico) {
+    abaDetalhes.hidden  = isHist;
+    abaHistorico.hidden = !isHist;
+  }
+});
+
+// --- Tooltip do Status ---
+(() => {
+  const trigger = document.querySelector('.hint-trigger');
+  const bubble  = document.getElementById('md-status-hint');
+
+  if (!trigger || !bubble) return;
+
+  const open  = () => bubble.classList.add('is-open');
+  const close = () => bubble.classList.remove('is-open');
+  const toggle = () => bubble.classList.toggle('is-open');
+
+  // Abre/fecha no clique do ícone
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggle();
+  });
+
+  // Fecha clicando fora
+  document.addEventListener('click', (e) => {
+    if (!bubble.classList.contains('is-open')) return;
+    const within = bubble.contains(e.target) || trigger.contains(e.target);
+    if (!within) close();
+  });
+
+  // Acessibilidade: abre no foco, fecha no blur
+  trigger.addEventListener('focus', open);
+  trigger.addEventListener('blur', close);
+
+  // Esc fecha
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+  });
+})();

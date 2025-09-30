@@ -31,6 +31,12 @@ function currencyBR(v) {
 }
 
 /* ------------------------------
+   Texto explicativo (exibido em títulos/tooltip)
+--------------------------------*/
+const REGRAS_HINT =
+  'Regras: Rejeitado = R$ 0,00 · Motivos do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete.';
+
+/* ------------------------------
    Cores/gradiente seguros
 --------------------------------*/
 // Converte "hsl(...)" ou "hsla(...)" para HSLA com alpha desejado
@@ -135,6 +141,17 @@ function initCharts() {
               callback: (v) => currencyBR(v).replace('R$', '').trim()
             }
           }
+        },
+        plugins: {
+          ...baseBarOptions().plugins,
+          title: { display: true, text: 'Prejuízo (regra aplicada)', padding: { top: 4, bottom: 8 } },
+          subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
+          tooltip: {
+            ...baseBarOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}`
+            }
+          }
         }
       }
     });
@@ -179,6 +196,17 @@ function initCharts() {
               callback: (v) => currencyBR(v).replace('R$', '').trim()
             }
           }
+        },
+        plugins: {
+          ...baseBarOptions().plugins,
+          title: { display: true, text: 'Prejuízo do mês (regra aplicada)', padding: { top: 4, bottom: 8 } },
+          subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
+          tooltip: {
+            ...baseBarOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}`
+            }
+          }
         }
       }
     });
@@ -213,6 +241,17 @@ function initCharts() {
               callback: (v) => currencyBR(v).replace('R$', '').trim()
             }
           }
+        },
+        plugins: {
+          ...baseBarOptions().plugins,
+          title: { display: true, text: 'Prejuízo (últimos 6 meses)', padding: { top: 4, bottom: 8 } },
+          subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
+          tooltip: {
+            ...baseBarOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}`
+            }
+          }
         }
       }
     });
@@ -243,6 +282,8 @@ function initCharts() {
         animation: { duration: 700, easing: 'easeOutCubic' },
         plugins: {
           legend: { position: 'bottom', labels: { usePointStyle: true } },
+          title:   { display: true, text: 'Distribuição por status' },
+          subtitle:{ display: true, text: 'Ajuda a entender a fase das devoluções.', padding: { top: 0, bottom: 6 } },
           tooltip: {
             callbacks: {
               label: (ctx) => `${ctx.label}: ${Number(ctx.parsed || 0).toLocaleString('pt-BR')}`
@@ -386,7 +427,10 @@ function preencherResumo(totals) {
     <div class="resumo-item"><span class="label">Pendentes:</span><span class="valor">${totals.pendentes || 0}</span></div>
     <div class="resumo-item"><span class="label">Aprovadas:</span><span class="valor">${totals.aprovadas || 0}</span></div>
     <div class="resumo-item"><span class="label">Rejeitadas:</span><span class="valor">${totals.rejeitadas || 0}</span></div>
-    <div class="resumo-item"><span class="label">Prejuízo total:</span><span class="valor" style="color:var(--destructive)">${currencyBR(totals.prejuizo_total || 0)}</span></div>`;
+    <div class="resumo-item">
+      <span class="label">Prejuízo total:</span>
+      <span class="valor" style="color:var(--destructive)" title="${REGRAS_HINT}">${currencyBR(totals.prejuizo_total || 0)}</span>
+    </div>`;
 }
 
 /* ------------------------------

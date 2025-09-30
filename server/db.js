@@ -1,22 +1,26 @@
-// Centraliza a conexão com o banco de dados e expõe um helper de query.
+// Centraliza a conexão com o banco de dados e expõe um helper de query (Postgres/Neon)
 
-require('dotenv').config();  // Carrega variaveis do .env
+'use strict';
+
+require('dotenv').config();
 const { Pool } = require('pg');
 
-// Usa a string de conexão do .env
+// Se o DATABASE_URL já tiver "sslmode=require", o ssl abaixo é opcional.
+// Se der erro de SSL, descomente o bloco ssl.
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-  });
+  connectionString: process.env.DATABASE_URL,
+  // ssl: { rejectUnauthorized: false } // <- use se precisar
+});
 
-// Helper para executar SQL
+// Helper para executar SQL com pool
 async function query(sql, params = []) {
-    const client = await pool.connect();
-    try {
-        const res = await client.query(sql, params);
-        return res;
-    } finally {
-        client.release();
-    }
+  const client = await pool.connect();
+  try {
+    const res = await client.query(sql, params);
+    return res;
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = { pool, query };
