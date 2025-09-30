@@ -1,0 +1,706 @@
+@charset "UTF-8";
+
+/* ============================
+            Dashboard 
+   ============================ */
+
+/* Paleta solicitada (mantive seus nomes) */
+:root {
+  /* Cores Principais */
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(222, 84%, 4.9%);
+  
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(222, 84%, 4.9%);
+  
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(222, 84%, 4.9%);
+  
+  /* Azul profissional para devoluções */
+  --primary: hsl(214, 88%, 27%);
+  --primary-foreground: hsl(210, 40%, 98%);
+  
+  /* Verde suave para aprovações */
+  --secondary: hsl(142, 76%, 36%);
+  --secondary-foreground: hsl(0, 0%, 100%);
+  
+  --muted: hsl(210, 40%, 96.1%);
+  --muted-foreground: hsl(215.4, 16.3%, 46.9%);
+  
+  /* Laranja para pendências */
+  --accent: hsl(25, 95%, 53%);
+  --accent-foreground: hsl(0, 0%, 100%);
+  
+  /* Vermelho para cancelamentos */
+  --destructive: hsl(0, 84.2%, 60.2%);
+  --destructive-foreground: hsl(210, 40%, 98%);
+  
+  /* Bordas e inputs */
+  --border: hsl(214, 31.8%, 91.4%);
+  --input: hsl(214, 31.8%, 91.4%);
+  --ring: hsl(214, 88%, 27%);
+  
+  --radius: 0.75rem;
+  
+  /* Gradientes personalizados */
+  --gradient-primary: linear-gradient(135deg, hsl(214, 88%, 27%), hsl(214, 88%, 35%));
+  --gradient-secondary: linear-gradient(135deg, hsl(142, 76%, 36%), hsl(142, 76%, 44%));
+  --gradient-accent: linear-gradient(135deg, hsl(25, 95%, 53%), hsl(25, 95%, 61%));
+  
+  /* Sombras elegantes */
+  --shadow-card: 0 4px 6px -1px hsl(214 88% 27% / 0.10), 0 2px 4px -2px hsl(214 88% 27% / 0.10);
+  --shadow-lg: 0 10px 15px -3px hsl(214 88% 27% / 0.10), 0 4px 6px -4px hsl(214 88% 27% / 0.10);
+  --shadow-glow: 0 0 20px hsl(214 88% 27% / 0.15);
+  
+  /* Transições */
+  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-fast: all 0.15s ease-out;
+  
+  /* ===== (mapa p/ variáveis antigas do dashboard) ===== */
+  --dash-bg-primary: var(--background);
+  --dash-bg-secondary: var(--muted);
+  --dash-bg-card: var(--card);
+  --dash-text-primary: var(--foreground);
+  --dash-text-secondary: var(--muted-foreground);
+  --dash-border: var(--border);
+
+  /* Cores de gráfico (usamos sua paleta) */
+  --dash-chart-purple: hsl(214, 88%, 27%); /* = primary */
+  --dash-chart-cyan: hsl(190, 70%, 40%);
+  --dash-chart-pink: hsl(330, 70%, 55%);
+  --dash-chart-blue: hsl(214, 88%, 35%);
+  
+  /* Gradientes adaptados para tema claro */
+  --dash-gradient-hero: var(--gradient-primary);
+  --dash-gradient-card: linear-gradient(135deg, hsl(0, 0%, 100%), hsl(210, 40%, 98%));
+}
+
+/* Base */
+body.dashboard-page {
+  background: var(--dash-bg-primary);
+  color: var(--dash-text-primary);
+}
+
+/* Container */
+.dashboard-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+/* Header */
+.dashboard-header {
+  background: var(--dash-gradient-hero);
+  border-radius: 1.25rem;
+  padding: 2.25rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--shadow-lg);
+  position: relative;
+  overflow: hidden;
+  color: var(--primary-foreground);
+}
+
+.dashboard-header::before {
+  content: "";
+  position: absolute;
+  top: 0; 
+  right: 0;
+  width: 50%; 
+  height: 100%;
+  background: linear-gradient(135deg, transparent 0%, hsl(214 88% 27% / 0.2) 100%);
+  clip-path: polygon(30% 0, 100% 0, 100% 100%, 0% 100%);
+}
+
+.dashboard-header-content { 
+    position: 
+    relative; 
+    z-index: 1; 
+}
+
+.dashboard-welcome { 
+    font-size: 2rem; 
+    font-weight: 700; 
+    margin: 0 0 .5rem 0; 
+    color: var(--primary-foreground); 
+}
+
+.dashboard-subtitle { 
+    font-size: .95rem; 
+    color: hsl(210 40% 98% / .85); 
+    margin: 0; 
+}
+
+/* Filtros */
+.dashboard-filters {
+  background: var(--dash-bg-card);
+  border: 1px solid var(--dash-border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  margin-bottom: 2rem;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+  box-shadow: var(--shadow-card);
+}
+
+.dashboard-filters .input-form {
+  background: var(--background);
+  border: 1px solid var(--input);
+  color: var(--dash-text-primary);
+  padding: 0.75rem 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  transition: var(--transition-fast);
+}
+
+.dashboard-filters .input-form:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px hsl(214 88% 27% / 0.15);
+}
+
+.dashboard-filters .botao-principal {
+  background: var(--gradient-primary);
+  border: none;
+  padding: 0.75rem 1.75rem;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-card);
+}
+
+/* Cards KPI */
+.dashboard-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.stat-card {
+  background: var(--dash-gradient-card);
+  border: 1px solid var(--dash-border);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  position: relative;
+  overflow: hidden;
+  transition: var(--transition-smooth);
+  box-shadow: var(--shadow-card);
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute; 
+  top: 0; 
+  right: 0;
+  width: 100px; 
+  height: 100px;
+  background: radial-gradient(circle, hsl(214 88% 27% / 0.1) 0%, transparent 70%);
+  border-radius: 50%;
+  transform: translate(30%, -30%);
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--ring);
+}
+
+.stat-card-header {
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.stat-card-title {
+  font-size: 0.875rem;
+  color: var(--dash-text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+.stat-card-icon {
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: hsl(214 88% 27% / 0.12);
+  color: var(--primary);
+}
+
+.stat-card-value {
+  font-size: 2.25rem;
+  font-weight: 700;
+  color: var(--dash-text-primary);
+  line-height: 1;
+  margin-bottom: 0.5rem;
+}
+
+.stat-card-change {
+  font-size: 0.8rem;
+  display: flex; 
+  align-items: center; 
+  gap: 0.25rem;
+  color: var(--dash-text-secondary);
+}
+
+.stat-card-change.positive { 
+    color: var(--secondary); 
+}
+
+.stat-card-change.negative { 
+    color: var(--destructive); 
+}
+
+/* Cores específicas por KPI */
+.stat-card.total .stat-card-icon { background: hsl(214 88% 35% / 0.12); color: var(--dash-chart-blue); }
+
+.stat-card.pendente .stat-card-icon { background: hsl(25 95% 53% / 0.12); color: var(--accent); }
+.stat-card.pendente .stat-card-value { color: var(--accent); }
+
+.stat-card.aprovado .stat-card-icon { background: hsl(142 76% 36% / 0.12); color: var(--secondary); }
+.stat-card.aprovado .stat-card-value { color: var(--secondary); }
+
+.stat-card.rejeitado .stat-card-icon { background: hsl(0 84% 60% / 0.12); color: var(--destructive); }
+.stat-card.rejeitado .stat-card-value { color: var(--destructive); }
+
+/* Grid principal */
+.dashboard-main-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+/* Cards de conteúdo */
+.dashboard-card {
+  background: var(--dash-bg-card);
+  border: 1px solid var(--dash-border);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-card);
+}
+
+.dashboard-card-header {
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  margin-bottom: 1.5rem; 
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--dash-border);
+}
+
+.dashboard-card-title {
+  font-size: 1.125rem; 
+  font-weight: 600;
+  color: var(--dash-text-primary); margin: 0;
+}
+
+.dashboard-card-subtitle {
+  font-size: 0.875rem; 
+  color: var(--dash-text-secondary);
+  margin: 0.25rem 0 0 0;
+}
+
+/* Colunas */
+.ranking-card { grid-column: span 3; }
+.chart-card   { grid-column: span 6; }
+.summary-card { grid-column: span 3; }
+
+/* Responsivo */
+@media (max-width: 1200px) {
+  .ranking-card, .summary-card { grid-column: span 6; }
+  .chart-card { grid-column: span 12; }
+}
+@media (max-width: 768px) {
+  .ranking-card, .chart-card, .summary-card { grid-column: span 12; }
+  .dashboard-header { padding: 1.5rem; }
+  .dashboard-welcome { font-size: 1.5rem; }
+}
+
+/* Controles do gráfico */
+.chart-controls {
+  display: flex; 
+  gap: 0.5rem; 
+  flex-wrap: wrap; 
+  margin-bottom: 1.5rem;
+}
+
+.chart-controls .botao-outline {
+  background: var(--background);
+  border: 1px solid var(--border);
+  color: var(--dash-text-secondary);
+  padding: 0.5rem 1rem; 
+  font-size: 0.8rem; 
+  border-radius: 0.5rem;
+  transition: var(--transition-fast);
+  box-shadow: var(--shadow-card);
+}
+
+.chart-controls .botao-outline:hover,
+.chart-controls .botao-outline.active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--ring);
+}
+
+/* Área do gráfico */
+.chart-wrapper { 
+    width: 100%; 
+    min-height: 320px; 
+    position: relative; 
+}
+
+.chart-wrapper canvas { 
+    width: 100% !important; 
+    height: 320px !important; 
+}
+
+/* Ranking moderno */
+.ranking-list-modern {
+  display: flex; 
+  flex-direction: column; 
+  gap: 0.75rem;
+  max-height: 400px; 
+  overflow-y: auto; 
+  padding-right: 0.5rem;
+}
+
+.ranking-list-modern::-webkit-scrollbar { width: 6px; }
+
+.ranking-list-modern::-webkit-scrollbar-track { background: var(--muted); border-radius: 3px; }
+
+.ranking-list-modern::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.ranking-item-modern {
+  display: flex; 
+  align-items: center; 
+  gap: 1rem;
+  padding: 1rem; background: var(--background);
+  border: 1px solid var(--border); 
+  border-radius: 0.75rem;
+  transition: var(--transition-fast); 
+  box-shadow: var(--shadow-card);
+}
+
+.ranking-item-modern:hover {
+  background: var(--dash-bg-card);
+  border-color: var(--ring);
+  transform: translateX(4px);
+}
+
+.ranking-position {
+  width: 2rem; 
+  height: 2rem; 
+  display: flex; 
+  align-items: center; 
+  justify-content: center;
+  border-radius: 0.5rem; 
+  font-weight: 700; 
+  font-size: 0.875rem; 
+  flex-shrink: 0;
+  color: var(--foreground);
+  background: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.ranking-item-modern.top-1 .ranking-position {
+  background: linear-gradient(135deg, hsl(45, 100%, 60%), hsl(35, 100%, 50%));
+  color: hsl(222, 84%, 4.9%);
+}
+.ranking-item-modern.top-2 .ranking-position {
+  background: linear-gradient(135deg, hsl(0, 0%, 85%), hsl(0, 0%, 70%));
+  color: hsl(222, 84%, 4.9%);
+}
+.ranking-item-modern.top-3 .ranking-position {
+  background: linear-gradient(135deg, hsl(30, 80%, 60%), hsl(20, 70%, 50%));
+  color: hsl(222, 84%, 4.9%);
+}
+
+.ranking-info { 
+    flex: 1; 
+    min-width: 0; 
+}
+
+.ranking-name {
+  font-weight: 600; 
+  color: var(--dash-text-primary);
+  font-size: 0.9rem; white-space: 
+  nowrap; overflow: hidden; 
+  text-overflow: ellipsis;
+  margin-bottom: 0.25rem;
+}
+
+.ranking-count { 
+    font-size: 0.75rem; 
+    color: var(--dash-text-secondary); 
+}
+
+.ranking-value { 
+    font-weight: 700; 
+    color: var(--destructive); 
+    font-size: 0.95rem; 
+    white-space: nowrap; 
+}
+
+/* Resumo moderno */
+.summary-list { 
+    display: flex; 
+    flex-direction: column; 
+    gap: 1rem; 
+}
+
+.summary-item {
+  display: flex; 
+  justify-content: 
+  space-between; 
+  align-items: center;
+  padding: 1rem; 
+  background: var(--background);
+  border: 1px solid var(--border); 
+  border-radius: 0.75rem;
+  transition: var(--transition-fast); 
+  box-shadow: var(--shadow-card);
+}
+
+.summary-item:hover { 
+    background: var(--dash-bg-card); 
+    border-color: var(--ring); 
+}
+
+.summary-label { 
+    font-size: 0.875rem; 
+    color: var(--dash-text-secondary); 
+    font-weight: 500; 
+}
+
+.summary-value { 
+    font-size: 1.125rem; 
+    font-weight: 700; 
+    color: var(--dash-text-primary); 
+}
+
+.summary-value.highlight { 
+    color: var(--destructive); 
+    font-size: 1.25rem; 
+}
+
+/* Animações */
+@keyframes slideInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stat-card, .dashboard-card { animation: slideInUp 0.4s ease-out backwards; }
+.stat-card:nth-child(1){ animation-delay: 0.05s; }
+.stat-card:nth-child(2){ animation-delay: 0.1s; }
+.stat-card:nth-child(3){ animation-delay: 0.15s; }
+.stat-card:nth-child(4){ animation-delay: 0.2s; }
+.dashboard-card { animation-delay: 0.25s; }
+
+/* === Ranking bonito / informativo === */
+.ranking-list-modern { gap: 0.75rem; }
+
+.ranking-item {
+  display:flex; align-items:center; gap:1rem;
+  background: var(--card, #fff);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  box-shadow: var(--shadow-card);
+  transition: var(--transition-fast);
+}
+.ranking-item:hover { box-shadow: var(--shadow-lg); transform: translateX(2px); }
+
+.ranking-item .pos {
+  font-weight:700; font-size:.85rem;
+  padding:.35rem .5rem; border-radius:.5rem;
+  background: hsl(214 88% 96%); color: var(--primary);
+  border:1px solid var(--border);
+  min-width: 2.2rem; text-align:center;
+}
+
+.ranking-item.top-1 .pos { background: hsl(45 95% 90%); color:hsl(35 90% 30%); }
+.ranking-item.top-2 .pos { background: hsl(0 0% 90%);  color:hsl(0 0% 25%); }
+.ranking-item.top-3 .pos { background: hsl(25 90% 90%); color:hsl(25 75% 30%); }
+
+.ranking-item .meta { flex:1; min-width:0; }
+.ranking-item .nome {
+  font-weight:600; color: var(--foreground);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+.ranking-item .motivo {
+  display:inline-flex; align-items:center; gap:.4rem;
+  font-size:.75rem; color: var(--muted-foreground);
+}
+.ranking-item .motivo .dot {
+  width:.45rem; height:.45rem; border-radius:50%;
+  background: var(--accent);
+}
+
+.ranking-item .stats {
+  display:flex; align-items:center; gap:1rem; flex-shrink:0;
+}
+.ranking-item .devol {
+  font-size:.8rem; color: var(--muted-foreground);
+  padding:.25rem .5rem; border:1px solid var(--border);
+  border-radius:.5rem; background: var(--muted);
+}
+.ranking-item .valor {
+  font-weight:700; color: var(--destructive);
+}
+
+/* barra de impacto visual */
+.ranking-item .impact {
+  width:100%; height:6px; border-radius:999px;
+  background: var(--muted);
+  overflow:hidden; margin-top:.6rem;
+}
+.ranking-item .impact > span {
+  display:block; height:100%;
+  background: var(--destructive);
+  box-shadow: var(--shadow-glow);
+}
+
+.ranking-value {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.ranking-count span {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  padding: 2px 6px;
+  border-radius: 999px;
+  margin-right: 6px;
+}
+
+.ranking-count span + span {
+  margin-left: 0;
+}
+
+/* grade da linha 2: 8/4 colunas no desktop */
+.dashboard-main-grid{
+  display:grid;
+  grid-template-columns: repeat(12,1fr);
+  gap:1.5rem;
+  margin-bottom:1.5rem;
+}
+.chart-card{ grid-column: span 8; }
+.summary-card{ grid-column: span 4; }
+
+/* linha 3: ranking full */
+.dashboard-ranking-full{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap:1.5rem;
+  margin-bottom:2rem;
+}
+
+/* responsivo */
+@media (max-width: 1200px){
+  .chart-card{ grid-column: span 7; }
+  .summary-card{ grid-column: span 5; }
+}
+@media (max-width: 900px){
+  .chart-card, .summary-card{ grid-column: span 12; }
+}
+
+/* ranking: altura maior e melhor legibilidade */
+.ranking-list-modern{
+  max-height: 520px;         /* ↑ antes era 400 */
+  padding-right: .5rem;
+}
+.ranking-item-modern{
+  display:flex; align-items:center; gap:1rem;
+  padding:1rem;
+  background: var(--card);
+  border:1px solid var(--border);
+  border-radius:.75rem;
+  box-shadow: var(--shadow-card);
+}
+.ranking-name{ font-weight:600; color:var(--foreground); }
+.ranking-count{ font-size:.78rem; color:var(--muted-foreground); }
+.ranking-count span{ background:var(--muted); color:var(--muted-foreground); padding:2px 6px; border-radius:999px; }
+.ranking-value{ font-weight:800; color:var(--destructive); font-size:1rem; white-space:nowrap; }
+
+/* ==== Ranking moderno com ícones ==== */
+.rk-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  transition: var(--transition-fast);
+  margin-bottom: .75rem;
+}
+.rk-item:hover { box-shadow: var(--shadow-lg); transform: translateY(-1px); }
+
+.rk-left { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.rk-pos {
+  width: 2rem; height: 2rem; flex-shrink: 0;
+  display: grid; place-items: center;
+  font-weight: 700; color: var(--foreground);
+  border-radius: .5rem; background: var(--muted);
+  border: 1px solid var(--border);
+}
+.rk-item.top-1 .rk-pos { background: linear-gradient(135deg, hsl(45 100% 60%), hsl(35 100% 50%)); color: #1b1b1b; }
+.rk-item.top-2 .rk-pos { background: linear-gradient(135deg, hsl(0 0% 85%), hsl(0 0% 65%)); color: #1b1b1b; }
+.rk-item.top-3 .rk-pos { background: linear-gradient(135deg, hsl(30 80% 70%), hsl(20 70% 60%)); color: #1b1b1b; }
+
+.rk-info { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+.rk-line { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.rk-sku span { font-weight: 600; color: var(--foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.rk-meta { display: flex; flex-wrap: wrap; gap: .5rem; }
+.rk-chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .25rem .5rem; border-radius: .5rem;
+  background: var(--muted); color: var(--muted-foreground);
+  border: 1px solid var(--border); font-size: .8rem;
+}
+
+.rk-value {
+  display: inline-flex; align-items: center; gap: .5rem;
+  font-weight: 700; color: var(--destructive);
+  white-space: nowrap; flex-shrink: 0;
+}
+
+.rk-icon { width: 16px; height: 16px; color: var(--muted-foreground); }
+.rk-value .rk-icon { color: var(--destructive); }
+
+
+/* Ícones dos cards */
+.dash-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  fill: currentColor;
+  opacity: .95;
+}
+
+/* cores por status usando suas vars globais */
+.icon--total     { color: var(--primary); }
+.icon--pendente  { color: var(--accent); }
+.icon--aprovado  { color: var(--secondary); }
+.icon--rejeitado { color: var(--destructive); }
+
+/* só para garantir alinhamento bonito */
+.stat-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.stat-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

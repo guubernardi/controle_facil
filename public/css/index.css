@@ -639,6 +639,7 @@ body {
   gap: 2px;
   justify-items: end;
 }
+
 .dp-price {
   font-weight: 600;
   color: var(--primary);
@@ -974,6 +975,41 @@ body {
 .descricao-vazio {
     color: var(--muted-foreground);
     margin: 0;
+}
+
+/* Dropdown de produtos — cursor e seleção */
+#lista-produtos,
+#lista-produtos ul,
+#lista-produtos li {
+  cursor: default;            /* padrão */
+}
+
+#lista-produtos li[data-idx] {
+  cursor: pointer;            /* vira “mãozinha” nos itens clicáveis */
+  user-select: none;          /* evita seleção de texto ao arrastar */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+}
+
+#lista-produtos li[data-idx].active,
+#lista-produtos li[data-idx]:hover {
+  background: var(--muted, #f5f7fb);
+}
+
+/* áreas internas também não devem forçar cursor de texto */
+#lista-produtos .dp-left,
+#lista-produtos .dp-right,
+#lista-produtos .dp-title,
+#lista-produtos .dp-meta,
+#lista-produtos .dp-price {
+  cursor: inherit;            /* herda o pointer do li */
+  user-select: none;
+}
+
+/* estado vazio não precisa de pointer */
+#lista-produtos .dp-empty {
+  cursor: default;
+  user-select: none;
 }
 
 /* Toast */

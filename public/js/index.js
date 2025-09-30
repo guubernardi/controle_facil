@@ -1,3 +1,5 @@
+// index.js — Sistema de Devoluções (com motivo codificado e cálculo de prejuízo)
+
 class SistemaDevolucoes {
   constructor() {
     this.devolucoes = [];
@@ -5,7 +7,66 @@ class SistemaDevolucoes {
     this.lojaDetectada = { loja_id: null, loja_nome: null };
     this.dp = { open: false, activeIndex: -1, data: [], el: null };
     this.accountPadrao = 'Conta de Teste';
+    this.MOTIVOS = this.buildMotivos(); // lista completa de motivos
     this.inicializar();
+  }
+
+  // ===== Políticas por motivo =====
+  // - Motivos do cliente => sem prejuízo (produto=0, frete=0)
+  // - "Só frete" é decidido pelo STATUS (recebido_cd | em_inspecao) no momento da edição
+  MOTIVO_POLITICA = {
+    arrependimento: 'no_cost',
+    compra_errada: 'no_cost',
+    nao_serviu: 'no_cost',
+    mudou_de_ideia: 'no_cost',
+    endereco_errado_cliente: 'no_cost',
+    ausencia_receptor: 'no_cost',
+    cancelou_antes_envio: 'no_cost',
+  };
+
+  // ----- Motivos (lista completa) -----
+  buildMotivos() {
+    return [
+      {
+        grupo: 'Cliente',
+        itens: [
+          { v: 'arrependimento', t: 'Arrependimento de compra' },
+          { v: 'compra_errada', t: 'Comprou errado' },
+          { v: 'nao_serviu', t: 'Não serviu (tamanho/cor)' },
+          { v: 'mudou_de_ideia', t: 'Mudou de ideia' },
+          { v: 'endereco_errado_cliente', t: 'Endereço informado incorreto' },
+          { v: 'ausencia_receptor', t: 'Ausência no recebimento' },
+          { v: 'cancelou_antes_envio', t: 'Cancelou antes do envio' }
+        ]
+      },
+      {
+        grupo: 'Produto / Fabricante',
+        itens: [
+          { v: 'defeito', t: 'Defeito de fábrica' },
+          { v: 'produto_danificado', t: 'Produto danificado' },
+          { v: 'peca_faltando', t: 'Peça/acessório faltando' }
+        ]
+      },
+      {
+        grupo: 'Logística / Transporte',
+        itens: [
+          { v: 'avaria_transporte', t: 'Avaria no transporte' },
+          { v: 'extravio', t: 'Extravio' },
+          { v: 'atraso_entrega', t: 'Atraso na entrega' },
+          { v: 'devolvido_transportadora', t: 'Devolvido pela transportadora' }
+        ]
+      },
+      {
+        grupo: 'Anúncio / Loja',
+        itens: [
+          { v: 'anuncio_errado', t: 'Anúncio/variação errada' },
+          { v: 'descricao_divergente', t: 'Descrição divergente' },
+          { v: 'sku_envio_errado', t: 'SKU errado no envio' },
+          { v: 'preco_errado', t: 'Preço anunciado incorreto' }
+        ]
+      },
+      { grupo: 'Outros', itens: [{ v: 'outros', t: 'Outros' }] }
+    ];
   }
 
   // debounce simples
@@ -20,6 +81,7 @@ class SistemaDevolucoes {
   async inicializar() {
     this.configurarEventListeners();
     this.prepararAnimacoesIniciais();
+    this.popularSelectMotivos(); // popula o <select id="motivo-codigo">
     await this.carregarDevolucoesDoServidor();
     this.atualizarEstatisticas();
     this.renderizarDevolucoes();
@@ -40,9 +102,10 @@ class SistemaDevolucoes {
       this.devolucoes = rows.map((row) => ({
         id: String(row.id),
         numeroPedido: String(row.id_venda ?? ''),
-        cliente: '—',
+        cliente: row.cliente_nome || '—',
         produto: row.sku || '—',
         motivo: row.reclamacao || row.tipo_reclamacao || '—',
+        motivoCodigo: row.motivo_codigo || '',
         status: row.status || 'pendente',
         dataAbertura: row.data_compra
           ? String(row.data_compra).slice(0, 10)
@@ -68,6 +131,12 @@ class SistemaDevolucoes {
         loja_id: data.lojaId ?? null,
         loja_nome: data.lojaNome || null,
       };
+
+      if (data?.clienteNome) {
+        const inpCli = document.getElementById('nome-cliente');
+        if (inpCli && !inpCli.value) inpCli.value = data.clienteNome;
+      }
+
       if (data.lojaNome) {
         const inputNumero = document.getElementById('numero-pedido');
         if (inputNumero && !inputNumero.value && data.numeroPedido) {
@@ -161,11 +230,30 @@ class SistemaDevolucoes {
         });
       }
 
+      // motivo rápido
+      const selMotivo = document.getElementById('motivo-codigo');
+      const txtMotivo = document.getElementById('motivo-devolucao'); // opcional (textarea)
+      if (selMotivo) {
+        selMotivo.addEventListener('change', () => {
+          if (txtMotivo && !txtMotivo.value.trim() && selMotivo.options[selMotivo.selectedIndex]) {
+            const label = selMotivo.options[selMotivo.selectedIndex].textContent.trim();
+            txtMotivo.value = label;
+          }
+          this.aplicarHintPolitica(selMotivo.value);
+        });
+      }
+
       // ---------- Autocomplete Produto ----------
       const inpProduto = document.getElementById('nome-produto');
       if (inpProduto) {
         // pega o dropdown já criado no HTML
         this.dp.el = document.getElementById('lista-produtos');
+        // garante que exita uma ul dentro do dropdown
+        if (!this.dp.el.querySelector('ul')) {
+          const ul = document.createElement('ul');
+          this.dp.el.appendChild(ul);
+        }
+
         // garante posição relativa no wrapper
         const campo = inpProduto.closest('.campo-form') || inpProduto.parentElement;
         campo.style.position = 'relative';
@@ -271,6 +359,24 @@ class SistemaDevolucoes {
     }
   }
 
+  // Popula <select id="motivo-codigo"> no modal "Nova Devolução"
+  popularSelectMotivos() {
+    const sel = document.getElementById('motivo-codigo'); // <select> precisa existir no HTML do modal
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Selecione…</option>';
+    this.MOTIVOS.forEach((g) => {
+      const og = document.createElement('optgroup');
+      og.label = g.grupo;
+      g.itens.forEach((it) => {
+        const op = document.createElement('option');
+        op.value = it.v;
+        op.textContent = it.t;
+        og.appendChild(op);
+      });
+      sel.appendChild(og);
+    });
+  }
+
   // ------- Modal Detalhes/Edição -------
   abrirModalDetalhes(id) {
     const it = this.devolucoes.find((d) => String(d.id) === String(id));
@@ -311,12 +417,21 @@ class SistemaDevolucoes {
   async salvarEdicaoDetalhes(e) {
     e.preventDefault();
     const id = document.getElementById('md-id').value;
+
+    // aplica regra "voltou pro CD => só frete"
+    let status = document.getElementById('md-status').value;
+    let valorProduto = parseFloat(document.getElementById('md-valor-prod').value || '0') || 0;
+    let valorFrete = parseFloat(document.getElementById('md-valor-frete').value || '0') || 0;
+
+    if (['recebido_cd', 'em_inspecao'].includes(String(status).toLowerCase())) {
+      valorProduto = 0;
+    }
+
     const body = {
-      status: document.getElementById('md-status').value,
-      valor_produto: parseFloat(document.getElementById('md-valor-prod').value || '0') || 0,
-      valor_frete: parseFloat(document.getElementById('md-valor-frete').value || '0') || 0,
+      status,
+      valor_produto: valorProduto,
+      valor_frete: valorFrete,
       reclamacao: document.getElementById('md-reclamacao').value || null,
-      loja_nome: document.getElementById('md-loja').value || null,
       updated_by: 'front-index',
     };
 
@@ -329,11 +444,10 @@ class SistemaDevolucoes {
 
       const i = this.devolucoes.findIndex((d) => String(d.id) === String(id));
       if (i >= 0) {
-        this.devolucoes[i].status = r.status || this.devolucoes[i].status;
-        this.devolucoes[i].valorProduto = Number(r.valor_produto ?? this.devolucoes[i].valorProduto);
-        this.devolucoes[i].valorFrete = Number(r.valor_frete ?? this.devolucoes[i].valorFrete);
+        this.devolucoes[i].status = r.status || status || this.devolucoes[i].status;
+        this.devolucoes[i].valorProduto = Number(r.valor_produto ?? valorProduto);
+        this.devolucoes[i].valorFrete = Number(r.valor_frete ?? valorFrete);
         this.devolucoes[i].motivo = r.reclamacao ?? this.devolucoes[i].motivo;
-        this.devolucoes[i].lojaNome = r.loja_nome ?? this.devolucoes[i].lojaNome;
       }
 
       this.setModoEdicao(false);
@@ -392,14 +506,42 @@ class SistemaDevolucoes {
 
   atualizarEstatisticas() {
     const total = this.devolucoes.length;
-    const pendentes = this.devolucoes.filter((d) => d.status === 'pendente').length;
-    const aprovadas = this.devolucoes.filter((d) => d.status === 'aprovado').length;
-    const rejeitadas = this.devolucoes.filter((d) => d.status === 'rejeitado').length;
+    const pendentes = this.devolucoes.filter((d) => this.grupoStatus(d.status) === 'pendente').length;
+    const aprovadas = this.devolucoes.filter((d) => this.grupoStatus(d.status) === 'aprovado').length;
+    const rejeitadas = this.devolucoes.filter((d) => this.grupoStatus(d.status) === 'rejeitado').length;
 
     this.animarNumero('total-devolucoes', total);
     this.animarNumero('pendentes-count', pendentes);
     this.animarNumero('aprovadas-count', aprovadas);
     this.animarNumero('rejeitadas-count', rejeitadas);
+  }
+
+  grupoStatus(status) {
+    if (['aprovado'].includes(status)) return 'aprovado';
+    if (['rejeitado'].includes(status)) return 'rejeitado';
+    if (['concluido'].includes(status)) return 'finalizado';
+    return 'pendente';
+  }
+
+  // ===== Regras de prejuízo (para relatórios/export) =====
+  calcularPrejuizoDevolucao(d) {
+    const statusVoltouCD = ['recebido_cd', 'em_inspecao'];
+    const MOTIVOS_CLIENTE_COBRE = new Set([
+      'arrependimento', 'compra_errada', 'nao_serviu', 'mudou_de_ideia',
+      'endereco_errado_cliente', 'ausencia_receptor', 'cancelou_antes_envio'
+    ]);
+    const motivoClienteRegex = /(arrepend|compra errad|tamanho|cor errad|desist|engano|nao serviu|não serviu|mudou de ideia)/i;
+
+    const produto = Number(d?.valorProduto || 0);
+    const frete   = Number(d?.valorFrete   || 0);
+    const status  = String(d?.status || '').toLowerCase();
+    const cod     = String(d?.motivoCodigo || '').toLowerCase();
+    const texto   = String(d?.motivo || '');
+
+    if (statusVoltouCD.includes(status)) return frete; // voltou CD => só frete
+    if (MOTIVOS_CLIENTE_COBRE.has(cod) || motivoClienteRegex.test(texto)) return 0; // cliente => 0
+
+    return produto + frete;
   }
 
   animarNumero(elementId, valorFinal) {
@@ -487,8 +629,8 @@ class SistemaDevolucoes {
           ${this.criarBadgeStatus(d.status)}
           <button class="botao botao-outline btn-ver" data-id="${d.id}" style="padding: 0.5rem;" title="Ver detalhes">
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z"/>
-              <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z"/>
+              <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/>
+              <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/>
             </svg>
           </button>
         </div>
@@ -534,6 +676,8 @@ class SistemaDevolucoes {
       pendente: '<div class="badge badge-pendente">Pendente</div>',
       aprovado: '<div class="badge badge-aprovado">Aprovado</div>',
       rejeitado: '<div class="badge badge-rejeitado">Rejeitado</div>',
+      recebido_cd: '<div class="badge badge-info">Recebido no CD</div>',
+      em_inspecao: '<div class="badge badge-info">Em inspeção</div>',
     };
     return map[status] || `<div class="badge">${status || '—'}</div>`;
   }
@@ -556,13 +700,23 @@ class SistemaDevolucoes {
     this.fecharDropdown();
   }
 
+  // Mostra um hint visual sobre a política aplicada (cliente ⇢ no_cost)
+  aplicarHintPolitica(codigo) {
+    const p = this.MOTIVO_POLITICA[String(codigo || '').toLowerCase()];
+    if (p === 'no_cost') {
+      this.mostrarToast('Regra aplicada', 'Este motivo NÃO gera prejuízo (produto e frete = R$ 0,00).', 'sucesso');
+    }
+  }
+
   async criarNovaDevolucao() {
     const numeroPedido = document.getElementById('numero-pedido')?.value.trim();
     const cliente = document.getElementById('nome-cliente')?.value.trim();
     const produto = document.getElementById('nome-produto')?.value.trim();
     const sku = document.getElementById('sku-produto')?.value.trim() || null;
-    const valorProduto = parseFloat(document.getElementById('valor-produto')?.value) || 0;
-    const motivo = document.getElementById('motivo-devolucao')?.value.trim() || null;
+    let valorProduto = parseFloat(document.getElementById('valor-produto')?.value) || 0;
+    let valorFrete = parseFloat(document.getElementById('valor-frete')?.value) || 0; // opcional (se existir)
+    const motivo = document.getElementById('motivo-devolucao')?.value?.trim() || null; // opcional
+    const motivoCodigo = document.getElementById('motivo-codigo')?.value || '';
     const numeroNota = document.getElementById('numero-nota')?.value.trim();
 
     if (!numeroPedido && !numeroNota) {
@@ -574,6 +728,15 @@ class SistemaDevolucoes {
       return;
     }
 
+    // ===== Regras por motivo na criação =====
+    const politica = this.MOTIVO_POLITICA[String(motivoCodigo).toLowerCase()];
+    if (politica === 'no_cost') {
+      valorProduto = 0;
+      valorFrete = 0;
+    }
+    // (Regras "só frete" dependem do STATUS "recebido_cd/em_inspecao" e são aplicadas no salvar da edição)
+    // ========================================
+
     const payload = {
       data_compra: null,
       id_venda: numeroPedido || null,
@@ -583,11 +746,13 @@ class SistemaDevolucoes {
       tipo_reclamacao: null,
       status: 'pendente',
       valor_produto: valorProduto || null,
-      valor_frete: null,
+      valor_frete: isNaN(valorFrete) ? null : valorFrete,
       reclamacao: motivo,
+      motivo_codigo: motivoCodigo || null,
       nfe_numero: numeroNota || null,
       nfe_chave: document.getElementById('chave-nota')?.value.trim() || null,
       created_by: 'front-web',
+      cliente_nome: cliente || null,
     };
 
     try {
@@ -599,7 +764,9 @@ class SistemaDevolucoes {
         produto,
         sku,
         motivo,
+        motivoCodigo,
         valorProduto,
+        valorFrete,
         status: 'pendente',
         dataAbertura: new Date().toISOString().slice(0, 10),
         lojaNome: this.lojaDetectada.loja_nome || null,
@@ -636,6 +803,12 @@ class SistemaDevolucoes {
         const sale = await this.getJSON(
           `/api/sales/by-invoice/${encodeURIComponent(numeroNota)}?account=${encodeURIComponent(this.accountPadrao)}`
         );
+
+        if (sale?.clienteNome) {
+          const inpCli = document.getElementById('nome-cliente');
+          if (inpCli && !inpCli.value) inpCli.value = sale.clienteNome;
+        }
+
         const inputNumero = document.getElementById('numero-pedido');
         if (inputNumero && sale?.numeroPedido) inputNumero.value = sale.numeroPedido;
         if (sale?.lojaNome) {
@@ -667,6 +840,12 @@ class SistemaDevolucoes {
         const sale = await this.getJSON(
           `/api/sales/by-chave/${encodeURIComponent(chave)}?account=${encodeURIComponent(this.accountPadrao)}`
         );
+
+        if (sale?.clienteNome) {
+          const inpCli = document.getElementById('nome-cliente');
+          if (inpCli && !inpCli.value) inpCli.value = sale.clienteNome;
+        }
+
         const inputNumero = document.getElementById('numero-pedido');
         if (inputNumero && sale?.numeroPedido) inputNumero.value = sale.numeroPedido;
         if (sale?.lojaNome) {
@@ -698,8 +877,8 @@ class SistemaDevolucoes {
     if (!this.dp.el) return;
     this.dp.el.style.display = 'block';
     this.dp.open = true;
+    this.dp.el.closest('.campo-form')?.classList.add('is-open');
   }
-
   fecharDropdown() {
     if (!this.dp.el) return;
     this.dp.el.style.display = 'none';
@@ -707,6 +886,7 @@ class SistemaDevolucoes {
     this.dp.activeIndex = -1;
     const ul = this.dp.el.querySelector('ul');
     if (ul) ul.innerHTML = '';
+    this.dp.el.closest('.campo-form')?.classList.remove('is-open');
   }
 
   setAtivo(i) {
@@ -779,7 +959,6 @@ class SistemaDevolucoes {
       '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
     }[c]));
   }
-  // --------- FIM AUTOCOMPLETE ---------
 
   // ------- utilitários / UI -------
   mostrarToast(titulo, descricao, tipo = 'sucesso') {
@@ -797,7 +976,7 @@ class SistemaDevolucoes {
       if (tipo === 'erro') {
         wrap.style.background = 'var(--destructive)';
         svg.innerHTML =
-          '<path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>';
+          '<path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 1 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>';
       } else {
         wrap.style.background = 'var(--secondary)';
         svg.innerHTML =
@@ -818,7 +997,9 @@ class SistemaDevolucoes {
       'Data de Abertura': d.dataAbertura,
       Valor: d.valorProduto,
       Motivo: d.motivo,
+      MotivoCodigo: d.motivoCodigo || '',
       Loja: d.lojaNome || '',
+      Prejuizo: this.calcularPrejuizoDevolucao(d),
     }));
     const csv = this.toCSV(dados);
     this.downloadCSV(csv, 'devolucoes.csv');

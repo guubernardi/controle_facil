@@ -3,91 +3,147 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Dashboard — Sistema de Devoluções</title>
+  <title>Dashboard — Controle Facil</title>
   <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
   <link rel="stylesheet" href="css/index.css"/>
   <link rel="stylesheet" href="css/navbar.css"/>
+  <link rel="stylesheet" href="css/dashboard.css"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 </head>
-<body>
+<body class="dashboard-page">
   <!-- header.js injeta o menu aqui em cima -->
 
-  <main class="conteudo-principal">
-    <div class="container">
+  <main class="dashboard-container">
 
-      <!-- filtros de período -->
-      <section class="secao-filtros">
-        <div class="card-filtros">
-          <div class="filtros-conteudo">
-            <div class="campo-filtro">
-              <input type="date" id="filtro-from" class="input-form" />
-            </div>
-            <div class="campo-filtro">
-              <input type="date" id="filtro-to" class="input-form" />
-            </div>
-            <button id="btn-aplicar" class="botao botao-principal">Aplicar</button>
+    <!-- Header -->
+    <section class="dashboard-header">
+      <div class="dashboard-header-content">
+        <h1 class="dashboard-welcome">Bem-vindo ao Dashboard</h1>
+        <p class="dashboard-subtitle">Acompanhe as métricas e devoluções do seu comércio</p>
+      </div>
+    </section>
+
+    <!-- Filtros -->
+    <section class="dashboard-filters">
+      <div class="campo-filtro">
+        <input type="date" id="filtro-from" class="input-form" />
+      </div>
+      <div class="campo-filtro">
+        <input type="date" id="filtro-to" class="input-form" />
+      </div>
+      <button id="btn-aplicar" class="botao botao-principal">Aplicar Filtros</button>
+    </section>
+
+    <!-- KPIs -->
+    <section class="dashboard-stats-grid">
+
+      <div class="stat-card total">
+        <div class="stat-card-header">
+          <span class="stat-card-title">Total</span>
+          <div class="stat-card-icon">
+            <svg class="dash-icon icon--total" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+            </svg>
           </div>
         </div>
-      </section>
+        <div class="stat-card-value" id="dash-total">0</div>
+        <div class="stat-card-change">Devoluções totais</div>
+      </div>
 
-      <!-- cards de totais -->
-      <section class="secao-estatisticas">
-        <div class="grade-cards">
-          <div class="card-estatistica"><div class="card-header">
-            <span class="card-titulo">Total</span></div>
-            <div class="card-conteudo"><div id="dash-total" class="numero-principal">0</div></div>
-          </div>
-          <div class="card-estatistica"><div class="card-header">
-            <span class="card-titulo">Pendentes</span></div>
-            <div class="card-conteudo"><div id="dash-pend" class="numero-principal numero-accent">0</div></div>
-          </div>
-          <div class="card-estatistica"><div class="card-header">
-            <span class="card-titulo">Aprovadas</span></div>
-            <div class="card-conteudo"><div id="dash-aprov" class="numero-principal numero-secondary">0</div></div>
-          </div>
-          <div class="card-estatistica"><div class="card-header">
-            <span class="card-titulo">Rejeitadas</span></div>
-            <div class="card-conteudo"><div id="dash-rej" class="numero-principal numero-destructive">0</div></div>
+      <div class="stat-card pendente">
+        <div class="stat-card-header">
+          <span class="stat-card-title">Pendentes</span>
+          <div class="stat-card-icon">
+            <svg class="dash-icon icon--pendente" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14z"/>
+              <path d="M8 4a.5.5 0 0 1 .5.5v3H12a.5.5 0 0 1 0 1H7.5a.5.5 0 0 1-.5-.5V4.5A.5.5 0 0 1 8 4z"/>
+            </svg>
           </div>
         </div>
-      </section>
+        <div class="stat-card-value" id="dash-pend">0</div>
+        <div class="stat-card-change">Aguardando análise</div>
+      </div>
 
-      <!-- três colunas: ranking / gráfico / resumo -->
-      <section class="secao-dashboard">
-        <div class="grade-cards">
-          <div class="card-estatistica">
-            <div class="card-header"><span class="card-titulo"><strong>Itens com mais devolução</strong></span></div>
-            <div id="ranking-lista" class="ranking-lista"></div>
-          </div>
-          <div class="card-estatistica">
-            <div class="card-header"><span class="card-titulo">Prejuízo (R$)</span></div>
-            <div class="card-conteudo">
-                <div class="grafico-controls">
-                  <button id="btn-graf-dia" class="botao botao-outline">Últimos 30 dias</button>
-                  <button id="btn-graf-mes" class="botao botao-outline">Mês atual</button>
-                  <button id="btn-graf-6mes" class="botao botao-outline">Últimos 6 meses</button>
-                  <button id="btn-graf-status" class="botao botao-outline">Status</button>
-                </div>
-                <div class="grafico-wrap">
-                  <canvas id="chart-prejuizo-dia" style="max-width:100%;"></canvas>
-                  <canvas id="chart-prejuizo-mes" style="max-width:100%;display:none;"></canvas>
-                  <canvas id="chart-prejuizo-6mes" style="max-width:100%;display:none;"></canvas>
-                  <canvas id="chart-status" style="max-width:100%;display:none;"></canvas>
-                </div>
-            </div>
-          </div>
-          <div class="card-estatistica">
-            <div class="card-header"><span class="card-titulo">Resumo do período</span></div>
-            <div id="resumo-periodo" class="resumo-periodo"></div>
+      <div class="stat-card aprovado">
+        <div class="stat-card-header">
+          <span class="stat-card-title">Aprovadas</span>
+          <div class="stat-card-icon">
+            <svg class="dash-icon icon--aprovado" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-4 5a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l2.094 2.093 3.492-4.446z"/>
+            </svg>
           </div>
         </div>
-      </section>
+        <div class="stat-card-value" id="dash-aprov">0</div>
+        <div class="stat-card-change">Devoluções aceitas</div>
+      </div>
 
-    </div>
+      <div class="stat-card rejeitado">
+        <div class="stat-card-header">
+          <span class="stat-card-title">Rejeitadas</span>
+          <div class="stat-card-icon">
+            <svg class="dash-icon icon--rejeitado" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 1 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat-card-value" id="dash-rej">0</div>
+        <div class="stat-card-change">Devoluções negadas</div>
+      </div>
+
+    </section>
+
+    <!-- Linha 2: Gráfico + Resumo -->
+    <section class="dashboard-main-grid">
+      <div class="dashboard-card chart-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h2 class="dashboard-card-title">Prejuízo Total</h2>
+            <p class="dashboard-card-subtitle">Análise financeira do período</p>
+          </div>
+        </div>
+        <div class="chart-controls" role="tablist" aria-label="Modos do gráfico">
+          <button id="btn-graf-dia" class="botao botao-outline active" aria-pressed="true">Últimos 30 dias</button>
+          <button id="btn-graf-mes" class="botao botao-outline" aria-pressed="false">Mês atual</button>
+          <button id="btn-graf-6mes" class="botao botao-outline" aria-pressed="false">Últimos 6 meses</button>
+          <button id="btn-graf-status" class="botao botao-outline" aria-pressed="false">Por Status</button>
+        </div>
+        <div class="chart-wrapper" style="min-height: 360px;">
+          <canvas id="chart-prejuizo-dia"></canvas>
+          <canvas id="chart-prejuizo-mes" style="display:none;"></canvas>
+          <canvas id="chart-prejuizo-6mes" style="display:none;"></canvas>
+          <canvas id="chart-status" style="display:none;"></canvas>
+        </div>
+      </div>
+
+      <div class="dashboard-card summary-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h2 class="dashboard-card-title">Resumo</h2>
+            <p class="dashboard-card-subtitle">Visão geral do período</p>
+          </div>
+        </div>
+        <div id="resumo-periodo" class="summary-list"></div>
+      </div>
+    </section>
+
+    <!-- Linha 3: Ranking (full width) -->
+    <section class="dashboard-ranking-full">
+      <div class="dashboard-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h2 class="dashboard-card-title">Top Devoluções</h2>
+            <p class="dashboard-card-subtitle">Itens mais devolvidos</p>
+          </div>
+        </div>
+        <div id="ranking-lista" class="ranking-list-modern"></div>
+      </div>
+    </section>
+
   </main>
 
-  <script src="js/header.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="js/dashboard.js"></script>
+  <!-- Use defer para garantir que o DOM carregou -->
+  <script src="js/header.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+  <script src="js/dashboard.js" defer></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Sistema de Devoluções - Gestão Inteligente</title>
+  <title>Sistema de Devoluções - Controle Facil</title>
   <meta name="description" content="Sistema completo para gerenciamento de devoluções de produtos com interface moderna e intuitiva"/>
   <meta name="author" content="Sistema Devoluções"/>
   <meta name="keywords" content="devoluções, gestão, produtos, e-commerce, sistema"/>
@@ -25,8 +25,8 @@
         <div class="logo-area">
           <div class="icone-sistema">
             <img src="assets/img/logo_rf.png" alt="Logo" class="icone-principal"/>
-            <div class="badge-status">
-              <svg class="icone-raio" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <div class="badge-status" aria-hidden="true">
+              <svg class="icone-raio" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M8 2a.5.5 0 0 1 .5.5v5.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 8.293V2.5A.5.5 0 0 1 8 2z"/>
               </svg>
             </div>
@@ -77,7 +77,7 @@
               <span class="card-titulo">Pendentes</span>
               <svg class="icone-card icone-accent" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                 <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-                <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3.5a.5.5 0 0 1-.5-.5v-3.5A.5.5 0 0 1 8 4z"/>
+                <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1H7.5a.5.5 0 0 1-.5-.5V4.5A.5.5 0 0 1 8 4z"/>
               </svg>
             </div>
             <div class="card-conteudo">
@@ -163,118 +163,167 @@
   </main>
 
   <!-- Modal: Nova Devolução -->
-<div id="modal-nova-devolucao" class="modal" style="display:none;">
-  <div class="modal-overlay">
-    <div class="modal-conteudo">
-      <div class="modal-header">
-        <div class="modal-hero" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2a2.5 2.5 0 012.5 2.5V5h4A2.5 2.5 0 0121 7.5v9A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9A2.5 2.5 0 015.5 5h4v-.5A2.5 2.5 0 0112 2zM9 5h6v-.5a1.5 1.5 0 00-3 0V5z"/>
-          </svg>
+  <div id="modal-nova-devolucao" class="modal" style="display:none;">
+    <div class="modal-overlay">
+      <div class="modal-conteudo" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <div class="modal-hero" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2a2.5 2.5 0 012.5 2.5V5h4A2.5 2.5 0 0121 7.5v9A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9A2.5 2.5 0 015.5 5h4v-.5A2.5 2.5 0 0112 2zM9 5h6v-.5a1.5 1.5 0 00-3 0V5z"/>
+            </svg>
+          </div>
+          <div class="modal-titles">
+            <h2 class="modal-titulo">Criar Nova Devolução</h2>
+            <p class="modal-descricao">Preencha os dados para registrar uma nova devolução</p>
+          </div>
+          <button id="botao-fechar-modal" class="botao-fechar" aria-label="Fechar">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M4.646 4.646a.5.5 0 01.708 0L8 7.293l2.646-2.647a.5.5 0 11.708.708L8.707 8l2.647 2.646a.5.5 0 01-.708.708L8 8.707l-2.646 2.647a.5.5 0 11-.708-.708L7.293 8 4.646 5.354a.5.5 0 010-.708z"/>
+            </svg>
+          </button>
         </div>
-        <div class="modal-titles">
-          <h2 class="modal-titulo">Criar Nova Devolução</h2>
-          <p class="modal-descricao">Preencha os dados para registrar uma nova devolução</p>
-        </div>
-        <button id="botao-fechar-modal" class="botao-fechar" aria-label="Fechar">
-          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 4.646a.5.5 0 01.708 0L8 7.293l2.646-2.647a.5.5 0 11.708.708L8.707 8l2.647 2.646a.5.5 0 01-.708.708L8 8.707l-2.646 2.647a.5.5 0 11-.708-.708L7.293 8 4.646 5.354a.5.5 0 010-.708z"/></svg>
-        </button>
+
+        <form id="form-nova-devolucao" class="modal-form" novalidate>
+          <!-- linha 1 -->
+          <div class="grid-2">
+            <div class="campo-form">
+              <label for="numero-pedido" class="label-form">Número do Pedido *</label>
+              <div class="input-group">
+                <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M3 4a1 1 0 011-1h8a1 1 0 011 1v9H3V4zm1 0v1h8V4H4z"/>
+                </svg>
+                <input type="text" id="numero-pedido" class="input-form" placeholder="Número do pedido" required/>
+              </div>
+            </div>
+
+            <div class="campo-form">
+              <label for="numero-nota" class="label-form">Número da Nota Fiscal</label>
+              <div class="input-group">
+                <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M2 2h12v12H2zM3 4h10v1H3zM3 6h10v1H3zM3 8h7v1H3z"/>
+                </svg>
+                <input type="text" id="numero-nota" class="input-form" placeholder="Opcional"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- linha 2 -->
+          <div class="grid-1">
+            <div class="campo-form">
+              <label for="chave-nota" class="label-form">Chave de Acesso (44 dígitos)</label>
+              <div class="input-group">
+                <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M3 1a2 2 0 00-2 2v10l3-2 3 2 3-2 3 2V3a2 2 0 00-2-2H3z"/>
+                </svg>
+                <input type="text" id="chave-nota" class="input-form" placeholder="Chave da NFe (opcional)"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- linha 3 -->
+          <div class="grid-2">
+            <div class="campo-form">
+              <label for="nome-cliente" class="label-form">Cliente *</label>
+              <div class="input-group">
+                <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M8 8a3 3 0 100-6 3 3 0 000 6zm4 7s-1 1-4 1-4-1-4-1 1-4 4-4 4 4 4 4z"/>
+                </svg>
+                <input type="text" id="nome-cliente" class="input-form" placeholder="Nome do cliente" required/>
+              </div>
+            </div>
+
+            <div class="campo-form">
+              <label for="nome-produto" class="label-form">Produto *</label>
+              <div class="input-group">
+                <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M2 2h12v5H2zM2 9h12v5H2z"/>
+                </svg>
+                <input type="text" id="nome-produto" class="input-form" placeholder="Nome do produto" required/>
+                <div id="lista-produtos" class="dropdown-sugestoes"><ul></ul></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- linha 4-->
+          <div class="campo-form">
+            <label for="valor-frete" class="label-form">Valor do Frete (R$)</label>
+            <div class="input-group">
+              <span class="input-prefix">R$</span>
+              <input type="number id="valor-frete" class="input-form" step="0.01" inputmode="decimal"/>
+            </div>
+          </div>
+
+          <!-- linha 5 -->
+          <div class="grid-2">
+            <div class="campo-form">
+              <label for="sku-produto" class="label-form">SKU do Produto</label>
+              <input type="text" id="sku-produto" class="input-form" placeholder="Opcional"/>
+            </div>
+
+            <div class="campo-form">
+              <label for="valor-produto" class="label-form">Valor do Produto (R$)</label>
+              <div class="input-group">
+                <span class="input-prefix">R$</span>
+                <input type="number" id="valor-produto" class="input-form" step="0.01" inputmode="decimal" placeholder="0,00"/>
+              </div>
+            </div>
+          </div>
+
+          <!-- Motivo (rápido) + descrição -->
+          <div class="grid-1">
+            <div class="campo-form">
+              <label class="label-form" for="motivo-codigo">Motivo (rápido)</label>
+              <select id="motivo-codigo" class="select-filtro">
+                <option value="">Selecione um motivo…</option>
+
+                <optgroup label="Produto voltou para o CD (sem prejuízo de produto)">
+                  <option value="recebido_cd_perfeito">Recebido no CD — perfeito/sem uso</option>
+                  <option value="recebido_cd_avaria_transporte">Recebido no CD — avaria de transporte</option>
+                  <option value="recebido_cd_fabricante">Recebido no CD — defeito de fábrica confirmado</option>
+                </optgroup>
+
+                <optgroup label="Sem custo para a loja (plataforma banca o frete)">
+                  <option value="desistencia">Cliente desistiu da compra / arrependimento</option>
+                  <option value="comprou_errado">Cliente comprou o produto errado</option>
+                  <option value="tamanho_cor">Tamanho/Cor/Modelo diferente do desejado</option>
+                </optgroup>
+
+                <optgroup label="Prejuízo do produto (erros da loja/fornecedor)">
+                  <option value="produto_errado_enviado">Produto errado enviado (erro de expedição)</option>
+                  <option value="anuncio_incorreto">Anúncio incorreto / descrição divergente</option>
+                  <option value="falta_itens">Falta de itens/acessórios na embalagem</option>
+                  <option value="defeito_fabrica">Defeito de fábrica (não constatado no recebimento)</option>
+                </optgroup>
+
+                <optgroup label="Culpa do cliente (pode haver cobrança)">
+                  <option value="mau_uso">Mau uso / dano pelo cliente</option>
+                  <option value="sem_lacre_sem_acessorios">Sem lacre / sem acessórios originais</option>
+                  <option value="fora_prazo">Fora do prazo legal de arrependimento</option>
+                </optgroup>
+
+                <optgroup label="Outros">
+                  <option value="avaria_transporte_cliente">Avaria no transporte (cliente recusou no ato)</option>
+                  <option value="logistica">Problema logístico (extravio, atraso extremo etc.)</option>
+                  <option value="outros">Outros / especificar na descrição</option>
+                </optgroup>
+              </select>
+              <small class="help-text">Dica: escolha um motivo rápido e detalhe no campo abaixo (opcional).</small>
+            </div>
+
+            <div class="campo-form">
+              <label class="label-form" for="motivo-devolucao">Descrição (opcional)</label>
+              <textarea id="motivo-devolucao" class="textarea-form" rows="3" placeholder="Detalhe o ocorrido (opcional)"></textarea>
+            </div>
+          </div>
+
+          <div class="modal-acoes">
+            <button type="button" id="botao-cancelar" class="botao botao-outline">Cancelar</button>
+            <button type="submit" class="botao botao-principal">Criar Devolução</button>
+          </div>
+        </form>
       </div>
-
-      <form id="form-nova-devolucao" class="modal-form" novalidate>
-        <!-- linha 1 -->
-        <div class="grid-2">
-          <div class="campo-form">
-            <label for="numero-pedido" class="label-form">Número do Pedido *</label>
-            <div class="input-group">
-              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M3 4a1 1 0 011-1h8a1 1 0 011 1v9H3V4zm1 0v1h8V4H4z"/>
-              </svg>
-              <input type="text" id="numero-pedido" class="input-form" placeholder="Ex: PED-001" required/>
-            </div>
-          </div>
-
-          <div class="campo-form">
-            <label for="numero-nota" class="label-form">Número da Nota Fiscal</label>
-            <div class="input-group">
-              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M2 2h12v12H2zM3 4h10v1H3zM3 6h10v1H3zM3 8h7v1H3z"/>
-              </svg>
-              <input type="text" id="numero-nota" class="input-form" placeholder="Ex: 12345 ou 1/2025"/>
-            </div>
-          </div>
-        </div>
-
-        <!-- linha 2 -->
-        <div class="grid-1">
-          <div class="campo-form">
-            <label for="chave-nota" class="label-form">Chave de Acesso (44 dígitos)</label>
-            <div class="input-group">
-              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M3 1a2 2 0 00-2 2v10l3-2 3 2 3-2 3 2V3a2 2 0 00-2-2H3z"/>
-              </svg>
-              <input type="text" id="chave-nota" class="input-form" placeholder="Chave da NFe"/>
-            </div>
-          </div>
-        </div>
-
-        <!-- linha 3 -->
-        <div class="grid-2">
-          <div class="campo-form">
-            <label for="nome-cliente" class="label-form">Cliente *</label>
-            <div class="input-group">
-              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 8a3 3 0 100-6 3 3 0 000 6zm4 7s-1 1-4 1-4-1-4-1 1-4 4-4 4 4 4 4z"/>
-              </svg>
-              <input type="text" id="nome-cliente" class="input-form" placeholder="Nome do cliente" required/>
-            </div>
-          </div>
-
-          <div class="campo-form">
-            <label for="nome-produto" class="label-form">Produto *</label>
-            <div class="input-group">
-              <svg class="input-icon" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M2 2h12v5H2zM2 9h12v5H2z"/>
-              </svg>
-              <input type="text" id="nome-produto" class="input-form" placeholder="Nome do produto" required/>
-              <div id="lista-produtos" class="dropdown-sugestoes"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- linha 4 -->
-        <div class="grid-2">
-          <div class="campo-form">
-            <label for="sku-produto" class="label-form">SKU do Produto</label>
-            <input type="text" id="sku-produto" class="input-form" placeholder="Ex: PS5-001"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="valor-produto" class="label-form">Valor do Produto (R$)</label>
-            <div class="input-group">
-              <span class="input-prefix">$</span>
-              <input type="number" id="valor-produto" class="input-form" step="0.01" placeholder="0,00"/>
-            </div>
-          </div>
-        </div>
-
-        <!-- motivo -->
-        <div class="grid-1">
-          <div class="campo-form">
-            <label for="motivo-devolucao" class="label-form">Motivo da Devolução</label>
-            <textarea id="motivo-devolucao" class="textarea-form" placeholder="Descreva o motivo da devolução..."></textarea>
-          </div>
-        </div>
-
-        <div class="modal-acoes">
-          <button type="button" id="botao-cancelar" class="botao botao-outline">Cancelar</button>
-          <button type="submit" class="botao botao-principal">Criar Devolução</button>
-        </div>
-      </form>
     </div>
   </div>
-</div>
-
 
   <!-- Modal: Detalhes / Edição -->
   <div id="modal-detalhes" class="modal" role="dialog" aria-modal="true" aria-hidden="true" style="display:none;">
@@ -313,6 +362,7 @@
                   <option value="aprovado">Aprovado</option>
                   <option value="rejeitado">Rejeitado</option>
                 </select>
+                <small class="help-text">Aprovado = devolução aceita; Rejeitado = sem reembolso.</small>
               </div>
 
               <div class="campo-form">
@@ -347,8 +397,8 @@
   <!-- Toast -->
   <div id="toast" class="toast" style="display:none;">
     <div class="toast-conteudo">
-      <div class="toast-icone">
-        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <div class="toast-icone" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="currentColor">
           <path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/>
         </svg>
       </div>

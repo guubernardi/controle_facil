@@ -110,7 +110,7 @@ async function blingGet(apelido, url) {
     return r.data;
   } catch (e) {
     const st  = e?.response?.status;
-    const msg = e?.response?.data;
+    const msg = e?.response?.data; // fix: variável correta
     const precisaRefresh = st === 401 || (msg && String(msg).includes('invalid_token'));
     if (!precisaRefresh) throw e;
 
@@ -315,12 +315,22 @@ async function handlerBuscarVenda(req, res) {
     if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
     if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
 
+    // novo: dedução do cliente
+    const clienteNome =
+      pedido?.cliente?.nome ||
+      pedido?.contato?.nome ||
+      pedido?.destinatario?.nome ||
+      pedido?.cliente_nome ||
+      pedido?.cliente?.fantasia ||
+      null;
+
     return res.json({
       idVenda: String(pedido.id || idOuNumero),
       numeroPedido: numero,
       lojaId,
       lojaNome,
       numeroLoja,
+      clienteNome,
       debug: { usadoParametro: idOuNumero }
     });
   } catch (e) {
@@ -468,19 +478,18 @@ app.get('/api/sales/by-invoice/:numero', async (req, res) => {
   try {
     const numero = String(req.params.numero);
     const apelido = String(req.query.account || 'Conta de Teste');
-    const base = process.env.BLING_API_BASE;
 
     // 1) pegar a nota
     let nota = null;
     try {
-      const r1 = await blingGet(apelido, `${base}/notas?numero=${encodeURIComponent(numero)}`);
+      const r1 = await blingGet(apelido, `${process.env.BLING_API_BASE}/notas?numero=${encodeURIComponent(numero)}`);
       const arr = Array.isArray(r1?.data) ? r1.data : [];
       nota = arr[0] || null;
     } catch (_) {}
 
     // 2) se não achou nota, tenta /pedidos/vendas?numeroNota=...
     if (!nota) {
-      const r2 = await blingGet(apelido, `${base}/pedidos/vendas?numeroNota=${encodeURIComponent(numero)}`);
+      const r2 = await blingGet(apelido, `${process.env.BLING_API_BASE}/pedidos/vendas?numeroNota=${encodeURIComponent(numero)}`);
       const arr = Array.isArray(r2?.data) ? r2.data : [];
       if (!arr[0]) return res.status(404).json({ error: 'Nenhum pedido encontrado para esta nota.' });
       // já veio a venda
@@ -537,7 +546,108 @@ app.get('/api/sales/by-chave/:chave', async (req, res) => {
   }
 });
 
-// Busca de produtos no Bling (autocomplete) 
+// ---------------------------------------------
+// Autocomplete/Produtos/Estoque (Bling) — compat com o frontend
+// ---------------------------------------------
+
+// pequeno cache em memória
+const _cache = new Map();
+const setCache = (k, v, ttl = 10000) => _cache.set(k, { v, exp: Date.now() + ttl });
+const getCache = (k) => {
+  const h = _cache.get(k);
+  if (!h) return null;
+  if (Date.now() > h.exp) { _cache.delete(k); return null; }
+  return h.v;
+};
+
+// Compat: rota que o frontend tenta primeiro
+// GET /api/bling/products?q=texto&pagina=1&limit=10&account=Conta%20de%20Teste
+app.get('/api/bling/products', async (req, res) => {
+  try {
+    const q       = String(req.query.q || '').trim();
+    const pagina  = Math.max(parseInt(req.query.pagina || '1', 10), 1);
+    const limit   = Math.max(1, Math.min(parseInt(req.query.limit || '10', 10), 50));
+    const apelido = String(req.query.account || 'Conta de Teste');
+    if (!q) return res.json([]); // front espera ARRAY direto
+
+    const key = `prod:${apelido}:${q}:${pagina}:${limit}`;
+    const hit = getCache(key);
+    if (hit) return res.json(hit);
+
+    const base = process.env.BLING_API_BASE;
+    const out  = [];
+
+    // 1) busca por descrição/nome (3 páginas max)
+    for (let p = pagina; p < pagina + 3; p++) {
+      const url = `${base}/produtos?descricao=${encodeURIComponent(q)}&pagina=${p}&limite=${limit}`;
+      try {
+        const r   = await blingGet(apelido, url);
+        const arr = Array.isArray(r?.data) ? r.data : [];
+        for (const pr of arr) {
+          out.push({
+            nome:    pr.nome || pr.descricao || '',
+            sku:     pr.codigo || pr.sku || '',
+            gtin:    pr.gtin  || pr.ean  || '',
+            preco:   pr.preco?.preco ?? pr.preco ?? null,
+            estoque: pr.estoque?.saldo ?? pr.estoqueAtual ?? null,
+          });
+        }
+        if (arr.length < limit) break;
+      } catch (_) { break; }
+    }
+
+    // 2) se nada veio, tenta por código exato
+    if (!out.length) {
+      try {
+        const r2   = await blingGet(apelido, `${base}/produtos?codigo=${encodeURIComponent(q)}`);
+        const arr2 = Array.isArray(r2?.data) ? r2.data : [];
+        for (const pr of arr2) {
+          out.push({
+            nome:    pr.nome || pr.descricao || '',
+            sku:     pr.codigo || pr.sku || '',
+            gtin:    pr.gtin  || pr.ean  || '',
+            preco:   pr.preco?.preco ?? pr.preco ?? null,
+            estoque: pr.estoque?.saldo ?? pr.estoqueAtual ?? null,
+          });
+        }
+      } catch {}
+    }
+
+    const resp = out.slice(0, limit);
+    setCache(key, resp, 10000);
+    res.json(resp); // ARRAY (sem {data})
+  } catch (e) {
+    console.error('GET /api/bling/products ERRO:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao consultar produtos.' });
+  }
+});
+
+// Badge de estoque por SKU (opcional, útil no modal)
+// GET /api/bling/stock?sku=ABC123
+app.get('/api/bling/stock', async (req, res) => {
+  try {
+    const sku     = String(req.query.sku || '').trim();
+    const apelido = String(req.query.account || 'Conta de Teste');
+    if (!sku) return res.status(400).json({ error: 'sku obrigatório' });
+
+    const key = `stk:${apelido}:${sku}`;
+    const hit = getCache(key);
+    if (hit) return res.json(hit);
+
+    const base = process.env.BLING_API_BASE;
+    // ajuste o caminho se sua conta usar outra rota de estoque
+    const r = await blingGet(apelido, `${base}/estoques/saldos?codigo=${encodeURIComponent(sku)}`);
+    setCache(key, r, 10000);
+    res.json(r);
+  } catch (e) {
+    console.error('GET /api/bling/stock ERRO:', e?.response?.data || e);
+    res.status(500).json({ error: 'Falha ao consultar estoque.' });
+  }
+});
+
+// ---------------------------------------------
+// Busca de produtos no Bling (autocomplete) — fallback já existente
+// ---------------------------------------------
 app.get('/api/products/search', async (req, res) => {
   try {
     const q       = String(req.query.q || '').trim();
@@ -620,7 +730,6 @@ app.get('/api/products/:codigo', async (req, res) => {
   }
 });
 
-
 // monta resposta no mesmo padrão do /api/sales/:id
 async function responderPedidoPadronizado(apelido, pedido, res, debugExtra = {}) {
   try {
@@ -636,12 +745,22 @@ async function responderPedidoPadronizado(apelido, pedido, res, debugExtra = {})
     if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
     if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
 
+    // novo: dedução do cliente
+    const clienteNome =
+      pedido?.cliente?.nome ||
+      pedido?.contato?.nome ||
+      pedido?.destinatario?.nome ||
+      pedido?.cliente_nome ||
+      pedido?.cliente?.fantasia ||
+      null;
+
     return res.json({
       idVenda: String(pedido.id || ''),
       numeroPedido: numero,
       lojaId,
       lojaNome,
       numeroLoja,
+      clienteNome,
       debug: debugExtra
     });
   } catch (e) {
@@ -657,20 +776,22 @@ app.post('/api/returns', async (req, res) => {
   try {
     const {
       data_compra, id_venda, loja_id, loja_nome, sku, tipo_reclamacao,
-      status, valor_produto, valor_frete, reclamacao, created_by
+      status, valor_produto, valor_frete, reclamacao, created_by,
+      cliente_nome // novo
     } = req.body;
 
     const sql = `
       insert into devolucoes
-        (data_compra, id_venda, loja_id, loja_nome, sku, tipo_reclamacao, status, valor_produto, valor_frete, reclamacao, created_by)
+        (data_compra, id_venda, loja_id, loja_nome, sku, tipo_reclamacao, status, valor_produto, valor_frete, reclamacao, created_by, cliente_nome)
       values
-        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       returning id, created_at
     `;
     const params = [
       data_compra || null, id_venda, loja_id || null, loja_nome || null, sku || null,
       tipo_reclamacao || null, status || null, valor_produto || null, valor_frete || null,
-      reclamacao || null, created_by || 'app-local'
+      reclamacao || null, created_by || 'app-local',
+      cliente_nome || null
     ];
 
     const { rows } = await query(sql, params);
@@ -705,16 +826,41 @@ app.get('/api/dashboard', async (req, res) => {
     `;
 
     const sqlTop = `
+      WITH base AS (
+        SELECT
+          COALESCE(NULLIF(TRIM(sku),''), '(sem SKU)') AS sku,
+          NULLIF(TRIM(reclamacao),'') AS motivo,
+          (COALESCE(valor_produto,0) + COALESCE(valor_frete,0))::numeric(12,2) AS prejuizo
+        FROM devolucoes
+        ${where}
+      ),
+      sum_por_sku AS (
+        SELECT
+          sku,
+          COUNT(*)::int AS devolucoes,
+          SUM(prejuizo)::numeric(12,2) AS prejuizo
+        FROM base
+        GROUP BY sku
+      ),
+      motivo_top AS (
+        SELECT DISTINCT ON (sku)
+          sku,
+          motivo,
+          COUNT(*) OVER (PARTITION BY sku, motivo) AS cnt
+        FROM base
+        WHERE motivo IS NOT NULL
+        ORDER BY sku, cnt DESC, motivo ASC
+      )
       SELECT
-        COALESCE(NULLIF(TRIM(sku),''), '(sem SKU)') AS sku,
-        COUNT(*)::int AS devolucoes,
-        SUM( (COALESCE(valor_produto,0) + COALESCE(valor_frete,0)) )::numeric(12,2) AS prejuizo
-      FROM devolucoes
-      ${where}
-      GROUP BY 1
-      ORDER BY devolucoes DESC, sku ASC
+        s.sku,
+        s.devolucoes,
+        s.prejuizo,
+        COALESCE(m.motivo, '—') AS motivo
+      FROM sum_por_sku s
+      LEFT JOIN motivo_top m USING (sku)
+      ORDER BY s.prejuizo DESC, s.devolucoes DESC, s.sku ASC
       LIMIT $${params.push(limitTop)};
-    `;
+      `;
 
     const sqlDaily = `
       SELECT
@@ -769,7 +915,8 @@ app.get('/api/returns', async (req, res) => {
                OR coalesce(loja_nome,'') ILIKE $${args.length}
                OR coalesce(nfe_numero,'') ILIKE $${args.length}
                OR coalesce(nfe_chave,'') ILIKE $${args.length}
-               OR coalesce(reclamacao,'') ILIKE $${args.length})`);
+               OR coalesce(reclamacao,'') ILIKE $${args.length}
+               OR coalesce(cliente_nome,'') ILIKE $${args.length})`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -777,7 +924,8 @@ app.get('/api/returns', async (req, res) => {
 
     const { rows } = await query(
       `SELECT id, data_compra, id_venda, loja_id, loja_nome, sku, tipo_reclamacao, status,
-              valor_produto, valor_frete, nfe_numero, nfe_chave, created_at, updated_at
+              valor_produto, valor_frete, nfe_numero, nfe_chave, created_at, updated_at,
+              cliente_nome
          FROM devolucoes
         ${whereSql}
         ORDER BY id DESC
@@ -799,7 +947,8 @@ app.get('/api/returns/:id', async (req, res) => {
     const r = await query(
       `SELECT id, data_compra, id_venda, loja_id, loja_nome, sku,
               tipo_reclamacao, status, valor_produto, valor_frete,
-              reclamacao, nfe_numero, nfe_chave, created_at, updated_at
+              reclamacao, nfe_numero, nfe_chave, created_at, updated_at,
+              cliente_nome
          FROM devolucoes
         WHERE id = $1`, [id]
     );
@@ -817,7 +966,7 @@ app.patch('/api/returns/:id', async (req, res) => {
 
     const allow = new Set([
       'status','loja_nome','sku','tipo_reclamacao','valor_produto','valor_frete',
-      'reclamacao','nfe_numero','nfe_chave','data_compra'
+      'reclamacao','nfe_numero','nfe_chave','data_compra','cliente_nome'
     ]);
 
     const sets = [];

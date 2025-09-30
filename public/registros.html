@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Registros - Sistema de Devoluções</title>
+  <title>Registros - Controle Facil</title>
   <meta name="description" content="Gerencie e visualize todos os registros de devoluções do sistema" />
 
   <!-- estilos -->
@@ -87,6 +87,20 @@
             <p class="descricao-card">Todos os registros cadastrados</p>
           </div>
 
+          <!-- NOVO CARD: Valor total -->
+          <div class="card-estatistica">
+            <div class="card-header">
+              <span class="card-titulo">Valor total</span>
+              <svg class="icone-card" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/>
+              </svg>
+            </div>
+            <div class="numero-principal" id="registrosValorTotal">R$ 0,00</div>
+            <p class="descricao-card">Soma dos valores dos registros</p>
+          </div>
+          <!-- FIM NOVO CARD -->
+
           <div class="card-estatistica">
             <div class="card-header">
               <span class="card-titulo">Registros Ativos</span>
@@ -163,6 +177,16 @@
               </svg>
               Limpar
             </button>
+
+            <!-- botão Exportar CSV -->
+            <button class="botao botao-outline" type="button" onclick="exportarRegistros()" title="Exportar CSV">
+              <svg class="icone" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4"/>
+              </svg>
+              Exportar
+            </button>
+            <!-- FIM Exportar -->
           </div>
         </div>
       </section>
@@ -227,9 +251,14 @@
           <label class="label-form" for="statusRegistro">Status</label>
           <select id="statusRegistro" class="select-filtro" required>
             <option value="">Selecione o status</option>
-            <option value="ativo">Ativo</option>
-            <option value="pendente">Pendente</option>
-            <option value="finalizado">Finalizado</option>
+            <option value="em_analise">Em análise</option>
+            <option value="aguardando_cliente">Aguardando cliente</option>
+            <option value="aguardando_logistica">Aguardando logística</option>
+            <option value="recebido_cd">Recebido no CD</option>
+            <option value="em_inspecao">Em inspeção</option>
+            <option value="aprovado">Aprovado</option>
+            <option value="rejeitado">Rejeitado</option>
+            <option value="concluido">Concluído</option>
           </select>
         </div>
 
