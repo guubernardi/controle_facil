@@ -3,6 +3,12 @@
 /* base: herda variáveis do index.css */
 :root {
     --accent: hsl(24, 95%, 50%); /* laranja vibrante */
+    --nav-active-bg: #0b5bd3;        /* azul do ativo */
+    --nav-active-fg: #ffffff;        /* texto/branco */
+    --nav-muted: #64748b;            /* slate-500/600 */
+    --nav-hover-bg: rgba(2, 6, 23, .06);
+    --nav-shadow: 0 6px 18px rgba(2, 6, 23, .08);
+    --nav-radius: 14px;              /* pílula */
 }
 
 .navbar {
@@ -18,7 +24,7 @@
     display:flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1.25rem 2.5rem; /* maior padding para combinar com container 45px */
+    padding: 1.25rem 2.5rem; 
     gap: 1.25rem;
 }
 
@@ -173,3 +179,5 @@
     /* small visual tweak for active link on mobile */
     .nav-links a.active { width: 100%; box-shadow: none; border-radius: 6px; }
 }
+
+

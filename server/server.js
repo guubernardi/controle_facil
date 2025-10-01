@@ -9,7 +9,8 @@ const dayjs = require('dayjs');
 const { query } = require('./db');
 
 const app = express();
-app.use(express.json());
+// limite pequeno pra evitar payloads gigantes por engano
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Aviso de variáveis de ambiente ausentes
@@ -34,17 +35,99 @@ function safeParseJson(s) {
   try { return JSON.parse(String(s)); } catch { return null; }
 }
 
-async function addReturnEvent({ returnId, type, title = null, message = null, meta = null, createdBy = 'system' }) {
-  const metaStr = meta ? JSON.stringify(meta) : null;
-  const sql = `
-    INSERT INTO return_events (return_id, type, title, message, meta, created_by, created_at)
-    VALUES ($1,$2,$3,$4,$5,$6, now())
-    RETURNING id, return_id AS "returnId", type, title, message, meta, created_by AS "createdBy", created_at AS "createdAt"
-  `;
-  const { rows } = await query(sql, [returnId, type, title, message, metaStr, createdBy]);
-  const ev = rows[0];
-  ev.meta = safeParseJson(ev.meta);
-  return ev;
+// Lê header de idempotência
+function getIdempKey(req) {
+  const v = (req.get('Idempotency-Key') || '').trim();
+  return v || null;
+}
+
+// Normaliza corpo do evento aceitando PT-BR e EN
+function normalizeEventBody(body = {}) {
+  const typeRaw = body.type ?? body.tipo;
+  const type = typeof typeRaw === 'string' ? typeRaw.toLowerCase() : undefined;
+
+  const title =
+    body.title ??
+    body.titulo ??
+    null;
+
+  const message =
+    body.message ??
+    body.mensagem ??
+    null;
+
+  // meta pode vir como objeto ou string JSON
+  let meta = body.meta ?? body.metadados ?? body.dados ?? null;
+  if (typeof meta === 'string') {
+    const parsed = safeParseJson(meta);
+    if (parsed !== null) meta = parsed;
+  }
+
+  const created_by =
+    body.created_by ??
+    body.criado_por ??
+    body.usuario ??
+    'system';
+
+  return { type, title, message, meta, created_by };
+}
+
+// addReturnEvent com suporte a idempotência (idemp_key)
+async function addReturnEvent({
+  returnId,
+  type,
+  title = null,
+  message = null,
+  meta = null,
+  createdBy = 'system',
+  idempKey = null
+}) {
+  const metaStr = meta != null ? JSON.stringify(meta) : null;
+  try {
+    const { rows } = await query(
+      `
+      INSERT INTO return_events (return_id, type, title, message, meta, created_by, created_at, idemp_key)
+      VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
+      RETURNING id, return_id AS "returnId", type, title, message, meta, created_by AS "createdBy", created_at AS "createdAt", idemp_key AS "idempotencyKey"
+      `,
+      [returnId, type, title, message, metaStr, createdBy, idempKey]
+    );
+    const ev = rows[0];
+    ev.meta = safeParseJson(ev.meta);
+    return ev;
+  } catch (e) {
+    // 23505 = unique_violation (índice único parcial em idemp_key)
+    if (String(e?.code) === '23505' && idempKey) {
+      const { rows } = await query(
+        `
+        SELECT id, return_id AS "returnId", type, title, message, meta, created_by AS "createdBy", created_at AS "createdAt", idemp_key AS "idempotencyKey"
+          FROM return_events
+         WHERE idemp_key = $1
+         LIMIT 1
+        `,
+        [idempKey]
+      );
+      if (rows[0]) {
+        const ev = rows[0];
+        ev.meta = safeParseJson(ev.meta);
+        return ev;
+      }
+    }
+    throw e;
+  }
+}
+
+/** Verifica existência de colunas numa tabela e devolve um mapa {col:true|false} */
+async function tableHasColumns(table, columns) {
+  const { rows } = await query(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {};
+  for (const c of columns) out[c] = set.has(c);
+  return out;
 }
 
 // ---------------------------------------------
@@ -66,24 +149,32 @@ app.get('/api/db/ping', async (_req, res) => {
 
 // ---------------------------------------------
 // GET /api/returns/logs  (Log de custos)
+// -> Ajustado para sempre retornar return_id/log_status.
+// -> Se a view não tiver as colunas, cai num fallback robusto.
 // ---------------------------------------------
 app.get('/api/returns/logs', async (req, res) => {
   try {
     const {
-      from, to, status, responsavel, loja, q,
-      page = 1, pageSize = 50,
+      from, to, status, log_status, responsavel, loja, q,
+      page = '1', pageSize = '50',
       orderBy = 'event_at', orderDir = 'desc'
     } = req.query;
 
     const params = [];
     const where = [];
 
+    // período (to exclusivo)
     if (from) { params.push(from); where.push(`event_at >= $${params.length}`); }
-    if (to)   { params.push(to);   where.push(`event_at <  $${params.length}`); } // 'to' exclusivo
+    if (to)   { params.push(to);   where.push(`event_at <  $${params.length}`); }
 
+    // filtros
     if (status) {
       params.push(String(status).toLowerCase());
       where.push(`LOWER(status) = $${params.length}`);
+    }
+    if (log_status) {
+      params.push(String(log_status).toLowerCase());
+      where.push(`LOWER(log_status) = $${params.length}`);
     }
     if (responsavel) {
       params.push(String(responsavel).toLowerCase());
@@ -94,49 +185,89 @@ app.get('/api/returns/logs', async (req, res) => {
       where.push(`loja_nome ILIKE $${params.length}`);
     }
     if (q) {
-      params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+      const like = `%${q}%`;
+      params.push(like, like, like, like);
       where.push(`(
-        numero_pedido ILIKE $${params.length-3} OR
-        cliente_nome  ILIKE $${params.length-2} OR
-        sku           ILIKE $${params.length-1} OR
+        numero_pedido ILIKE $${params.length - 3} OR
+        cliente_nome  ILIKE $${params.length - 2} OR
+        sku           ILIKE $${params.length - 1} OR
         reclamacao    ILIKE $${params.length}
       )`);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    // ordenação segura
-    const orderCols = new Set(['event_at','status','total','valor_produto','valor_frete']);
-    const col = orderCols.has(orderBy) ? orderBy : 'event_at';
+    const allowedOrder = new Set([
+      'event_at','status','log_status','numero_pedido','cliente_nome','loja_nome',
+      'valor_produto','valor_frete','total'
+    ]);
+    const col = allowedOrder.has(String(orderBy)) ? String(orderBy) : 'event_at';
     const dir = String(orderDir).toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-    const offset = (Number(page) - 1) * Number(pageSize);
-    params.push(pageSize, offset);
+    const limit   = Math.max(1, Math.min(parseInt(pageSize, 10) || 50, 200));
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const offset  = (pageNum - 1) * limit;
 
-    const baseSql = `
-      FROM public.v_return_cost_log
-      ${whereSql}
-    `;
+    // Verifica se a view tem as colunas esperadas
+    const hasCols = await tableHasColumns('v_return_cost_log', ['return_id','log_status','total','event_at']);
+    const usarViewComReturnId = hasCols.return_id === true;
 
-    const { rows: items } = await query(
-      `SELECT *
-       ${baseSql}
-       ORDER BY ${col} ${dir}
-       LIMIT $${params.length-1} OFFSET $${params.length}`,
-      params
-    );
+    let sqlItems, sqlCount, sqlSum, paramsItems, paramsCount;
 
-    const { rows: [{ count }] } = await query(
-      `SELECT COUNT(*)::int AS count ${baseSql}`,
-      params.slice(0, params.length - 2)
-    );
+    if (usarViewComReturnId) {
+      // Usa a view com return_id
+      const baseSql = `FROM public.v_return_cost_log ${whereSql}`;
+      sqlItems = `SELECT * ${baseSql} ORDER BY ${col} ${dir} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      sqlCount = `SELECT COUNT(*)::int AS count ${baseSql}`;
+      sqlSum   = `SELECT COALESCE(SUM(total),0)::numeric AS sum ${baseSql}`;
+      paramsItems = [...params, limit, offset];
+      paramsCount = [...params];
+    } else {
+      // Fallback robusto direto em devolucoes
+      const baseSql = `
+        FROM (
+          SELECT
+            d.id                               AS return_id,
+            d.created_at                       AS event_at,
+            COALESCE(d.id_venda, d.nfe_numero) AS numero_pedido,
+            d.cliente_nome,
+            d.loja_nome,
+            LOWER(COALESCE(d.status,''))       AS status,
+            LOWER(COALESCE(d.log_status,''))   AS log_status,
+            d.valor_produto,
+            d.valor_frete,
+            d.sku,
+            COALESCE(d.tipo_reclamacao, d.reclamacao) AS reclamacao,
+            -- mesma regra do front:
+            CASE
+              WHEN LOWER(COALESCE(d.status,'')) LIKE '%rej%' OR LOWER(COALESCE(d.status,'')) LIKE '%neg%' THEN 0
+              WHEN LOWER(COALESCE(d.tipo_reclamacao,'')) LIKE '%cliente%' OR LOWER(COALESCE(d.reclamacao,'')) LIKE '%cliente%' THEN 0
+              WHEN LOWER(COALESCE(d.log_status,'')) IN ('recebido_cd','em_inspecao') THEN COALESCE(d.valor_frete,0)
+              ELSE COALESCE(d.valor_produto,0) + COALESCE(d.valor_frete,0)
+            END::numeric(12,2) AS total,
+            NULL::text AS responsavel_custo
+          FROM devolucoes d
+        ) v
+        ${whereSql}
+      `;
+      sqlItems = `SELECT * ${baseSql} ORDER BY ${col} ${dir} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      sqlCount = `SELECT COUNT(*)::int AS count ${baseSql}`;
+      sqlSum   = `SELECT COALESCE(SUM(total),0)::numeric AS sum ${baseSql}`;
+      paramsItems = [...params, limit, offset];
+      paramsCount = [...params];
+    }
 
-    const { rows: [{ sum }] } = await query(
-      `SELECT COALESCE(SUM(total),0)::numeric AS sum ${baseSql}`,
-      params.slice(0, params.length - 2)
-    );
+    const [itemsQ, countQ, sumQ] = await Promise.all([
+      query(sqlItems, paramsItems),
+      query(sqlCount, paramsCount),
+      query(sqlSum,   paramsCount),
+    ]);
 
-    res.json({ items, total: count, sum_total: sum });
+    res.json({
+      items: itemsQ.rows,
+      total: countQ.rows[0]?.count || 0,
+      sum_total: sumQ.rows[0]?.sum || 0
+    });
   } catch (e) {
     console.error('GET /api/returns/logs erro:', e);
     res.status(500).json({ error: 'Falha ao buscar registro.' });
@@ -851,8 +982,8 @@ app.get('/api/returns/:id/events', async (req, res) => {
       return res.status(400).json({ error: 'return_id inválido' });
     }
 
-    const limit  = Math.min(parseInt(req.query.limit || '50', 10), 200);
-    const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
 
     const sql = `
       SELECT
@@ -875,38 +1006,6 @@ app.get('/api/returns/:id/events', async (req, res) => {
   } catch (err) {
     console.error('GET /api/returns/:id/events error:', err);
     res.status(500).json({ error: 'Falha ao listar eventos' });
-  }
-});
-
-// body: { type: 'status'|'note'|'refund', title?, message?, meta?, created_by? }
-app.post('/api/returns/:id/events', async (req, res) => {
-  try {
-    const returnId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(returnId)) {
-      return res.status(400).json({ error: 'return_id inválido' });
-    }
-
-    const { type, title, message, meta, created_by } = req.body || {};
-    if (!['status','note','refund'].includes(type)) {
-      return res.status(400).json({ error: 'type inválido. Use: status | note | refund' });
-    }
-
-    const r = await query(`SELECT id FROM devolucoes WHERE id = $1`, [returnId]);
-    if (!r.rows[0]) return res.status(404).json({ error: 'Devolução não encontrada' });
-
-    const ev = await addReturnEvent({
-      returnId,
-      type,
-      title,
-      message,
-      meta,
-      createdBy: created_by || 'system'
-    });
-
-    res.status(201).json(ev);
-  } catch (err) {
-    console.error('POST /api/returns/:id/events error:', err);
-    res.status(500).json({ error: 'Falha ao criar evento' });
   }
 });
 
@@ -937,7 +1036,6 @@ app.post('/api/returns', async (req, res) => {
 
     const { rows } = await query(sql, params);
 
-    // Evento "status inicial" opcional (se veio status)
     if (status) {
       await addReturnEvent({
         returnId: rows[0].id,
@@ -958,15 +1056,6 @@ app.post('/api/returns', async (req, res) => {
 
 /**
  * /api/dashboard — **Aplicando regras de custo**
- * - Rejeitado/Negado => 0
- * - Motivos do cliente => 0  (usa tipo_reclamacao contendo 'cliente')
- * - Recebido no CD / Em inspeção => só frete
- * - Demais => produto + frete
- * Também retorna:
- *  - daily  (por dia)
- *  - monthly (por mês)
- *  - status (mapa status -> quantidade)
- *  - top_items (por SKU com prejuízo calculado pela regra)
  */
 app.get('/api/dashboard', async (req, res) => {
   try {
@@ -980,34 +1069,33 @@ app.get('/api/dashboard', async (req, res) => {
     if (to)   { params.push(to);   whereParts.push(`created_at <  $${params.length}`); }
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    // CTE base + custo efetivo (regra aplicada)
     const baseCte = `
       WITH base AS (
         SELECT
           created_at,
-          LOWER(COALESCE(status,''))              AS st,
-          LOWER(COALESCE(tipo_reclamacao,''))     AS motivo,
-          COALESCE(valor_produto,0)               AS vp,
-          COALESCE(valor_frete,0)                 AS vf,
+          LOWER(COALESCE(status,''))          AS st,
+          LOWER(COALESCE(log_status,''))      AS lgs,
+          LOWER(COALESCE(tipo_reclamacao,'')) AS motivo,
+          COALESCE(valor_produto,0)           AS vp,
+          COALESCE(valor_frete,0)             AS vf,
           COALESCE(NULLIF(TRIM(sku),''), '(sem SKU)') AS sku,
-          NULLIF(TRIM(reclamacao),'')             AS reclamacao
+          NULLIF(TRIM(reclamacao),'')         AS reclamacao
         FROM devolucoes
         ${where}
       ),
       cte AS (
         SELECT
-          created_at, st, motivo, sku, reclamacao, vp, vf,
+          created_at, st, lgs, motivo, sku, reclamacao, vp, vf,
           CASE
-            WHEN st LIKE '%rej%' OR st LIKE '%neg%'       THEN 0
-            WHEN motivo LIKE '%cliente%'                  THEN 0
-            WHEN st IN ('recebido_cd','em_inspecao')      THEN vf
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%'          THEN 0
+            WHEN motivo LIKE '%cliente%'                     THEN 0
+            WHEN lgs IN ('recebido_cd','em_inspecao')        THEN vf
             ELSE vp + vf
           END::numeric(12,2) AS custo
         FROM base
       )
     `;
 
-    // Totais do período
     const sqlTotals = `
       ${baseCte}
       SELECT
@@ -1019,7 +1107,6 @@ app.get('/api/dashboard', async (req, res) => {
       FROM cte;
     `;
 
-    // Top SKUs por prejuízo (regra aplicada)
     const sqlTop = `
       ${baseCte}
       SELECT
@@ -1044,7 +1131,6 @@ app.get('/api/dashboard', async (req, res) => {
       LIMIT $${params.length + 1};
     `;
 
-    // Daily
     const sqlDaily = `
       ${baseCte}
       SELECT
@@ -1056,7 +1142,6 @@ app.get('/api/dashboard', async (req, res) => {
       ORDER BY 1 ASC;
     `;
 
-    // Monthly (p/ gráfico de 6 meses)
     const sqlMonthly = `
       ${baseCte}
       SELECT
@@ -1068,7 +1153,6 @@ app.get('/api/dashboard', async (req, res) => {
       ORDER BY 1 ASC;
     `;
 
-    // Distribuição por status
     const sqlStatus = `
       ${baseCte}
       SELECT st AS status, COUNT(*)::int AS n
@@ -1077,7 +1161,6 @@ app.get('/api/dashboard', async (req, res) => {
       ORDER BY 2 DESC;
     `;
 
-    // Executa em paralelo
     const [totalsQ, topQ, dailyQ, monthlyQ, statusQ] = await Promise.all([
       query(sqlTotals, params),
       query(sqlTop, [...params, limitTop]),
@@ -1086,7 +1169,6 @@ app.get('/api/dashboard', async (req, res) => {
       query(sqlStatus, params)
     ]);
 
-    // Mapa status -> quantidade
     const statusObj = {};
     for (const r of statusQ.rows) statusObj[r.status] = r.n;
 
@@ -1154,14 +1236,27 @@ app.get('/api/returns', async (req, res) => {
   }
 });
 
+// GET /api/returns/:id — inclui log_status se a coluna existir
 app.get('/api/returns/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
+    const cols = await tableHasColumns('devolucoes', [
+      'log_status','cd_recebido_em','cd_inspecionado_em','cd_responsavel'
+    ]);
+
+    const selectExtras = [];
+    if (cols.log_status)        selectExtras.push('log_status');
+    if (cols.cd_recebido_em)    selectExtras.push('cd_recebido_em');
+    if (cols.cd_inspecionado_em)selectExtras.push('cd_inspecionado_em');
+    if (cols.cd_responsavel)    selectExtras.push('cd_responsavel');
+
+    const extraSql = selectExtras.length ? ', ' + selectExtras.join(', ') : '';
+
     const r = await query(
       `SELECT id, data_compra, id_venda, loja_id, loja_nome, sku,
               tipo_reclamacao, status, valor_produto, valor_frete,
               reclamacao, nfe_numero, nfe_chave, created_at, updated_at,
-              cliente_nome
+              cliente_nome${extraSql}
          FROM devolucoes
         WHERE id = $1`, [id]
     );
@@ -1214,7 +1309,6 @@ app.patch('/api/returns/:id', async (req, res) => {
 
     const updated = r.rows[0];
 
-    // Evento automático se status mudou
     const newStatus = req.body?.status;
     if (newStatus && newStatus !== current.status) {
       await addReturnEvent({
@@ -1272,6 +1366,133 @@ app.post('/api/lojas', async (req, res) => {
   } catch (e) {
     console.error('POST /api/lojas ERRO:', e);
     res.status(500).json({ error: 'Falha ao salvar loja.' });
+  }
+});
+
+// ---------------------------------------------
+// CD: Recebimento e Inspeção (apenas UMA versão de cada!)
+// ---------------------------------------------
+
+// Recebimento no CD
+app.patch('/api/returns/:id/cd/receive', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+
+    // garante que a devolução existe
+    const r = await query(`SELECT id FROM devolucoes WHERE id=$1`, [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Devolução não encontrada' });
+
+    const responsavel = (req.body?.responsavel || '').trim() || 'cd';
+    const when = req.body?.when ? new Date(req.body.when) : new Date();
+
+    // registra evento (sempre) — com idempotência
+    const ev = await addReturnEvent({
+      returnId: id,
+      type: 'status',
+      title: 'Recebido no CD',
+      message: `Recebido fisicamente no CD${responsavel ? ` por ${responsavel}` : ''}`,
+      meta: {
+        log_status: 'recebido_cd',
+        cd: { receivedAt: when.toISOString(), responsavel }
+      },
+      createdBy: req.body?.updated_by || 'cd',
+      idempKey: getIdempKey(req)
+    });
+
+    // tenta atualizar colunas que existirem
+    const cols = await tableHasColumns('devolucoes', ['log_status','cd_recebido_em','cd_responsavel']);
+    const sets = [];
+    const args = [];
+
+    if (cols.log_status) { args.push('recebido_cd'); sets.push(`log_status=$${args.length}`); }
+    if (cols.cd_recebido_em) { args.push(when); sets.push(`cd_recebido_em=$${args.length}`); }
+    if (cols.cd_responsavel) { args.push(responsavel || null); sets.push(`cd_responsavel=COALESCE($${args.length}, cd_responsavel)`); }
+
+    if (sets.length) {
+      args.push(id);
+      await query(`UPDATE devolucoes SET ${sets.join(', ')}, updated_at=now() WHERE id=$${args.length}`, args)
+        .catch(err => console.warn('[CD RECEIVE] update opcional ignorado:', err.code || err.message));
+    }
+
+    return res.json({ ok: true, event: ev });
+  } catch (e) {
+    console.error('PATCH /cd/receive erro:', e);
+    return res.status(500).json({ error: 'Falha ao registrar recebimento no CD.' });
+  }
+});
+
+// Inspeção no CD
+app.patch('/api/returns/:id/cd/inspect', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+
+    const r = await query('SELECT id FROM devolucoes WHERE id=$1', [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Devolução não encontrada' });
+
+    const { resultado, aprovado, observacao, responsavel, midias, when } = req.body || {};
+
+    // aceita {aprovado: boolean} ou {resultado: 'aprovado'|'rejeitado'}
+    let resultNorm = null;
+    if (typeof aprovado === 'boolean') resultNorm = aprovado ? 'aprovado' : 'rejeitado';
+    if (resultado) {
+      const v = String(resultado).toLowerCase();
+      if (['aprovado','rejeitado'].includes(v)) resultNorm = v;
+    }
+    if (!resultNorm) {
+      return res.status(400).json({ error: 'Informe "aprovado": true|false ou "resultado": "aprovado"|"rejeitado"' });
+    }
+
+    const whenDt = when ? new Date(when) : new Date();
+    const novoLog = resultNorm === 'aprovado' ? 'aprovado_cd' : 'reprovado_cd';
+    const novoStatus = resultNorm;
+
+    // evento (sempre) — com idempotência
+    const ev = await addReturnEvent({
+      returnId: id,
+      type: 'status',
+      title: `Inspeção: ${resultNorm}`,
+      message: observacao || `Resultado: ${resultNorm}`,
+      meta: {
+        log_status: novoLog,
+        status: novoStatus,
+        cd: {
+          inspectedAt: whenDt.toISOString(),
+          aprovado: resultNorm === 'aprovado',
+          observacao: observacao || null,
+          responsavel: responsavel || 'cd'
+        },
+        midias: Array.isArray(midias) ? midias : undefined
+      },
+      createdBy: req.body?.updated_by || 'cd',
+      idempKey: getIdempKey(req)
+    });
+
+    // update "best effort"
+    const cols = await tableHasColumns('devolucoes', [
+      'log_status','status','cd_inspecionado_em','cd_laudo','cd_midias','cd_responsavel'
+    ]);
+    const sets = [];
+    const args = [];
+
+    if (cols.log_status) { args.push(novoLog); sets.push(`log_status=$${args.length}`); }
+    if (cols.status)     { args.push(novoStatus); sets.push(`status=$${args.length}`); }
+    if (cols.cd_inspecionado_em) { args.push(whenDt); sets.push(`cd_inspecionado_em=$${args.length}`); }
+    if (cols.cd_laudo)   { args.push(observacao || null); sets.push(`cd_laudo=COALESCE($${args.length}, cd_laudo)`); }
+    if (cols.cd_midias)  { args.push(Array.isArray(midias) ? JSON.stringify(midias) : null); sets.push(`cd_midias=COALESCE($${args.length}, cd_midias)`); }
+    if (cols.cd_responsavel) { args.push(responsavel || null); sets.push(`cd_responsavel=COALESCE($${args.length}, cd_responsavel)`); }
+
+    if (sets.length) {
+      args.push(id);
+      await query(`UPDATE devolucoes SET ${sets.join(', ')}, updated_at=now() WHERE id=$${args.length}`, args)
+        .catch(err => console.warn('[CD INSPECT] update opcional ignorado:', err.code || err.message));
+    }
+
+    res.json({ ok: true, event: ev, status: novoStatus });
+  } catch (e) {
+    console.error('PATCH /cd/inspect ERRO:', e);
+    res.status(500).json({ error: 'Falha ao registrar inspeção no CD.' });
   }
 });
 

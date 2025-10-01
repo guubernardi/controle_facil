@@ -1,15 +1,12 @@
 // Centraliza a conexão com o banco de dados e expõe um helper de query (Postgres/Neon)
-
 'use strict';
 
 require('dotenv').config();
 const { Pool } = require('pg');
 
-// Se o DATABASE_URL já tiver "sslmode=require", o ssl abaixo é opcional.
-// Se der erro de SSL, descomente o bloco ssl.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // ssl: { rejectUnauthorized: false } // <- use se precisar
+  // ssl: { rejectUnauthorized: false } // <- habilite se seu provedor exigir SSL (Neon/Render/etc.)
 });
 
 // Helper para executar SQL com pool
