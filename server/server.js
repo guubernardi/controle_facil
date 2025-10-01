@@ -1,8 +1,3 @@
-// ---------------------------------------------
-// server/server.js
-// API de Devoluções + Bling OAuth/consulta
-// ---------------------------------------------
-
 'use strict';
 
 require('dotenv').config();
@@ -66,6 +61,85 @@ app.get('/api/db/ping', async (_req, res) => {
   } catch (e) {
     console.error('DB PING ERRO:', e);
     res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+// ---------------------------------------------
+// GET /api/returns/logs  (Log de custos)
+// ---------------------------------------------
+app.get('/api/returns/logs', async (req, res) => {
+  try {
+    const {
+      from, to, status, responsavel, loja, q,
+      page = 1, pageSize = 50,
+      orderBy = 'event_at', orderDir = 'desc'
+    } = req.query;
+
+    const params = [];
+    const where = [];
+
+    if (from) { params.push(from); where.push(`event_at >= $${params.length}`); }
+    if (to)   { params.push(to);   where.push(`event_at <  $${params.length}`); } // 'to' exclusivo
+
+    if (status) {
+      params.push(String(status).toLowerCase());
+      where.push(`LOWER(status) = $${params.length}`);
+    }
+    if (responsavel) {
+      params.push(String(responsavel).toLowerCase());
+      where.push(`LOWER(responsavel_custo) = $${params.length}`);
+    }
+    if (loja) {
+      params.push(`%${loja}%`);
+      where.push(`loja_nome ILIKE $${params.length}`);
+    }
+    if (q) {
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+      where.push(`(
+        numero_pedido ILIKE $${params.length-3} OR
+        cliente_nome  ILIKE $${params.length-2} OR
+        sku           ILIKE $${params.length-1} OR
+        reclamacao    ILIKE $${params.length}
+      )`);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    // ordenação segura
+    const orderCols = new Set(['event_at','status','total','valor_produto','valor_frete']);
+    const col = orderCols.has(orderBy) ? orderBy : 'event_at';
+    const dir = String(orderDir).toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+    const offset = (Number(page) - 1) * Number(pageSize);
+    params.push(pageSize, offset);
+
+    const baseSql = `
+      FROM public.v_return_cost_log
+      ${whereSql}
+    `;
+
+    const { rows: items } = await query(
+      `SELECT *
+       ${baseSql}
+       ORDER BY ${col} ${dir}
+       LIMIT $${params.length-1} OFFSET $${params.length}`,
+      params
+    );
+
+    const { rows: [{ count }] } = await query(
+      `SELECT COUNT(*)::int AS count ${baseSql}`,
+      params.slice(0, params.length - 2)
+    );
+
+    const { rows: [{ sum }] } = await query(
+      `SELECT COALESCE(SUM(total),0)::numeric AS sum ${baseSql}`,
+      params.slice(0, params.length - 2)
+    );
+
+    res.json({ items, total: count, sum_total: sum });
+  } catch (e) {
+    console.error('GET /api/returns/logs erro:', e);
+    res.status(500).json({ error: 'Falha ao buscar registro.' });
   }
 });
 
@@ -882,6 +956,18 @@ app.post('/api/returns', async (req, res) => {
   }
 });
 
+/**
+ * /api/dashboard — **Aplicando regras de custo**
+ * - Rejeitado/Negado => 0
+ * - Motivos do cliente => 0  (usa tipo_reclamacao contendo 'cliente')
+ * - Recebido no CD / Em inspeção => só frete
+ * - Demais => produto + frete
+ * Também retorna:
+ *  - daily  (por dia)
+ *  - monthly (por mês)
+ *  - status (mapa status -> quantidade)
+ *  - top_items (por SKU com prejuízo calculado pela regra)
+ */
 app.get('/api/dashboard', async (req, res) => {
   try {
     const from = req.query.from ? new Date(req.query.from) : null;
@@ -894,82 +980,129 @@ app.get('/api/dashboard', async (req, res) => {
     if (to)   { params.push(to);   whereParts.push(`created_at <  $${params.length}`); }
     const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    const sqlTotals = `
-      SELECT
-        COUNT(*)::int                                     AS total,
-        SUM( (COALESCE(valor_produto,0) + COALESCE(valor_frete,0)) )::numeric(12,2) AS prejuizo_total,
-        SUM( CASE WHEN LOWER(status) LIKE '%pend%'     THEN 1 ELSE 0 END )::int AS pendentes,
-        SUM( CASE WHEN LOWER(status) LIKE '%aprov%'    THEN 1 ELSE 0 END )::int AS aprovadas,
-        SUM( CASE WHEN LOWER(status) LIKE '%rej%' OR LOWER(status) LIKE '%neg%' THEN 1 ELSE 0 END )::int AS rejeitadas
-      FROM devolucoes
-      ${where};
-    `;
-
-    const sqlTop = `
+    // CTE base + custo efetivo (regra aplicada)
+    const baseCte = `
       WITH base AS (
         SELECT
+          created_at,
+          LOWER(COALESCE(status,''))              AS st,
+          LOWER(COALESCE(tipo_reclamacao,''))     AS motivo,
+          COALESCE(valor_produto,0)               AS vp,
+          COALESCE(valor_frete,0)                 AS vf,
           COALESCE(NULLIF(TRIM(sku),''), '(sem SKU)') AS sku,
-          NULLIF(TRIM(reclamacao),'') AS motivo,
-          (COALESCE(valor_produto,0) + COALESCE(valor_frete,0))::numeric(12,2) AS prejuizo
+          NULLIF(TRIM(reclamacao),'')             AS reclamacao
         FROM devolucoes
         ${where}
       ),
-      sum_por_sku AS (
+      cte AS (
         SELECT
-          sku,
-          COUNT(*)::int AS devolucoes,
-          SUM(prejuizo)::numeric(12,2) AS prejuizo
+          created_at, st, motivo, sku, reclamacao, vp, vf,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%'       THEN 0
+            WHEN motivo LIKE '%cliente%'                  THEN 0
+            WHEN st IN ('recebido_cd','em_inspecao')      THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
         FROM base
-        GROUP BY sku
-      ),
-      motivo_top AS (
-        SELECT DISTINCT ON (sku)
-          sku,
-          motivo,
-          COUNT(*) OVER (PARTITION BY sku, motivo) AS cnt
-        FROM base
-        WHERE motivo IS NOT NULL
-        ORDER BY sku, cnt DESC, motivo ASC
       )
+    `;
+
+    // Totais do período
+    const sqlTotals = `
+      ${baseCte}
+      SELECT
+        COUNT(*)::int AS total,
+        SUM(custo)::numeric(12,2) AS prejuizo_total,
+        SUM( CASE WHEN st LIKE '%pend%'  THEN 1 ELSE 0 END )::int AS pendentes,
+        SUM( CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END )::int AS aprovadas,
+        SUM( CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END )::int AS rejeitadas
+      FROM cte;
+    `;
+
+    // Top SKUs por prejuízo (regra aplicada)
+    const sqlTop = `
+      ${baseCte}
       SELECT
         s.sku,
         s.devolucoes,
         s.prejuizo,
         COALESCE(m.motivo, '—') AS motivo
-      FROM sum_por_sku s
-      LEFT JOIN motivo_top m USING (sku)
+      FROM (
+        SELECT sku, COUNT(*)::int AS devolucoes, SUM(custo)::numeric(12,2) AS prejuizo
+        FROM cte GROUP BY sku
+      ) s
+      LEFT JOIN (
+        SELECT DISTINCT ON (sku)
+          sku,
+          reclamacao AS motivo,
+          COUNT(*) OVER (PARTITION BY sku, reclamacao) AS cnt
+        FROM cte
+        WHERE reclamacao IS NOT NULL
+        ORDER BY sku, cnt DESC, reclamacao ASC
+      ) m USING (sku)
       ORDER BY s.prejuizo DESC, s.devolucoes DESC, s.sku ASC
-      LIMIT $${params.push(limitTop)};
-      `;
+      LIMIT $${params.length + 1};
+    `;
 
+    // Daily
     const sqlDaily = `
+      ${baseCte}
       SELECT
         DATE_TRUNC('day', created_at)::date AS dia,
         COUNT(*)::int AS devolucoes,
-        SUM( (COALESCE(valor_produto,0) + COALESCE(valor_frete,0)) )::numeric(12,2) AS prejuizo
-      FROM devolucoes
-      ${where}
+        SUM(custo)::numeric(12,2) AS prejuizo
+      FROM cte
       GROUP BY 1
       ORDER BY 1 ASC;
     `;
 
-    const [totalsQ, topQ, dailyQ] = await Promise.all([
-      query(sqlTotals, params.slice(0, whereParts.length)),
-      query(sqlTop, params),
-      query(sqlDaily, params.slice(0, whereParts.length)),
+    // Monthly (p/ gráfico de 6 meses)
+    const sqlMonthly = `
+      ${baseCte}
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS ym,
+        TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') AS label,
+        SUM(custo)::numeric(12,2) AS prejuizo
+      FROM cte
+      GROUP BY 1,2
+      ORDER BY 1 ASC;
+    `;
+
+    // Distribuição por status
+    const sqlStatus = `
+      ${baseCte}
+      SELECT st AS status, COUNT(*)::int AS n
+      FROM cte
+      GROUP BY 1
+      ORDER BY 2 DESC;
+    `;
+
+    // Executa em paralelo
+    const [totalsQ, topQ, dailyQ, monthlyQ, statusQ] = await Promise.all([
+      query(sqlTotals, params),
+      query(sqlTop, [...params, limitTop]),
+      query(sqlDaily, params),
+      query(sqlMonthly, params),
+      query(sqlStatus, params)
     ]);
+
+    // Mapa status -> quantidade
+    const statusObj = {};
+    for (const r of statusQ.rows) statusObj[r.status] = r.n;
 
     return res.json({
       range: { from: from || null, to: to || null },
       totals: {
-        total:        totalsQ.rows[0]?.total || 0,
-        pendentes:    totalsQ.rows[0]?.pendentes || 0,
-        aprovadas:    totalsQ.rows[0]?.aprovadas || 0,
-        rejeitadas:   totalsQ.rows[0]?.rejeitadas || 0,
+        total:          totalsQ.rows[0]?.total || 0,
+        pendentes:      totalsQ.rows[0]?.pendentes || 0,
+        aprovadas:      totalsQ.rows[0]?.aprovadas || 0,
+        rejeitadas:     totalsQ.rows[0]?.rejeitadas || 0,
         prejuizo_total: totalsQ.rows[0]?.prejuizo_total || 0
       },
       top_items: topQ.rows,
-      daily:     dailyQ.rows
+      daily:     dailyQ.rows.map(r => ({ date: r.dia, devolucoes: r.devolucoes, prejuizo: r.prejuizo })),
+      monthly:   monthlyQ.rows.map(r => ({ month: r.label, ym: r.ym, prejuizo: r.prejuizo })),
+      status:    statusObj
     });
   } catch (e) {
     console.error('GET /api/dashboard ERRO:', e);

@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log de Custos - Sistema de Devoluções</title>
+    <meta name="description" content="Sistema de auditoria e gestão de custos de devoluções - Controle completo de regras, políticas e responsabilidades">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/logs.css">
+    <link rel="stylesheet" href="css/navbar.css">
+</head>
+<body>
+    <div class="container-principal">
+        <!-- Cabeçalho -->
+        <header class="cabecalho-pagina">
+            <div>
+                <h1 class="titulo-pagina">Log de Custos</h1>
+                <p class="subtitulo-pagina">
+                    Auditoria das regras · Rejeitado = R$ 0,00 · Motivos do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete
+                </p>
+            </div>
+        </header>
+
+        <!-- Filtros -->
+        <div class="cartao-filtros">
+            <div class="grade-filtros">
+                <div class="grupo-filtro">
+                    <label class="rotulo-filtro" for="filtro-data-de">Data De</label>
+                    <input type="date" id="filtro-data-de" class="campo-entrada">
+                </div>
+
+                <div class="grupo-filtro">
+                    <label class="rotulo-filtro" for="filtro-data-ate">Data Até</label>
+                    <input type="date" id="filtro-data-ate" class="campo-entrada">
+                </div>
+
+                <div class="grupo-filtro">
+                    <label class="rotulo-filtro" for="filtro-status">Status</label>
+                    <select id="filtro-status" class="campo-entrada">
+                        <option value="">Todos</option>
+                        <option value="pendente">Pendente</option>
+                        <option value="aprovado">Aprovado</option>
+                        <option value="rejeitado">Rejeitado</option>
+                        <option value="recebido_cd">Recebido no CD</option>
+                        <option value="em_inspecao">Em Inspeção</option>
+                    </select>
+                </div>
+
+                <div class="grupo-filtro">
+                    <label class="rotulo-filtro" for="filtro-responsavel">Responsável Custo</label>
+                    <select id="filtro-responsavel" class="campo-entrada">
+                        <option value="">Todos</option>
+                        <option value="plataforma">Plataforma</option>
+                        <option value="loja">Loja</option>
+                        <option value="logistica">Logística</option>
+                    </select>
+                </div>
+
+                <div class="grupo-filtro">
+                    <label class="rotulo-filtro" for="filtro-loja">Loja</label>
+                    <input type="text" id="filtro-loja" class="campo-entrada" placeholder="Nome da loja">
+                </div>
+
+                <div class="grupo-filtro">
+                    <label class="rotulo-filtro" for="filtro-itens-pagina">Itens por Página</label>
+                    <select id="filtro-itens-pagina" class="campo-entrada">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+
+                <div class="grupo-filtro coluna-completa">
+                    <label class="rotulo-filtro" for="filtro-busca">Busca</label>
+                    <div class="campo-busca">
+                        <svg class="icone-busca" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <path d="m21 21-4.35-4.35"></path>
+                        </svg>
+                        <input type="text" id="filtro-busca" class="campo-entrada-busca" placeholder="Pedido, cliente, SKU ou motivo...">
+                    </div>
+                </div>
+
+                <div class="acoes-filtros coluna-completa">
+                    <button id="botao-aplicar" class="botao botao-primario">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                        </svg>
+                        Aplicar Filtros
+                    </button>
+                    <button id="botao-limpar" class="botao botao-secundario">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 6 6 18"></path>
+                            <path d="m6 6 12 12"></path>
+                        </svg>
+                        Limpar
+                    </button>
+                    <button id="botao-exportar" class="botao botao-secundario">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" x2="12" y1="15" y2="3"></line>
+                        </svg>
+                        Exportar CSV
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Resumo de Totais -->
+        <div class="resumo-totais">
+            <div class="item-resumo">
+                <span class="rotulo-resumo">Total de registros:</span>
+                <span class="valor-resumo" id="total-registros">0</span>
+            </div>
+            <div class="item-resumo">
+                <span class="rotulo-resumo">Soma do período:</span>
+                <span class="valor-resumo destaque" id="soma-periodo">R$ 0,00</span>
+            </div>
+        </div>
+
+        <!-- Tabela -->
+        <div class="cartao-tabela">
+            <div class="container-tabela">
+                <table class="tabela-logs">
+                    <thead>
+                        <tr>
+                        <th>Data</th>
+                        <th>Pedido</th>
+                        <th>Cliente</th>
+                        <th>Loja</th>
+                        <th>Status</th>
+                        <th class="texto-direita">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody id="corpo-tabela">
+                        <tr>
+                        <td colspan="6" class="celula-carregando">Carregando dados...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Paginação -->
+        <div class="controles-paginacao">
+            <button id="botao-anterior" class="botao botao-paginacao" disabled>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6"></path>
+                </svg>
+                Anterior
+            </button>
+            <span class="info-paginacao" id="info-paginacao">Página 1 de 1</span>
+            <button id="botao-proxima" class="botao botao-paginacao" disabled>
+                Próxima
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m9 18 6-6-6-6"></path>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Toast de notificação -->
+        <div id="toast" class="toast"></div>
+    </div>
+                <!-- Modal de detalhes -->
+            <div id="log-modal" class="rf-modal hidden" aria-hidden="true">
+            <div class="rf-modal__backdrop" data-modal-close></div>
+            <div class="rf-modal__card" role="dialog" aria-modal="true" aria-labelledby="log-modal-title">
+                <button class="rf-modal__close" title="Fechar" data-modal-close>&times;</button>
+
+                <h3 id="log-modal-title" class="rf-modal__title">Detalhes</h3>
+                <div class="rf-modal__actions">
+                    <a id="md-open-full" class="botao botao-primario" target="_blank" rel="noopener">
+                        Ver completo
+                    </a>
+                    <button id="md-copy" class="botao botao-secundario" type="button">Copiar #pedido</button>
+                </div>
+                <div class="rf-modal__meta">
+                <div><span class="rf-k">Pedido</span><span id="md-pedido" class="rf-v">—</span></div>
+                <div><span class="rf-k">Cliente</span><span id="md-cliente" class="rf-v">—</span></div>
+                <div><span class="rf-k">Loja</span><span id="md-loja" class="rf-v">—</span></div>
+                <div><span class="rf-k">Status</span><span id="md-status" class="rf-pill">—</span></div>
+                <div><span class="rf-k">Política</span><span id="md-politica" class="rf-v">—</span></div>
+                <div><span class="rf-k">Responsável</span><span id="md-resp" class="rf-v">—</span></div>
+                </div>
+
+                <div class="rf-modal__grid">
+                <div>
+                    <div class="rf-k">SKU / Motivo</div>
+                    <div id="md-sku" class="rf-v"></div>
+                    <div id="md-motivo" class="rf-v"></div>
+                </div>
+                <div>
+                    <div class="rf-k">Valores</div>
+                    <div class="rf-money"><span>Produto</span><b id="md-prod">R$ 0,00</b></div>
+                    <div class="rf-money"><span>Frete</span><b id="md-frete">R$ 0,00</b></div>
+                    <div class="rf-money rf-money--total"><span>Total</span><b id="md-total">R$ 0,00</b></div>
+                </div>
+                </div>
+
+                <div class="rf-modal__section">
+                <div class="rf-k">Observações</div>
+                <div id="md-reclamacao" class="rf-v"></div>
+                </div>
+
+                <div class="rf-modal__section">
+                <div class="rf-k">Linha do tempo</div>
+                <ul id="md-timeline" class="rf-timeline"></ul>
+                </div>
+            </div>
+            </div>
+
+
+      <script src="/js/header.js" defer></script>
+      <script src="/js/logs.js" defer></script>
+</body>
+</html>

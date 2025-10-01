@@ -98,6 +98,15 @@
         <div class="dashboard-card-header">
           <div>
             <h2 class="dashboard-card-title">Prejuízo Total</h2>
+            <a id="link-log" class="btn ghost" title="Ver log de custos">Ver log</a>
+              <script>
+                document.addEventListener('DOMContentLoaded', () => {
+                  const f = document.getElementById('filtro-from')?.value;
+                  const t = document.getElementById('filtro-to')?.value;
+                  const a = document.getElementById('link-log');
+                  if (a && f && t) a.href = `/logs.html?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+                });
+              </script>
             <p class="dashboard-card-subtitle">Análise financeira do período</p>
           </div>
         </div>
