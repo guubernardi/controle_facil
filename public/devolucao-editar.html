@@ -8,87 +8,64 @@
   <!-- Fonte / estilos globais -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/logs.css">
   <link rel="stylesheet" href="/css/navbar.css">
-
-  <style>
-    .page-wrap{max-width:1100px;margin:1.25rem auto;padding:0 1rem}
-    .page-head{display:flex;align-items:center;justify-content:space-between;margin:.5rem 0 1rem}
-    .title{font-weight:800;font-size:1.4rem}
-    .actions{display:flex;gap:.5rem;flex-wrap:wrap}
-
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-    .card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow-card);padding:1rem}
-    .card h3{margin:.25rem 0 1rem;font-size:1rem}
-    .row{display:grid;grid-template-columns:180px 1fr;gap:.5rem .75rem;align-items:center;margin:.35rem 0}
-    .row label{font-size:.85rem;color:var(--muted-foreground)}
-    .row input[type="text"], .row input[type="number"], .row input[type="date"], .row select, .row textarea{
-      width:100%;padding:.6rem .7rem;border:1px solid var(--border);border-radius:.5rem;background:#fff;
-    }
-    .row textarea{min-height:90px;resize:vertical}
-    .money-line{display:flex;justify-content:space-between;align-items:center;padding:.5rem .75rem;border:1px solid var(--border);border-radius:.75rem;margin:.5rem 0}
-    .money-line.total{border-color:#bcd0ea;background:#f6fbff;font-weight:700}
-
-    .pill{display:inline-flex;align-items:center;padding:.2rem .6rem;border-radius:999px;border:1px solid rgba(0,0,0,.06);font-size:.8rem;font-weight:600}
-    .pill.-pendente{background:#fff7d6;color:#946200;border-color:#ffe9a6}
-    .pill.-aprovado{background:#e9f9ef;color:#1d6b3a;border-color:#bfead0}
-    .pill.-rejeitado{background:#fde8e7;color:#9b1c1c;border-color:#f6c7c4}
-    .pill.-neutro{background:#eef2ff;color:#1f3a8a;border-color:#c7d2fe}
-
-    .hint{font-size:.8rem;color:var(--muted-foreground)}
-    .two{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
-    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;font-size:.8rem}
-  </style>
+  <link rel="stylesheet" href="/css/devolucao.css">
+  <link rel="stylesheet" href="/css/logs.css">
 </head>
-<body>
-  <!-- Navbar -->
+<body class="devolucao-page">
+  <!-- Navbar injetada pelo header.js -->
+  <div id="cabecalho"></div>
   <script src="/js/header.js" defer></script>
 
-  <main class="page-wrap">
-    <div class="page-head">
+  <main class="page-wrap" role="main">
+    <header class="page-head">
       <div>
-        <div class="title">Devolução <span id="dv-id" class="kbd"></span></div>
-        <div class="hint">Regras: Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete</div>
+        <h1 class="title">
+          Devolução <span id="dv-id" class="kbd" aria-live="polite"></span>
+        </h1>
+        <p class="hint">
+          Regras: Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete
+        </p>
       </div>
-      <div class="actions">
+      <div class="actions" role="group" aria-label="Ações da devolução">
         <button id="btn-recebido" class="botao botao-secundario" type="button" title="Marcar como recebido no CD">Recebido no CD</button>
         <button id="btn-insp-aprova" class="botao botao-secundario" type="button" title="Inspeção aprovada">Inspeção: aprovar</button>
         <button id="btn-insp-reprova" class="botao botao-secundario" type="button" title="Inspeção reprovada">Inspeção: reprovar</button>
         <a id="btn-voltar" class="botao botao-secundario" href="/logs.html">← Voltar</a>
         <button id="btn-salvar" class="botao botao-primario" type="button">Salvar</button>
       </div>
-    </div>
+    </header>
 
     <div class="grid">
       <!-- Coluna esquerda: dados -->
-      <section class="card">
-        <h3>Dados da Devolução</h3>
+      <section class="card" aria-labelledby="sec-dados">
+        <h2 id="sec-dados">Dados da Devolução</h2>
 
         <div class="row">
           <label for="id_venda">Número do Pedido</label>
-          <input id="id_venda" type="text" placeholder="Ex.: 12345 / TESTE-001">
+          <input id="id_venda" name="id_venda" type="text" placeholder="Ex.: 12345 / TESTE-001" autocomplete="off">
         </div>
 
         <div class="row">
           <label for="cliente_nome">Cliente</label>
-          <input id="cliente_nome" type="text" placeholder="Nome do cliente">
+          <input id="cliente_nome" name="cliente_nome" type="text" placeholder="Nome do cliente" autocomplete="name">
         </div>
 
         <div class="two">
           <div class="row">
             <label for="loja_nome">Loja</label>
-            <input id="loja_nome" type="text" placeholder="Nome da loja">
+            <input id="loja_nome" name="loja_nome" type="text" placeholder="Nome da loja" autocomplete="organization">
           </div>
           <div class="row">
             <label for="data_compra">Data da compra</label>
-            <input id="data_compra" type="date">
+            <input id="data_compra" name="data_compra" type="date" inputmode="numeric">
           </div>
         </div>
 
         <div class="two">
           <div class="row">
             <label for="status">Status</label>
-            <select id="status">
+            <select id="status" name="status">
               <option value="">—</option>
               <option value="pendente">Pendente</option>
               <option value="aprovado">Aprovado</option>
@@ -96,19 +73,19 @@
             </select>
           </div>
           <div class="row">
-            <label>Log</label>
-            <div id="log_status_pill" class="pill -neutro">—</div>
+            <label for="log_status_pill">Log</label>
+            <div id="log_status_pill" class="pill -neutro" aria-live="polite">—</div>
           </div>
         </div>
 
         <div class="two">
           <div class="row">
             <label for="sku">SKU</label>
-            <input id="sku" type="text" placeholder="Código do produto">
+            <input id="sku" name="sku" type="text" placeholder="Código do produto" autocomplete="off">
           </div>
           <div class="row">
             <label for="tipo_reclamacao">Motivo</label>
-            <select id="tipo_reclamacao">
+            <select id="tipo_reclamacao" name="tipo_reclamacao">
               <option value="">Selecione…</option>
               <option value="cliente-arrependimento">Cliente: arrependimento</option>
               <option value="cliente-endereco-errado">Cliente: endereço errado</option>
@@ -122,37 +99,40 @@
         <div class="two">
           <div class="row">
             <label for="nfe_numero">Número NFe</label>
-            <input id="nfe_numero" type="text" placeholder="Opcional">
+            <input id="nfe_numero" name="nfe_numero" type="text" placeholder="Opcional" inputmode="numeric" autocomplete="off">
           </div>
           <div class="row">
             <label for="nfe_chave">Chave NFe (44)</label>
-            <input id="nfe_chave" type="text" placeholder="Opcional">
+            <input id="nfe_chave" name="nfe_chave" type="text" placeholder="Opcional" inputmode="numeric" autocomplete="off" maxlength="44">
           </div>
         </div>
 
         <div class="row" style="grid-template-columns:1fr">
           <label for="reclamacao">Observações</label>
-          <textarea id="reclamacao" placeholder="Detalhes…"></textarea>
+          <textarea id="reclamacao" name="reclamacao" placeholder="Detalhes…"></textarea>
         </div>
       </section>
 
       <!-- Coluna direita: valores -->
-      <section class="card">
-        <h3>Valores</h3>
+      <section class="card" aria-labelledby="sec-valores">
+        <h2 id="sec-valores">Valores</h2>
+
         <div class="row">
           <label for="valor_produto">Valor do Produto (R$)</label>
-          <input id="valor_produto" inputmode="decimal" type="number" step="0.01" min="0" placeholder="0,00">
+          <input id="valor_produto" name="valor_produto" inputmode="decimal" type="number" step="0.01" min="0" placeholder="0,00">
         </div>
         <div class="row">
           <label for="valor_frete">Valor do Frete (R$)</label>
-          <input id="valor_frete" inputmode="decimal" type="number" step="0.01" min="0" placeholder="0,00">
+          <input id="valor_frete" name="valor_frete" inputmode="decimal" type="number" step="0.01" min="0" placeholder="0,00">
         </div>
 
         <div class="money-line"><span>Produto</span><b id="ml-prod">R$ 0,00</b></div>
         <div class="money-line"><span>Frete</span><b id="ml-frete">R$ 0,00</b></div>
         <div class="money-line total"><span>Total (regras)</span><b id="ml-total">R$ 0,00</b></div>
 
-        <div class="hint">Cálculo automático: rejeitado ou motivo do cliente = <b>R$ 0,00</b>; recebido no CD / em inspeção = <b>somente frete</b>; demais = produto + frete.</div>
+        <p class="hint">
+          Cálculo automático: rejeitado ou motivo do cliente = <b>R$ 0,00</b>; recebido no CD / em inspeção = <b>somente frete</b>; demais = <b>produto + frete</b>.
+        </p>
       </section>
     </div>
   </main>
@@ -160,6 +140,7 @@
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <!-- Lógica da página -->
   <script src="/js/devolucao-editar.js" defer></script>
 </body>
 </html>
