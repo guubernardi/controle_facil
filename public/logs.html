@@ -10,14 +10,18 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
-  <!-- Estilos (navbar.css depois para prevalecer no topo) -->
-  <link rel="stylesheet" href="../css/logs.css">
-  <link rel="stylesheet" href="../css/navbar.css">
+  <!-- Estilos (ordem importa: base -> página -> navbar) -->
+  <link rel="stylesheet" href="/css/index.css">
+  <link rel="stylesheet" href="/css/logs.css">
+  <link rel="stylesheet" href="/css/navbar.css">
 </head>
 <body class="logs-page">
+  <!-- Navbar (injetada pelo header.js) -->
   <div id="cabecalho"></div>
   <script src="/js/header.js" defer></script>
+
   <div class="container-principal">
+    <!-- Cabeçalho da página -->
     <header class="cabecalho-pagina">
       <div>
         <h1 class="titulo-pagina">Log de Custos</h1>
@@ -28,7 +32,7 @@
     </header>
 
     <!-- Filtros -->
-    <section class="cartao-filtros" aria-labelledby="filtros-title">
+    <div class="cartao-filtros" aria-labelledby="filtros-title">
       <h2 id="filtros-title" class="sr-only">Filtros</h2>
       <div class="grade-filtros">
         <div class="grupo-filtro">
@@ -112,10 +116,10 @@
           </button>
         </div>
       </div>
-    </section>
+    </div>
 
     <!-- Resumo de Totais -->
-    <section class="resumo-totais" aria-live="polite">
+    <div class="resumo-totais" aria-live="polite">
       <div class="item-resumo">
         <span class="rotulo-resumo">Total de registros:</span>
         <span class="valor-resumo" id="total-registros">0</span>
@@ -124,10 +128,10 @@
         <span class="rotulo-resumo">Soma do período:</span>
         <span class="valor-resumo destaque" id="soma-periodo">R$ 0,00</span>
       </div>
-    </section>
+    </div>
 
     <!-- Tabela -->
-    <section class="cartao-tabela">
+    <div class="cartao-tabela">
       <div class="container-tabela">
         <table class="tabela-logs">
           <thead>
@@ -147,10 +151,10 @@
           </tbody>
         </table>
       </div>
-    </section>
+    </div>
 
     <!-- Paginação -->
-    <section class="controles-paginacao" aria-live="polite">
+    <div class="controles-paginacao" aria-live="polite">
       <button id="botao-anterior" class="botao botao-paginacao" disabled>
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="m15 18-6-6 6-6"></path>
@@ -164,13 +168,13 @@
           <path d="m9 18 6-6-6-6"></path>
         </svg>
       </button>
-    </section>
+    </div>
 
     <!-- Toast -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
 
-  <!-- Script da página -->
+  <!-- Scripts da página -->
   <script src="/js/logs.js" defer></script>
 </body>
 </html>

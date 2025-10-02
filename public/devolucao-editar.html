@@ -5,36 +5,103 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Devolução • Edição</title>
 
-  <!-- Fonte / estilos globais -->
+  <!-- fontes / css -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/css/navbar.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- seus bundles -->
+  <link rel="stylesheet" href="/css/index.css">
   <link rel="stylesheet" href="/css/devolucao.css">
   <link rel="stylesheet" href="/css/logs.css">
+
+  <style>
+    /* Topbar compacta (visual apenas) */
+    .topbar-mini{
+      position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:.75rem;
+      padding:1rem 1.5rem;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
+      border-bottom:1px solid rgba(203,213,225,.4);box-shadow:0 1px 3px 0 rgba(0,0,0,.02);
+    }
+    .topbar-mini .voltar{
+      display:inline-flex;align-items:center;gap:.5rem;padding:.65rem 1.1rem;border-radius:10px;
+      background:#fff;color:#334155;border:1px solid #E2E8F0;text-decoration:none;font-weight:600;font-size:.9rem;
+      transition:.2s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 2px 0 rgba(0,0,0,.03);
+    }
+    .topbar-mini .voltar:hover{background:#F8FAFC;border-color:#CBD5E1;transform:translateY(-1px);box-shadow:0 4px 6px -1px rgba(0,0,0,.06);}
+    .topbar-mini .ico{width:18px;height:18px}
+    /* Dialog */
+    dialog#dlg-recebido{border:0;border-radius:16px;padding:0;box-shadow:0 20px 25px -5px rgba(0,0,0,.08),0 10px 10px -5px rgba(0,0,0,.02);max-width:500px}
+    dialog#dlg-recebido::backdrop{background:rgba(15,23,42,.4);backdrop-filter:blur(2px)}
+    dialog#dlg-recebido form{padding:24px 26px}
+    .cd-extra span{white-space:nowrap}
+    /* Opção A: empurrar o Salvar para a direita */
+    .actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+    .actions-split { flex:1 1 auto; }
+    .botao .ico-16{ width:16px;height:16px;margin-right:.4rem }
+    .botao-primario { display:inline-flex; align-items:center; }
+  </style>
 </head>
 <body class="devolucao-page">
-  <!-- Navbar injetada pelo header.js -->
-  <div id="cabecalho"></div>
-  <script src="/js/header.js" defer></script>
+  <!-- Topbar -->
+  <div class="topbar-mini">
+    <a href="/logs.html" class="voltar" aria-label="Voltar para o Log de Custos">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+      <span>Voltar para o Log</span>
+    </a>
+  </div>
 
   <main class="page-wrap" role="main">
+    <!-- ÚNICO header -->
     <header class="page-head">
       <div>
-        <h1 class="title">
-          Devolução <span id="dv-id" class="kbd" aria-live="polite"></span>
-        </h1>
-        <p class="hint">
-          Regras: Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete
-        </p>
+        <h1 class="title">Devolução <span id="dv-id" class="kbd" aria-live="polite"></span></h1>
+        <p class="hint"><strong>Regras:</strong> Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete</p>
       </div>
-      <div class="actions" role="group" aria-label="Ações da devolução">
-        <button id="btn-recebido" class="botao botao-secundario" type="button" title="Marcar como recebido no CD">Recebido no CD</button>
-        <button id="btn-insp-aprova" class="botao botao-secundario" type="button" title="Inspeção aprovada">Inspeção: aprovar</button>
-        <button id="btn-insp-reprova" class="botao botao-secundario" type="button" title="Inspeção reprovada">Inspeção: reprovar</button>
-        <a id="btn-voltar" class="botao botao-secundario" href="/logs.html">← Voltar</a>
-        <button id="btn-salvar" class="botao botao-primario" type="button">Salvar</button>
+
+      <div class="actions -tight" role="group" aria-label="Ações da devolução">
+        
+
+        <span class="actions-split"></span>
+
+        <button id="btn-insp-aprova" class="botao botao-success" type="button" title="Inspeção aprovada">✔ Inspeção: aprovar</button>
+        <button id="btn-insp-reprova" class="botao botao-danger" type="button" title="Inspeção reprovada">✖ Inspeção: reprovar</button>
+
+        <button id="btn-salvar" class="botao botao-primario" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
+          <svg class="ico-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M20 6L9 17l-5-5"/>
+          </svg>
+          <span>Salvar</span>
+        </button>
       </div>
     </header>
+
+    <!-- Dialog: Recebido no CD -->
+    <dialog id="dlg-recebido" aria-labelledby="rcd-title">
+      <form method="dialog" id="rcd-form">
+        <h3 id="rcd-title" style="margin:0 0 16px;font-size:1.15rem;font-weight:700;color:#0F172A">Recebido no CD</h3>
+
+        <div style="display:grid;grid-template-columns:140px 1fr;gap:12px 16px;align-items:center">
+          <label for="rcd-resp" style="color:#64748B;font-size:.9rem;font-weight:500">Responsável</label>
+          <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" style="width:100%;padding:.65rem .85rem;border:1px solid #E2E8F0;border-radius:10px;font-size:.9rem;transition:all .2s">
+
+          <label for="rcd-when" style="color:#64748B;font-size:.9rem;font-weight:500">Data/Hora</label>
+          <input id="rcd-when" type="datetime-local" style="width:100%;padding:.65rem .85rem;border:1px solid #E2E8F0;border-radius:10px;font-size:.9rem;transition:all .2s">
+        </div>
+
+        <div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px">
+          <button id="rcd-unset" type="button" class="botao botao-outline">Não foi recebido</button>
+          <div style="display:flex;gap:10px">
+            <button type="button" class="botao botao-secundario" id="rcd-cancel">Cancelar</button>
+            <button id="rcd-save" type="submit" class="botao botao-primario">Salvar</button>
+          </div>
+        </div>
+
+        <p style="margin:12px 0 0;color:#94A3B8;font-size:.85rem;line-height:1.5">
+          Dica: se deixar o responsável vazio, será usado <b style="color:#475569">"cd"</b>. Se não escolher uma data, uso a data/hora atual.
+        </p>
+      </form>
+    </dialog>
 
     <div class="grid">
       <!-- Coluna esquerda: dados -->
@@ -72,9 +139,24 @@
               <option value="rejeitado">Rejeitado</option>
             </select>
           </div>
+
+          <!-- Log atual (workflow) -->
           <div class="row">
-            <label for="log_status_pill">Log</label>
-            <div id="log_status_pill" class="pill -neutro" aria-live="polite">—</div>
+            <label for="pill-log">Log atual</label>
+            <div id="pill-log" class="pill -neutro" aria-live="polite">—</div>
+          </div>
+        </div>
+
+        <!-- No CD (independente do log) -->
+        <div class="row">
+          <label for="pill-cd">No CD</label>
+          <div>
+            <div id="pill-cd" class="pill -neutro" aria-live="polite">não recebido</div>
+            <div id="cd-extra" class="cd-extra" style="margin-top:.35rem; font-size:.85rem; color:#64748B">
+              <span id="cd-resp" hidden>Resp.: —</span>
+              <span id="cd-sep" hidden> • </span>
+              <span id="cd-when" hidden>Quando: —</span>
+            </div>
           </div>
         </div>
 
@@ -116,7 +198,6 @@
       <!-- Coluna direita: valores -->
       <section class="card" aria-labelledby="sec-valores">
         <h2 id="sec-valores">Valores</h2>
-
         <div class="row">
           <label for="valor_produto">Valor do Produto (R$)</label>
           <input id="valor_produto" name="valor_produto" inputmode="decimal" type="number" step="0.01" min="0" placeholder="0,00">
@@ -134,13 +215,40 @@
           Cálculo automático: rejeitado ou motivo do cliente = <b>R$ 0,00</b>; recebido no CD / em inspeção = <b>somente frete</b>; demais = <b>produto + frete</b>.
         </p>
       </section>
+
+      <!-- Resumo & Ações rápidas -->
+      <section class="card resumo-card" aria-labelledby="sec-resumo">
+        <h2 id="sec-resumo">Resumo & Ações rápidas</h2>
+
+        <div class="resumo-line"><span>Status</span><b id="resumo-status">—</b></div>
+        <div class="resumo-line"><span>Log</span><b id="resumo-log">—</b></div>
+        <div class="resumo-line"><span>No CD</span><b id="resumo-cd">não recebido</b></div>
+
+        <hr class="resumo-sep"/>
+
+        <div class="resumo-line"><span>Produto</span><b id="resumo-prod">R$ 0,00</b></div>
+        <div class="resumo-line"><span>Frete</span><b id="resumo-frete">R$ 0,00</b></div>
+        <div class="resumo-line total"><span>Total (regras)</span><b id="resumo-total">R$ 0,00</b></div>
+
+        <div class="resumo-quick">
+          <button id="rq-receber" class="botao botao-ghost" type="button">Marcar recebido</button>
+          <button id="rq-aprovar" class="botao botao-success" type="button">Aprovar</button>
+          <button id="rq-reprovar" class="botao botao-danger" type="button">Reprovar</button>
+        </div>
+      </section>
+
+      <!-- Histórico -->
+      <section class="card" aria-labelledby="sec-historico">
+        <h2 id="sec-historico">Histórico</h2>
+        <div id="events-list" class="timeline" role="feed" aria-busy="false"></div>
+
+        <div id="events-loading" class="timeline-loading" hidden>Carregando…</div>
+        <div id="events-empty" class="timeline-empty" hidden>Nenhum evento ainda.</div>
+      </section>
     </div>
   </main>
 
-  <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <!-- Lógica da página -->
   <script src="/js/devolucao-editar.js" defer></script>
 </body>
 </html>

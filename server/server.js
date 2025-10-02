@@ -1422,6 +1422,55 @@ app.patch('/api/returns/:id/cd/receive', async (req, res) => {
   }
 });
 
+// Remover marcação de "Recebido no CD"
+app.patch('/api/returns/:id/cd/unreceive', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+
+    // garante que existe
+    const r0 = await query('SELECT id, status, log_status FROM devolucoes WHERE id=$1', [id]);
+    if (!r0.rows[0]) return res.status(404).json({ error: 'Devolução não encontrada' });
+
+    const responsavel = (req.body?.responsavel || '').trim() || 'cd';
+    const when = req.body?.when ? new Date(req.body.when) : new Date();
+
+    // evento — com idempotência opcional
+    const ev = await addReturnEvent({
+      returnId: id,
+      type: 'status',
+      title: 'Recebimento removido',
+      message: `Marcação de "recebido no CD" desfeita${responsavel ? ` por ${responsavel}` : ''}`,
+      meta: {
+        log_status: null,
+        cd: { unreceivedAt: when.toISOString(), responsavel }
+      },
+      createdBy: req.body?.updated_by || 'cd',
+      idempKey: getIdempKey(req)
+    });
+
+    // best-effort: limpar colunas se existirem
+    const cols = await tableHasColumns('devolucoes', ['log_status','cd_recebido_em','cd_responsavel']);
+    const sets = [];
+    const args = [];
+
+    if (cols.log_status)      { sets.push(`log_status = NULL`); }
+    if (cols.cd_recebido_em)  { sets.push(`cd_recebido_em = NULL`); }
+    if (cols.cd_responsavel)  { sets.push(`cd_responsavel = NULL`); }
+
+    if (sets.length) {
+      args.push(id);
+      await query(`UPDATE devolucoes SET ${sets.join(', ')}, updated_at=now() WHERE id=$${args.length}`, args)
+        .catch(err => console.warn('[CD UNRECEIVE] update opcional ignorado:', err.code || err.message));
+    }
+
+    return res.json({ ok: true, event: ev });
+  } catch (e) {
+    console.error('PATCH /cd/unreceive erro:', e);
+    return res.status(500).json({ error: 'Falha ao remover marcação de recebimento.' });
+  }
+}); 
+
 // Inspeção no CD
 app.patch('/api/returns/:id/cd/inspect', async (req, res) => {
   try {
