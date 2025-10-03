@@ -9,36 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
-  <!-- seus bundles -->
-  <link rel="stylesheet" href="/css/index.css">
   <link rel="stylesheet" href="/css/devolucao.css">
-  <link rel="stylesheet" href="/css/logs.css">
-
-  <style>
-    /* Topbar compacta (visual apenas) */
-    .topbar-mini{
-      position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:.75rem;
-      padding:1rem 1.5rem;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
-      border-bottom:1px solid rgba(203,213,225,.4);box-shadow:0 1px 3px 0 rgba(0,0,0,.02);
-    }
-    .topbar-mini .voltar{
-      display:inline-flex;align-items:center;gap:.5rem;padding:.65rem 1.1rem;border-radius:10px;
-      background:#fff;color:#334155;border:1px solid #E2E8F0;text-decoration:none;font-weight:600;font-size:.9rem;
-      transition:.2s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 2px 0 rgba(0,0,0,.03);
-    }
-    .topbar-mini .voltar:hover{background:#F8FAFC;border-color:#CBD5E1;transform:translateY(-1px);box-shadow:0 4px 6px -1px rgba(0,0,0,.06);}
-    .topbar-mini .ico{width:18px;height:18px}
-    /* Dialog */
-    dialog#dlg-recebido{border:0;border-radius:16px;padding:0;box-shadow:0 20px 25px -5px rgba(0,0,0,.08),0 10px 10px -5px rgba(0,0,0,.02);max-width:500px}
-    dialog#dlg-recebido::backdrop{background:rgba(15,23,42,.4);backdrop-filter:blur(2px)}
-    dialog#dlg-recebido form{padding:24px 26px}
-    .cd-extra span{white-space:nowrap}
-    /* Opção A: empurrar o Salvar para a direita */
-    .actions { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
-    .actions-split { flex:1 1 auto; }
-    .botao .ico-16{ width:16px;height:16px;margin-right:.4rem }
-    .botao-primario { display:inline-flex; align-items:center; }
-  </style>
 </head>
 <body class="devolucao-page">
   <!-- Topbar -->
@@ -52,7 +23,7 @@
   </div>
 
   <main class="page-wrap" role="main">
-    <!-- ÚNICO header -->
+    <!-- Header -->
     <header class="page-head">
       <div>
         <h1 class="title">Devolução <span id="dv-id" class="kbd" aria-live="polite"></span></h1>
@@ -60,14 +31,13 @@
       </div>
 
       <div class="actions -tight" role="group" aria-label="Ações da devolução">
-        
-
         <span class="actions-split"></span>
 
-        <button id="btn-insp-aprova" class="botao botao-success" type="button" title="Inspeção aprovada">✔ Inspeção: aprovar</button>
-        <button id="btn-insp-reprova" class="botao botao-danger" type="button" title="Inspeção reprovada">✖ Inspeção: reprovar</button>
+        <!-- principais: sólidos -->
+        <button id="btn-insp-aprova"  class="btn btn--success btn--lg" type="button" title="Inspeção aprovada"><span>✔ Inspeção: Aprovar</span></button>
+        <button id="btn-insp-reprova" class="btn btn--danger  btn--lg" type="button" title="Inspeção reprovada"><span>✖ Inspeção: Reprovar</span></button>
 
-        <button id="btn-salvar" class="botao botao-primario" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
+        <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
           <svg class="ico-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M20 6L9 17l-5-5"/>
           </svg>
@@ -90,10 +60,10 @@
         </div>
 
         <div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px">
-          <button id="rcd-unset" type="button" class="botao botao-outline">Não foi recebido</button>
+          <button id="rcd-unset"  type="button" class="btn btn--neutral btn--outline">Não foi recebido</button>
           <div style="display:flex;gap:10px">
-            <button type="button" class="botao botao-secundario" id="rcd-cancel">Cancelar</button>
-            <button id="rcd-save" type="submit" class="botao botao-primario">Salvar</button>
+            <button type="button" class="btn btn--ghost" id="rcd-cancel">Cancelar</button>
+            <button id="rcd-save" type="submit" class="btn btn--primary">Salvar</button>
           </div>
         </div>
 
@@ -103,8 +73,27 @@
       </form>
     </dialog>
 
+    <!-- Dialog: Inspeção -->
+    <dialog id="dlg-inspecao" aria-labelledby="insp-title">
+      <form method="dialog" id="insp-form" style="padding:24px 26px">
+        <h3 id="insp-title" style="margin:0 0 16px;font-size:1.15rem;font-weight:700;color:#0F172A">Inspeção</h3>
+
+        <div id="insp-sub" style="margin:-6px 0 14px;color:#64748B;font-size:.95rem;"></div>
+
+        <label for="insp-text" style="color:#64748B;font-size:.9rem;font-weight:500;display:block;margin-bottom:.35rem">
+          Observação (opcional)
+        </label>
+        <textarea id="insp-text" rows="4" style="width:100%;padding:.65rem .85rem;border:1px solid #E2E8F0;border-radius:10px;font-size:.95rem;line-height:1.45;resize:vertical"></textarea>
+
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+          <button type="button" class="btn btn--ghost" id="insp-cancel">Cancelar</button>
+          <button type="submit" class="btn btn--primary" id="insp-confirm">Confirmar</button>
+        </div>
+      </form>
+    </dialog>
+
     <div class="grid">
-      <!-- Coluna esquerda: dados -->
+      <!-- Dados -->
       <section class="card" aria-labelledby="sec-dados">
         <h2 id="sec-dados">Dados da Devolução</h2>
 
@@ -140,14 +129,13 @@
             </select>
           </div>
 
-          <!-- Log atual (workflow) -->
           <div class="row">
             <label for="pill-log">Log atual</label>
             <div id="pill-log" class="pill -neutro" aria-live="polite">—</div>
           </div>
         </div>
 
-        <!-- No CD (independente do log) -->
+        <!-- No CD -->
         <div class="row">
           <label for="pill-cd">No CD</label>
           <div>
@@ -195,7 +183,7 @@
         </div>
       </section>
 
-      <!-- Coluna direita: valores -->
+      <!-- Valores -->
       <section class="card" aria-labelledby="sec-valores">
         <h2 id="sec-valores">Valores</h2>
         <div class="row">
@@ -209,7 +197,7 @@
 
         <div class="money-line"><span>Produto</span><b id="ml-prod">R$ 0,00</b></div>
         <div class="money-line"><span>Frete</span><b id="ml-frete">R$ 0,00</b></div>
-        <div class="money-line total"><span>Total (regras)</span><b id="ml-total">R$ 0,00</b></div>
+        <div class="money-line total"><span>Total</span><b id="ml-total">R$ 0,00</b></div>
 
         <p class="hint">
           Cálculo automático: rejeitado ou motivo do cliente = <b>R$ 0,00</b>; recebido no CD / em inspeção = <b>somente frete</b>; demais = <b>produto + frete</b>.
@@ -231,9 +219,16 @@
         <div class="resumo-line total"><span>Total (regras)</span><b id="resumo-total">R$ 0,00</b></div>
 
         <div class="resumo-quick">
-          <button id="rq-receber" class="botao botao-ghost" type="button">Marcar recebido</button>
-          <button id="rq-aprovar" class="botao botao-success" type="button">Aprovar</button>
-          <button id="rq-reprovar" class="botao botao-danger" type="button">Reprovar</button>
+          <!-- secundário: arrow -->
+          <button id="rq-receber" class="btn btn--arrow btn--neutral btn--sm" type="button">
+            <span>Marcar recebido</span>
+            <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4.5 12h15M19.5 12l-6.75-6.75M19.5 12l-6.75 6.75"/>
+            </svg>
+          </button>
+
+          <button id="rq-aprovar"  class="btn btn--success btn--sm" type="button">Aprovar</button>
+          <button id="rq-reprovar" class="btn btn--danger  btn--sm" type="button">Reprovar</button>
         </div>
       </section>
 
@@ -241,7 +236,6 @@
       <section class="card" aria-labelledby="sec-historico">
         <h2 id="sec-historico">Histórico</h2>
         <div id="events-list" class="timeline" role="feed" aria-busy="false"></div>
-
         <div id="events-loading" class="timeline-loading" hidden>Carregando…</div>
         <div id="events-empty" class="timeline-empty" hidden>Nenhum evento ainda.</div>
       </section>

@@ -184,32 +184,78 @@
     }
   }
 
-  async function inspect(result) {
-    try {
-      disableHead(true);
-      const observacao = prompt(`Observação para inspeção (${result})?`) || '';
-      const when = new Date().toISOString();
-      const r = await fetch(`/api/returns/${encodeURIComponent(current.id)}/cd/inspect`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': `inspect-${current.id}-${when}-${result}`
-        },
-        body: JSON.stringify({ resultado: result, observacao, updated_by: 'frontend', when })
-      });
-      if (!r.ok) {
-        const e = await r.json().catch(() => null);
-        throw new Error(e?.error || 'Falha na inspeção');
-      }
-      await reloadCurrent();
-      toast(`Inspeção registrada (${result})!`, 'success');
-      await refreshTimeline(current.id);
-    } catch (e) {
-      toast(e.message || 'Erro', 'error');
-    } finally {
-      disableHead(false);
+  async function runInspect(result, observacao) {
+  try {
+    disableHead(true);
+    const when = new Date().toISOString();
+    const r = await fetch(`/api/returns/${encodeURIComponent(current.id)}/cd/inspect`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `inspect-${current.id}-${when}-${result}`
+      },
+      body: JSON.stringify({ resultado: result, observacao: observacao || '', updated_by: 'frontend', when })
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => null);
+      throw new Error(e?.error || 'Falha na inspeção');
     }
+    await reloadCurrent();
+    toast(`Inspeção registrada (${result})!`, 'success');
+    await refreshTimeline(current.id);
+  } catch (e) {
+    toast(e.message || 'Erro', 'error');
+  } finally {
+    disableHead(false);
   }
+}
+
+  function openInspectDialog(result) {
+    const dlg   = document.getElementById('dlg-inspecao');
+    const title = document.getElementById('insp-title');
+    const sub   = document.getElementById('insp-sub');
+    const txt   = document.getElementById('insp-text');
+    const btnOk = document.getElementById('insp-confirm');
+    const btnNo = document.getElementById('insp-cancel');
+
+    if (!dlg) return;
+
+    // visual conforme ação
+    const isApprove = result === 'aprovado';
+    title.textContent = isApprove ? 'Aprovar inspeção' : 'Reprovar inspeção';
+    sub.textContent   = isApprove
+      ? 'Confirme a aprovação da inspeção. Você pode adicionar uma observação.'
+      : 'Confirme a reprovação da inspeção. Você pode adicionar uma observação.';
+    btnOk.classList.toggle('aprovar',  isApprove);
+    btnOk.classList.toggle('reprovar', !isApprove);
+
+    txt.value = '';
+    dlg.showModal();
+
+    // handlers pontuais
+    const onSubmit = (ev) => {
+      ev.preventDefault();
+      const obs = txt.value.trim();
+      dlg.close();
+      // executa
+      runInspect(result, obs);
+      cleanup();
+    };
+    const onCancel = () => { dlg.close(); cleanup(); };
+
+    function cleanup(){
+      dlg.removeEventListener('close', onCancel);
+      document.getElementById('insp-form')?.removeEventListener('submit', onSubmit);
+      btnNo?.removeEventListener('click', onCancel);
+    }
+
+    document.getElementById('insp-form')?.addEventListener('submit', onSubmit);
+    btnNo?.addEventListener('click', onCancel);
+
+    // foco no textarea
+    setTimeout(() => txt?.focus(), 0);
+  }
+
 
   function disableHead(disabled) {
     ['btn-salvar', 'btn-recebido', 'btn-insp-aprova', 'btn-insp-reprova',
@@ -347,9 +393,10 @@
   });
 
   // Botões do topo
-  $('btn-salvar')?.addEventListener('click', save);
-  $('btn-insp-aprova')?.addEventListener('click', () => inspect('aprovado'));
-  $('btn-insp-reprova')?.addEventListener('click', () => inspect('rejeitado'));
+  $('btn-insp-aprova')?.addEventListener('click', () => openInspectDialog('aprovado'));
+  $('btn-insp-reprova')?.addEventListener('click', () => openInspectDialog('rejeitado'));
+  $('rq-aprovar')?.addEventListener('click', () => openInspectDialog('aprovado'));
+  $('rq-reprovar')?.addEventListener('click', () => openInspectDialog('rejeitado'));
 
   // ===== TIMELINE =====
   async function fetchEvents(id, limit = 100, offset = 0) {
