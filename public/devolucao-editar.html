@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Devolução • Edição</title>
-
-  <!-- fontes / css -->
+  <title>Controle Facil - Edição</title>
+  <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-
-  <link rel="stylesheet" href="/css/devolucao.css">
+  <link rel="stylesheet" href="css/devolucao.css">
 </head>
 <body class="devolucao-page">
+
   <!-- Topbar -->
   <div class="topbar-mini">
     <a href="/logs.html" class="voltar" aria-label="Voltar para o Log de Custos">
@@ -23,7 +23,6 @@
   </div>
 
   <main class="page-wrap" role="main">
-    <!-- Header -->
     <header class="page-head">
       <div>
         <h1 class="title">Devolução <span id="dv-id" class="kbd" aria-live="polite"></span></h1>
@@ -33,13 +32,24 @@
       <div class="actions -tight" role="group" aria-label="Ações da devolução">
         <span class="actions-split"></span>
 
-        <!-- principais: sólidos -->
-        <button id="btn-insp-aprova"  class="btn btn--success btn--lg" type="button" title="Inspeção aprovada"><span>✔ Inspeção: Aprovar</span></button>
-        <button id="btn-insp-reprova" class="btn btn--danger  btn--lg" type="button" title="Inspeção reprovada"><span>✖ Inspeção: Reprovar</span></button>
+        <button id="btn-insp-aprova" class="btn btn--success btn--lg" type="button" title="Inspeção aprovada">
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M20 6L9 17l-5-5"/>
+          </svg>
+          <span>Inspeção: Aprovar</span>
+        </button>
+        
+        <button id="btn-insp-reprova" class="btn btn--danger btn--lg" type="button" title="Inspeção reprovada">
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+          <span>Inspeção: Reprovar</span>
+        </button>
 
         <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
-          <svg class="ico-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M20 6L9 17l-5-5"/>
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+            <path d="M17 21v-8H7v8M7 3v5h8"/>
           </svg>
           <span>Salvar</span>
         </button>
@@ -49,43 +59,40 @@
     <!-- Dialog: Recebido no CD -->
     <dialog id="dlg-recebido" aria-labelledby="rcd-title">
       <form method="dialog" id="rcd-form">
-        <h3 id="rcd-title" style="margin:0 0 16px;font-size:1.15rem;font-weight:700;color:#0F172A">Recebido no CD</h3>
+        <h3 id="rcd-title">Recebido no CD</h3>
 
-        <div style="display:grid;grid-template-columns:140px 1fr;gap:12px 16px;align-items:center">
-          <label for="rcd-resp" style="color:#64748B;font-size:.9rem;font-weight:500">Responsável</label>
-          <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" style="width:100%;padding:.65rem .85rem;border:1px solid #E2E8F0;border-radius:10px;font-size:.9rem;transition:all .2s">
+        <div class="dialog-grid">
+          <label for="rcd-resp">Responsável</label>
+          <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)">
 
-          <label for="rcd-when" style="color:#64748B;font-size:.9rem;font-weight:500">Data/Hora</label>
-          <input id="rcd-when" type="datetime-local" style="width:100%;padding:.65rem .85rem;border:1px solid #E2E8F0;border-radius:10px;font-size:.9rem;transition:all .2s">
+          <label for="rcd-when">Data/Hora</label>
+          <input id="rcd-when" type="datetime-local">
         </div>
 
-        <div style="display:flex;justify-content:space-between;gap:10px;margin-top:20px">
-          <button id="rcd-unset"  type="button" class="btn btn--neutral btn--outline">Não foi recebido</button>
-          <div style="display:flex;gap:10px">
+        <div class="dialog-actions">
+          <button id="rcd-unset" type="button" class="btn btn--neutral btn--outline">Não foi recebido</button>
+          <div class="dialog-actions-right">
             <button type="button" class="btn btn--ghost" id="rcd-cancel">Cancelar</button>
             <button id="rcd-save" type="submit" class="btn btn--primary">Salvar</button>
           </div>
         </div>
 
-        <p style="margin:12px 0 0;color:#94A3B8;font-size:.85rem;line-height:1.5">
-          Dica: se deixar o responsável vazio, será usado <b style="color:#475569">"cd"</b>. Se não escolher uma data, uso a data/hora atual.
+        <p class="dialog-hint">
+          Dica: se deixar o responsável vazio, será usado <b>"cd"</b>. Se não escolher uma data, uso a data/hora atual.
         </p>
       </form>
     </dialog>
 
     <!-- Dialog: Inspeção -->
     <dialog id="dlg-inspecao" aria-labelledby="insp-title">
-      <form method="dialog" id="insp-form" style="padding:24px 26px">
-        <h3 id="insp-title" style="margin:0 0 16px;font-size:1.15rem;font-weight:700;color:#0F172A">Inspeção</h3>
+      <form method="dialog" id="insp-form">
+        <h3 id="insp-title">Inspeção</h3>
+        <div id="insp-sub" class="dialog-subtitle"></div>
 
-        <div id="insp-sub" style="margin:-6px 0 14px;color:#64748B;font-size:.95rem;"></div>
+        <label for="insp-text" class="dialog-label">Observação (opcional)</label>
+        <textarea id="insp-text" rows="4" placeholder="Adicione detalhes sobre a inspeção..."></textarea>
 
-        <label for="insp-text" style="color:#64748B;font-size:.9rem;font-weight:500;display:block;margin-bottom:.35rem">
-          Observação (opcional)
-        </label>
-        <textarea id="insp-text" rows="4" style="width:100%;padding:.65rem .85rem;border:1px solid #E2E8F0;border-radius:10px;font-size:.95rem;line-height:1.45;resize:vertical"></textarea>
-
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+        <div class="dialog-actions-simple">
           <button type="button" class="btn btn--ghost" id="insp-cancel">Cancelar</button>
           <button type="submit" class="btn btn--primary" id="insp-confirm">Confirmar</button>
         </div>
@@ -140,7 +147,7 @@
           <label for="pill-cd">No CD</label>
           <div>
             <div id="pill-cd" class="pill -neutro" aria-live="polite">não recebido</div>
-            <div id="cd-extra" class="cd-extra" style="margin-top:.35rem; font-size:.85rem; color:#64748B">
+            <div id="cd-extra" class="cd-extra">
               <span id="cd-resp" hidden>Resp.: —</span>
               <span id="cd-sep" hidden> • </span>
               <span id="cd-when" hidden>Quando: —</span>
@@ -207,11 +214,9 @@
       <!-- Resumo & Ações rápidas -->
       <section class="card resumo-card" aria-labelledby="sec-resumo">
         <h2 id="sec-resumo">Resumo & Ações rápidas</h2>
-
         <div class="resumo-line"><span>Status</span><b id="resumo-status">—</b></div>
         <div class="resumo-line"><span>Log</span><b id="resumo-log">—</b></div>
         <div class="resumo-line"><span>No CD</span><b id="resumo-cd">não recebido</b></div>
-
         <hr class="resumo-sep"/>
 
         <div class="resumo-line"><span>Produto</span><b id="resumo-prod">R$ 0,00</b></div>
@@ -219,7 +224,6 @@
         <div class="resumo-line total"><span>Total (regras)</span><b id="resumo-total">R$ 0,00</b></div>
 
         <div class="resumo-quick">
-          <!-- secundário: arrow -->
           <button id="rq-receber" class="btn btn--arrow btn--neutral btn--sm" type="button">
             <span>Marcar recebido</span>
             <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -227,8 +231,8 @@
             </svg>
           </button>
 
-          <button id="rq-aprovar"  class="btn btn--success btn--sm" type="button">Aprovar</button>
-          <button id="rq-reprovar" class="btn btn--danger  btn--sm" type="button">Reprovar</button>
+          <button id="rq-aprovar" class="btn btn--success btn--sm" type="button">Aprovar</button>
+          <button id="rq-reprovar" class="btn btn--danger btn--sm" type="button">Reprovar</button>
         </div>
       </section>
 
@@ -241,8 +245,8 @@
       </section>
     </div>
   </main>
-
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/js/devolucao-editar.js" defer></script>
+  
+  <script src="js/devolucao-editar.js"></script>
 </body>
 </html>

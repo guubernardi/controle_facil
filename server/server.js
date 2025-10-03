@@ -13,6 +13,12 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
+// Todas as rotas /api retornam JSON com charset explícito em UTF-8
+app.use('/api', (req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
+
 // Aviso de variáveis de ambiente ausentes
 [
   'BLING_AUTHORIZE_URL',

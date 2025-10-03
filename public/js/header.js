@@ -1,6 +1,6 @@
 // /js/header.js
 (function () {
-  // --- 1) tenta descobrir a aba ativa pela classe do <body>
+  // --- 1) descobre a aba ativa pela classe do <body>
   const body = document.body;
   let activeKey = '';
 
@@ -14,18 +14,17 @@
     }
   }
 
-  // --- 2) fallback robusto pela rota (se nenhuma classe do body bateu)
+  // --- 2) fallback pela rota
   if (!activeKey) {
     const raw = location.pathname || '/index.html';
     const path = raw === '/' ? '/index.html' : raw.toLowerCase();
-
     if (path.endsWith('/index.html')) activeKey = 'index';
     else if (path.endsWith('/dashboard.html')) activeKey = 'dashboard';
     else if (path.endsWith('/logs.html')) activeKey = 'logs';
     else if (path.includes('devolucao') || path.includes('devoluções')) activeKey = 'index';
   }
 
-  // Só mostra a ação “Nova Devolução” na home (opcional)
+  // Só mostra a ação “Nova Devolução” na home
   const actionsHtml = activeKey === 'index'
     ? `
       <div class="acoes-header">
@@ -101,11 +100,19 @@
     });
   }
 
-  // ação “Nova Devolução”
+  // ação “Nova Devolução” → abre o modal da home (sem redirecionar)
   const novo = document.getElementById('botao-nova-devolucao');
   if (novo) {
-    novo.addEventListener('click', () => {
-      location.href = '/devolucao-editar.html';
+    novo.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // se o objeto global existir, usa direto
+      if (window.sistemaDevolucoes && typeof window.sistemaDevolucoes.abrirModal === 'function') {
+        window.sistemaDevolucoes.abrirModal();
+      } else {
+        // fallback: emite um evento que o index.js pode ouvir
+        document.dispatchEvent(new CustomEvent('nova-devolucao:abrir'));
+      }
     });
   }
 })();

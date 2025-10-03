@@ -6,8 +6,15 @@ const { Pool } = require('pg');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // ssl: { rejectUnauthorized: false } // <- habilite se seu provedor exigir SSL (Neon/Render/etc.)
 });
+
+pool.on('connect', (client) => {
+ client.query("SET client_encoding TO 'UTF8'").catch(() => {});
+});
+
+module.exports.query = (text, params) => pool.query(text, params);
+
+
 
 // Helper para executar SQL com pool
 async function query(sql, params = []) {

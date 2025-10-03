@@ -114,7 +114,6 @@
       valor_produto:   Number($('valor_produto')?.value || 0),
       valor_frete:     Number($('valor_frete')?.value || 0),
       log_status:      current.log_status || null,
-      // campos que vêm do back quando carregados
       cd_recebido_em:  current.cd_recebido_em || null
     };
   }
@@ -128,7 +127,7 @@
     if (eFrete) eFrete.textContent = moneyBRL(d.valor_frete);
     if (eTotal) eTotal.textContent = moneyBRL(calcTotalByRules(d));
 
-    updateSummary({ ...current, ...d }); // mantém resumo sincronizado
+    updateSummary({ ...current, ...d });
   }
 
   function fill(d) {
@@ -151,7 +150,6 @@
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
 
-    // atualiza ambos: money lines e resumo
     updateSummary(d);
     recalc();
   }
@@ -185,59 +183,58 @@
   }
 
   async function runInspect(result, observacao) {
-  try {
-    disableHead(true);
-    const when = new Date().toISOString();
-    const r = await fetch(`/api/returns/${encodeURIComponent(current.id)}/cd/inspect`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'Idempotency-Key': `inspect-${current.id}-${when}-${result}`
-      },
-      body: JSON.stringify({ resultado: result, observacao: observacao || '', updated_by: 'frontend', when })
-    });
-    if (!r.ok) {
-      const e = await r.json().catch(() => null);
-      throw new Error(e?.error || 'Falha na inspeção');
+    try {
+      disableHead(true);
+      const when = new Date().toISOString();
+      const r = await fetch(`/api/returns/${encodeURIComponent(current.id)}/cd/inspect`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `inspect-${current.id}-${when}-${result}`
+        },
+        body: JSON.stringify({ resultado: result, observacao: observacao || '', updated_by: 'frontend', when })
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => null);
+        throw new Error(e?.error || 'Falha na inspeção');
+      }
+      await reloadCurrent();
+      toast(`Inspeção registrada (${result})!`, 'success');
+      await refreshTimeline(current.id);
+    } catch (e) {
+      toast(e.message || 'Erro', 'error');
+    } finally {
+      disableHead(false);
     }
-    await reloadCurrent();
-    toast(`Inspeção registrada (${result})!`, 'success');
-    await refreshTimeline(current.id);
-  } catch (e) {
-    toast(e.message || 'Erro', 'error');
-  } finally {
-    disableHead(false);
   }
-}
 
   function openInspectDialog(result) {
-    const dlg   = document.getElementById('dlg-inspecao');
-    const title = document.getElementById('insp-title');
-    const sub   = document.getElementById('insp-sub');
-    const txt   = document.getElementById('insp-text');
-    const btnOk = document.getElementById('insp-confirm');
-    const btnNo = document.getElementById('insp-cancel');
+    const dlg   = $('dlg-inspecao');
+    const title = $('insp-title');
+    const sub   = $('insp-sub');
+    const txt   = $('insp-text');
+    const btnOk = $('insp-confirm');
+    const btnNo = $('insp-cancel');
 
     if (!dlg) return;
 
-    // visual conforme ação
     const isApprove = result === 'aprovado';
     title.textContent = isApprove ? 'Aprovar inspeção' : 'Reprovar inspeção';
     sub.textContent   = isApprove
       ? 'Confirme a aprovação da inspeção. Você pode adicionar uma observação.'
       : 'Confirme a reprovação da inspeção. Você pode adicionar uma observação.';
-    btnOk.classList.toggle('aprovar',  isApprove);
-    btnOk.classList.toggle('reprovar', !isApprove);
+    
+    if (btnOk) {
+      btnOk.className = isApprove ? 'btn btn--success' : 'btn btn--danger';
+    }
 
     txt.value = '';
     dlg.showModal();
 
-    // handlers pontuais
     const onSubmit = (ev) => {
       ev.preventDefault();
       const obs = txt.value.trim();
       dlg.close();
-      // executa
       runInspect(result, obs);
       cleanup();
     };
@@ -245,119 +242,127 @@
 
     function cleanup(){
       dlg.removeEventListener('close', onCancel);
-      document.getElementById('insp-form')?.removeEventListener('submit', onSubmit);
-      btnNo?.removeEventListener('click', onCancel);
+      const form = $('insp-form');
+      if (form) form.removeEventListener('submit', onSubmit);
+      if (btnNo) btnNo.removeEventListener('click', onCancel);
     }
 
-    document.getElementById('insp-form')?.addEventListener('submit', onSubmit);
-    btnNo?.addEventListener('click', onCancel);
+    const form = $('insp-form');
+    if (form) form.addEventListener('submit', onSubmit);
+    if (btnNo) btnNo.addEventListener('click', onCancel);
 
-    // foco no textarea
     setTimeout(() => txt?.focus(), 0);
   }
-
 
   function disableHead(disabled) {
     ['btn-salvar', 'btn-recebido', 'btn-insp-aprova', 'btn-insp-reprova',
      'rq-receber', 'rq-aprovar', 'rq-reprovar'
     ].forEach(id => {
-      const el = $(id); if (el) el.disabled = !!disabled;
+      const el = $(id); 
+      if (el) el.disabled = !!disabled;
     });
   }
 
   // ==== Dialog Recebido no CD ====
-  const btnRecebido = $('btn-recebido');
-  const dlg     = $('dlg-recebido');
+  const btnRecebido = $('rq-receber');
+  const dlg = $('dlg-recebido');
   const inpResp = $('rcd-resp');
   const inpWhen = $('rcd-when');
   const btnSaveR = $('rcd-save');
   const btnUnset = $('rcd-unset');
 
-  $('rcd-cancel')?.addEventListener('click', () => dlg?.close());
+  const rcdCancel = $('rcd-cancel');
+  if (rcdCancel) rcdCancel.addEventListener('click', () => dlg?.close());
 
   const pad = (n) => String(n).padStart(2, '0');
 
-  btnRecebido?.addEventListener('click', () => {
-    const lastResp = localStorage.getItem('cd_responsavel') || '';
-    if (inpResp) inpResp.value = lastResp;
-    const now = new Date();
-    if (inpWhen) {
-      inpWhen.value =
-        `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    }
-    dlg?.showModal();
-  });
-
-  btnSaveR?.addEventListener('click', async (ev) => {
-    ev.preventDefault();
-    try {
-      if (!returnId) return toast('ID da devolução não encontrado.', 'error');
-
-      const responsavel = (inpResp?.value || '').trim() || 'cd';
-      localStorage.setItem('cd_responsavel', responsavel);
-
-      let whenIso = new Date().toISOString();
-      if (inpWhen?.value) {
-        const d = new Date(inpWhen.value);
-        if (!isNaN(d)) whenIso = d.toISOString();
+  if (btnRecebido) {
+    btnRecebido.addEventListener('click', () => {
+      const lastResp = localStorage.getItem('cd_responsavel') || '';
+      if (inpResp) inpResp.value = lastResp;
+      const now = new Date();
+      if (inpWhen) {
+        inpWhen.value =
+          `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
       }
+      dlg?.showModal();
+    });
+  }
 
-      const headers = {
-        'Content-Type': 'application/json',
-        'Idempotency-Key': `receive-${returnId}-${Date.now()}`
-      };
-      const r = await fetch(`/api/returns/${encodeURIComponent(returnId)}/cd/receive`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ responsavel, when: whenIso, updated_by: 'frontend' })
-      });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: 'Falha no PATCH' }));
-        throw new Error(err?.error || 'Falha ao registrar recebimento.');
+  if (btnSaveR) {
+    btnSaveR.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      try {
+        if (!returnId) return toast('ID da devolução não encontrado.', 'error');
+
+        const responsavel = (inpResp?.value || '').trim() || 'cd';
+        localStorage.setItem('cd_responsavel', responsavel);
+
+        let whenIso = new Date().toISOString();
+        if (inpWhen?.value) {
+          const d = new Date(inpWhen.value);
+          if (!isNaN(d)) whenIso = d.toISOString();
+        }
+
+        const headers = {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `receive-${returnId}-${Date.now()}`
+        };
+        const r = await fetch(`/api/returns/${encodeURIComponent(returnId)}/cd/receive`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ responsavel, when: whenIso, updated_by: 'frontend' })
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: 'Falha no PATCH' }));
+          throw new Error(err?.error || 'Falha ao registrar recebimento.');
+        }
+
+        await reloadCurrent();
+        toast('Recebimento no CD atualizado!', 'success');
+        dlg?.close();
+        await refreshTimeline(returnId);
+      } catch (e) {
+        toast(e.message || 'Erro ao registrar recebimento.', 'error');
       }
+    });
+  }
 
-      await reloadCurrent();
-      toast('Recebimento no CD atualizado!', 'success');
-      dlg?.close();
-      await refreshTimeline(returnId);
-    } catch (e) {
-      toast(e.message || 'Erro ao registrar recebimento.', 'error');
-    }
-  });
+  if (btnUnset) {
+    btnUnset.addEventListener('click', async () => {
+      try {
+        if (!returnId) return toast('ID da devolução não encontrado.', 'error');
 
-  btnUnset?.addEventListener('click', async () => {
-    try {
-      if (!returnId) return toast('ID da devolução não encontrado.', 'error');
+        const responsavel = (inpResp?.value || '').trim() || 'cd';
+        let whenIso = new Date().toISOString();
+        if (inpWhen?.value) {
+          const d = new Date(inpWhen.value);
+          if (!isNaN(d)) whenIso = d.toISOString();
+        }
 
-      const responsavel = (inpResp?.value || '').trim() || 'cd';
-      let whenIso = new Date().toISOString();
-      if (inpWhen?.value) {
-        const d = new Date(inpWhen.value);
-        if (!isNaN(d)) whenIso = d.toISOString();
+        const headers = {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `unreceive-${returnId}-${Date.now()}`
+        };
+        const r = await fetch(`/api/returns/${encodeURIComponent(returnId)}/cd/unreceive`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ responsavel, when: whenIso, updated_by: 'frontend' })
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({ error: 'Falha no PATCH' }));
+          throw new Error(err?.error || 'Falha ao remover marcação.');
+        }
+
+        await reloadCurrent();
+        toast('Marcação de recebido removida.', 'success');
+        dlg?.close();
+        await refreshTimeline(returnId);
+      } catch (e) {
+        toast(e.message || 'Erro ao remover marcação.', 'error');
       }
-
-      const headers = {
-        'Content-Type': 'application/json',
-        'Idempotency-Key': `unreceive-${returnId}-${Date.now()}`
-      };
-      const r = await fetch(`/api/returns/${encodeURIComponent(returnId)}/cd/unreceive`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ responsavel, when: whenIso, updated_by: 'frontend' })
-      });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: 'Falha no PATCH' }));
-        throw new Error(err?.error || 'Falha ao remover marcação.');
-      }
-
-      await reloadCurrent();
-      toast('Marcação de recebido removida.', 'success');
-      dlg?.close();
-      await refreshTimeline(returnId);
-    } catch (e) {
-      toast(e.message || 'Erro ao remover marcação.', 'error');
-    }
-  });
+    });
+  }
 
   // ==== Load inicial ====
   async function load() {
@@ -371,10 +376,14 @@
 
       const ls = String(current.log_status || '').toLowerCase();
       if (ls === 'aprovado_cd' || ls === 'reprovado_cd') {
-        $('btn-insp-aprova')?.style && ($('btn-insp-aprova').style.display = 'none');
-        $('btn-insp-reprova')?.style && ($('btn-insp-reprova').style.display = 'none');
-        $('rq-aprovar')?.setAttribute('disabled', 'true');
-        $('rq-reprovar')?.setAttribute('disabled', 'true');
+        const btnA = $('btn-insp-aprova');
+        const btnR = $('btn-insp-reprova');
+        if (btnA?.style) btnA.style.display = 'none';
+        if (btnR?.style) btnR.style.display = 'none';
+        const rqA = $('rq-aprovar');
+        const rqR = $('rq-reprovar');
+        if (rqA) rqA.setAttribute('disabled', 'true');
+        if (rqR) rqR.setAttribute('disabled', 'true');
       }
 
       await refreshTimeline(current.id);
@@ -393,10 +402,18 @@
   });
 
   // Botões do topo
-  $('btn-insp-aprova')?.addEventListener('click', () => openInspectDialog('aprovado'));
-  $('btn-insp-reprova')?.addEventListener('click', () => openInspectDialog('rejeitado'));
-  $('rq-aprovar')?.addEventListener('click', () => openInspectDialog('aprovado'));
-  $('rq-reprovar')?.addEventListener('click', () => openInspectDialog('rejeitado'));
+  const btnIA = $('btn-insp-aprova');
+  const btnIR = $('btn-insp-reprova');
+  if (btnIA) btnIA.addEventListener('click', () => openInspectDialog('aprovado'));
+  if (btnIR) btnIR.addEventListener('click', () => openInspectDialog('rejeitado'));
+
+  const rqA = $('rq-aprovar');
+  const rqR = $('rq-reprovar');
+  if (rqA) rqA.addEventListener('click', () => openInspectDialog('aprovado'));
+  if (rqR) rqR.addEventListener('click', () => openInspectDialog('rejeitado'));
+
+  const btnSalvar = $('btn-salvar');
+  if (btnSalvar) btnSalvar.addEventListener('click', save);
 
   // ===== TIMELINE =====
   async function fetchEvents(id, limit = 100, offset = 0) {
@@ -493,10 +510,18 @@
     }
   }
 
-  // ===== AÇÕES RÁPIDAS =====
-  $('rq-receber')?.addEventListener('click', () => $('btn-recebido')?.click());
-  $('rq-aprovar')?.addEventListener('click', () => inspect('aprovado'));
-  $('rq-reprovar')?.addEventListener('click', () => inspect('rejeitado'));
+  // ===== Keyboard shortcuts =====
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      save();
+    }
+  });
 
-  document.addEventListener('DOMContentLoaded', load);
+  // Carregar quando DOM estiver pronto
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', load);
+  } else {
+    load();
+  }
 })();
