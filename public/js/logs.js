@@ -1,8 +1,9 @@
-/* util */
+/* Utility functions */
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
-const money = (v) => Number(v || 0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+/* State management */
 let state = {
   page: 1,
   pageSize: 50,
@@ -13,10 +14,11 @@ let state = {
   items: []
 };
 
+/* Get filters from form */
 function getFilters() {
   return {
     from: $('#filtro-data-de')?.value || '',
-    to:   $('#filtro-data-ate')?.value || '',
+    to: $('#filtro-data-ate')?.value || '',
     status: $('#filtro-status')?.value || '',
     log_status: '',
     responsavel: $('#filtro-responsavel')?.value || '',
@@ -29,12 +31,16 @@ function getFilters() {
   };
 }
 
+/* Build query string */
 function buildQuery(obj) {
   const u = new URLSearchParams();
-  Object.entries(obj).forEach(([k,v]) => { if (v!=='' && v!=null) u.set(k,v); });
+  Object.entries(obj).forEach(([k, v]) => {
+    if (v !== '' && v != null) u.set(k, v);
+  });
   return u.toString();
 }
 
+/* Load logs from API */
 async function loadLogs() {
   const tbody = $('#corpo-tabela');
   tbody.innerHTML = `<tr><td colspan="6" class="celula-carregando"><div class="loading-spinner"></div> Carregando…</td></tr>`;
@@ -43,6 +49,7 @@ async function loadLogs() {
     const qs = buildQuery(getFilters());
     const r = await fetch(`/api/returns/logs?${qs}`);
     const j = await r.json();
+    
     if (!r.ok) throw new Error(j.error || 'Falha ao buscar log');
 
     state.total = j.total || 0;
@@ -58,19 +65,23 @@ async function loadLogs() {
   }
 }
 
+/* Render summary cards */
 function renderSummary() {
   $('#total-registros').textContent = state.total.toLocaleString('pt-BR');
   $('#soma-periodo').textContent = money(state.sum);
+  $('#contador-filtros .contador-badge').textContent = `${state.total} registros`;
 }
 
+/* Render table rows */
 function renderTable() {
   const tbody = $('#corpo-tabela');
+  
   if (!state.items.length) {
     tbody.innerHTML = `<tr><td colspan="6" class="celula-carregando">Nada encontrado.</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = state.items.map(it => {
+  tbody.innerHTML = state.items.map((it, index) => {
     const dt = it.event_at ? new Date(it.event_at) : null;
     const dataFmt = dt ? dt.toLocaleString('pt-BR') : '—';
     const status = (it.status || '').toLowerCase();
@@ -80,7 +91,7 @@ function renderTable() {
       status.includes('pend') ? 'tag -warn' : 'tag';
 
     return `
-      <tr data-id="${it.return_id ?? ''}">
+      <tr data-id="${it.return_id ?? ''}" style="animation: fade-in 0.3s ease-out ${index * 0.05}s backwards;">
         <td>${dataFmt}</td>
         <td>${it.numero_pedido ?? '—'}</td>
         <td>${it.cliente_nome ?? '—'}</td>
@@ -92,46 +103,59 @@ function renderTable() {
   }).join('');
 }
 
+/* Render pagination */
 function renderPager() {
   const pages = Math.max(1, Math.ceil(state.total / state.pageSize));
   $('#info-paginacao').textContent = `Página ${state.page} de ${pages}`;
   $('#botao-anterior').disabled = state.page <= 1;
-  $('#botao-proxima').disabled  = state.page >= pages;
+  $('#botao-proxima').disabled = state.page >= pages;
 }
 
-// Toast
+/* Toast notification */
 function toast(msg) {
   const el = $('#toast');
   el.querySelector('.toast-message').textContent = msg;
   el.classList.add('is-visible');
   clearTimeout(toast._t);
-  toast._t = setTimeout(()=> el.classList.remove('is-visible'), 3500);
+  toast._t = setTimeout(() => el.classList.remove('is-visible'), 3500);
 }
 
-// Debounce helper
+/* Debounce helper */
 function debounce(fn, wait) {
-  let t; return (...args) => { clearTimeout(t); t = setTimeout(()=> fn(...args), wait); };
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), wait);
+  };
 }
 
-/* eventos */
+/* Event listeners */
 document.addEventListener('DOMContentLoaded', () => {
-  // tamanho da página
+  // Page size change
   $('#filtro-itens-pagina')?.addEventListener('change', (e) => {
     state.pageSize = parseInt(e.target.value, 10) || 50;
     state.page = 1;
     loadLogs();
   });
 
-  // aplicar / limpar
-  $('#botao-aplicar')?.addEventListener('click', () => { state.page = 1; loadLogs(); });
-  $('#botao-limpar')?.addEventListener('click', () => {
-    ['#filtro-data-de','#filtro-data-ate','#filtro-status','#filtro-responsavel','#filtro-loja','#filtro-busca']
-      .forEach(sel => { const el = $(sel); if (el) el.value = ''; });
+  // Apply filters button
+  $('#botao-aplicar')?.addEventListener('click', () => {
     state.page = 1;
     loadLogs();
   });
 
-  // ordenar por cabeçalho
+  // Clear filters button
+  $('#botao-limpar')?.addEventListener('click', () => {
+    ['#filtro-data-de', '#filtro-data-ate', '#filtro-status', '#filtro-responsavel', '#filtro-loja', '#filtro-busca']
+      .forEach(sel => {
+        const el = $(sel);
+        if (el) el.value = '';
+      });
+    state.page = 1;
+    loadLogs();
+  });
+
+  // Sort by column header
   $$('th[data-col]').forEach(th => {
     th.style.cursor = 'pointer';
     th.addEventListener('click', () => {
@@ -142,27 +166,39 @@ document.addEventListener('DOMContentLoaded', () => {
         state.orderBy = col;
         state.orderDir = 'asc';
       }
-      // aria-sort feedback visual
-      $$('th[data-col]').forEach(h => h.setAttribute('aria-sort','none'));
+      
+      // Update aria-sort for accessibility
+      $$('th[data-col]').forEach(h => h.setAttribute('aria-sort', 'none'));
       th.setAttribute('aria-sort', state.orderDir === 'asc' ? 'ascending' : 'descending');
+      
       loadLogs();
     });
   });
 
-  // paginação
-  $('#botao-anterior')?.addEventListener('click', () => { if (state.page > 1) { state.page--; loadLogs(); } });
-  $('#botao-proxima')?.addEventListener('click',  () => { state.page++; loadLogs(); });
+  // Pagination buttons
+  $('#botao-anterior')?.addEventListener('click', () => {
+    if (state.page > 1) {
+      state.page--;
+      loadLogs();
+    }
+  });
 
-  // export CSV
+  $('#botao-proxima')?.addEventListener('click', () => {
+    state.page++;
+    loadLogs();
+  });
+
+  // Export CSV
   $('#botao-exportar')?.addEventListener('click', async () => {
     try {
       const qs = buildQuery({ ...getFilters(), page: '1', pageSize: '1000' });
       const r = await fetch(`/api/returns/logs?${qs}`);
       const j = await r.json();
+      
       if (!r.ok) throw new Error(j.error || 'Falha ao exportar.');
 
       const rows = Array.isArray(j.items) ? j.items : [];
-      const head = ['Data','Pedido','Cliente','Loja','Status','Total'];
+      const head = ['Data', 'Pedido', 'Cliente', 'Loja', 'Status', 'Total'];
       const csv = [
         head.join(';'),
         ...rows.map(x => [
@@ -179,18 +215,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `log-de-custos-${new Date().toISOString().slice(0,10)}.csv`;
+      a.download = `log-de-custos-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast('Exportação concluída');
-    } catch (e) { toast(e.message || 'Falha ao exportar'); }
+      
+      toast('Exportação concluída com sucesso!');
+    } catch (e) {
+      toast(e.message || 'Falha ao exportar');
+    }
   });
 
-  // ======== Importar CSV (com dry-run) ========
+  // Import CSV with dry-run support
   const input = document.getElementById('inputCsv');
-  const btn   = document.getElementById('btnImportarCsv');
+  const btn = document.getElementById('btnImportarCsv');
   const dryEl = document.getElementById('chkDryRun');
 
   btn?.addEventListener('click', () => input?.click());
@@ -201,7 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       const text = await file.text();
-      const dry  = dryEl?.checked ? '1' : '0';
+      const dry = dryEl?.checked ? '1' : '0';
 
       const r = await fetch(`/api/csv/upload?dry=${dry}`, {
         method: 'POST',
@@ -212,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Falha ao importar.');
 
-      toast(`Importação ${dry==='1' ? '(SIMULAÇÃO) ' : ''}ok: linhas lidas ${j.linhas_lidas}, conciliadas ${j.conciliadas}, ignoradas ${j.ignoradas}`);
+      toast(`Importação ${dry === '1' ? '(SIMULAÇÃO) ' : ''}ok: linhas lidas ${j.linhas_lidas}, conciliadas ${j.conciliadas}, ignoradas ${j.ignoradas}`);
       loadLogs();
     } catch (e) {
       toast('Erro ao importar CSV: ' + (e.message || e));
@@ -221,10 +260,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Busca com debounce para melhor alinhamento de UX
-  const onSearch = debounce(() => { state.page = 1; loadLogs(); }, 350);
+  // Search with debounce
+  const onSearch = debounce(() => {
+    state.page = 1;
+    loadLogs();
+  }, 350);
+  
   $('#filtro-busca')?.addEventListener('input', onSearch);
 
-  // Primeira carga
+  // Initial load
   loadLogs();
 });

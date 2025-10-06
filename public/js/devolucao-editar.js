@@ -43,7 +43,7 @@
 
     if (!receivedAt) {
       pill.className = 'pill -neutro';
-      pill.textContent = 'não recebido';
+      pill.textContent = 'Não recebido';
       if (resp) resp.hidden = true;
       if (when) when.hidden = true;
       if (sep)  sep.hidden  = true;
@@ -51,7 +51,7 @@
     }
 
     pill.className = 'pill -aprovado';
-    pill.textContent = 'recebido no CD';
+    pill.textContent = 'Recebido no CD';
 
     if (resp) {
       resp.textContent = `Resp.: ${responsavel || 'cd'}`;

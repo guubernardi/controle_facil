@@ -1,37 +1,61 @@
 'use strict';
 
+/**
+ * Server HTTP (Express) do Retorno Fácil
+ * 
+ * Organização:
+ * - Este arquivo sobe o app, configura middlewares globais, helpers, OAuth do Bling,
+ *   endpoints de KPIs, pendências, log de custos e proxies utilitários.
+ * - A **importação e conciliação de CSV do Mercado Livre** foi extraída para
+ *   `./routes/csv-upload.js`, registrada por injeção de dependência (para podermos
+ *   reutilizar a função de eventos com idempotência).
+ *
+ * Por que extrair o CSV para um módulo?
+ * - Evita import circular (server ⇄ csv).
+ * - Mantém a rota autocontida (faz seu próprio body-parser de texto).
+ * - Fica claro para qualquer dev que toda a lógica de CSV está em um único lugar.
+ */
+
 require('dotenv').config();
 
 const express = require('express');
 const path = require('path');
 const axios = require('axios');
 const dayjs = require('dayjs');
-const crypto = require('crypto');
 const { query } = require('./db');
 
 const app = express();
-// limites pequenos pra evitar payloads gigantes por engano
-app.use(express.json({ limit: '1mb' }));
-// vamos aceitar CSV cru também (upload texto)
-const aceitarTiposTexto = [
-  'text/*',
-  'text/plain',
-  'text/csv',
-  'application/csv',
-  'application/octet-stream',
-  'application/vnd.ms-excel'
-];
-app.use('/api/csv/upload', express.text({ type: aceitarTiposTexto, limit: '10mb' }));
 
+/** 
+ * Middlewares globais
+ * - Limitamos JSON para 1MB para evitar payloads acidentais gigantes.
+ * - O body-parser de **texto** do CSV NÃO fica aqui; ele é configurado
+ *   dentro do módulo `routes/csv-upload.js`, para não haver conflito.
+ */
+app.use(express.json({ limit: '1mb' }));
+
+/** 
+ * Servimos a pasta /public (HTML/CSS/JS do frontend).
+ * Estrutura típica:
+ *   /public
+ *     /css
+ *     /js
+ *     *.html
+ */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Todas as rotas /api retornam JSON com charset explícito em UTF-8
+/**
+ * Todas as rotas /api retornam JSON UTF-8 explícito.
+ * (evita charset default diferente em alguns clientes)
+ */
 app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-// Aviso de variáveis de ambiente ausentes
+/**
+ * Aviso se variáveis .env importantes estiverem faltando.
+ */
 [
   'BLING_AUTHORIZE_URL',
   'BLING_TOKEN_URL',
@@ -44,24 +68,24 @@ app.use('/api', (req, res, next) => {
   if (!process.env[k]) console.warn(`[WARN] .env faltando ${k}`);
 });
 
-// ---------------------------------------------
-// Helpers
-// ---------------------------------------------
+/*  Helpers/utilitários compartilhados  */
+
+/** Parse seguro de JSON em string (não explode). */
 function seguroParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
   try { return JSON.parse(String(s)); } catch { return null; }
 }
-const safeParseJson = seguroParseJson; // alias p/ compat
+const safeParseJson = seguroParseJson; // alias
 
-// Lê header de idempotência
+/** Lê um header Idempotency-Key (se usarmos futuramente em outras rotas). */
 function pegarChaveIdempotencia(req) {
   const v = (req.get('Idempotency-Key') || '').trim();
   return v || null;
 }
-const getIdempKey = pegarChaveIdempotencia; // alias p/ compat
+const getIdempKey = pegarChaveIdempotencia; // alias
 
-// Normaliza corpo do evento aceitando PT-BR e EN
+/** Normaliza corpo de evento aceitando PT/EN (mantido para compat). */
 function normalizarCorpoEvento(body = {}) {
   const typeRaw = body.type ?? body.tipo;
   const type = typeof typeRaw === 'string' ? typeRaw.toLowerCase() : undefined;
@@ -93,7 +117,13 @@ function normalizarCorpoEvento(body = {}) {
 }
 const normalizeEventBody = normalizarCorpoEvento; // alias
 
-// addReturnEvent com suporte a idempotência (idemp_key)
+/**
+ * addReturnEvent (com idempotência)
+ * - É a função oficial de registro de eventos (auditoria) de uma devolução.
+ * - O módulo de CSV usa **esta** função por injeção de dependência, garantindo:
+ *   - formato único de eventos;
+ *   - idempotência via `idemp_key` (evita duplicidade em reenvios).
+ */
 async function adicionarEventoDevolucao({
   returnId,
   type,
@@ -137,9 +167,9 @@ async function adicionarEventoDevolucao({
     throw e;
   }
 }
-const addReturnEvent = adicionarEventoDevolucao; // alias p/ compat
+const addReturnEvent = adicionarEventoDevolucao; // alias
 
-/** Verifica existência de colunas numa tabela e devolve um mapa {col:true|false} */
+/* Verifica existência de colunas numa tabela (ajuda a ser resiliente a migrações). */
 async function tabelaTemColunas(table, columns) {
   const { rows } = await query(
     `SELECT column_name FROM information_schema.columns
@@ -153,7 +183,7 @@ async function tabelaTemColunas(table, columns) {
 }
 const tableHasColumns = tabelaTemColunas; // alias
 
-// Utilidades numéricas / strings
+/** Utils de número/string, tolerantes a BR (1.234,56). */
 function paraNumero(v, def = 0) {
   if (v == null || v === '') return def;
   const n = Number(String(v).replace(/\./g, '').replace(',', '.'));
@@ -161,9 +191,21 @@ function paraNumero(v, def = 0) {
 }
 function str(v) { return v == null ? '' : String(v); }
 
-// ---------------------------------------------
-// Health / DB
-// ---------------------------------------------
+/*   Rotas de CSV (Mercado Livre pós-venda) */
+/**
+ * Importante:
+ * - NÃO iplementei aqui a rota /api/csv/upload nem body-parser de texto.
+ * - Tudo isso vive no módulo abaixo. Ele já faz:
+ *   - parse heurístico do CSV,
+ *   - normalização de cabeçalhos,
+ *   - conciliação em `devolucoes`,
+ *   - auditoria de import (quando não é dry-run),
+ *   - e aceita `?dry=1` para simulação (dry-run).
+ */
+const registrarRotasCsv = require('./routes/csv-upload');
+registrarRotasCsv(app, { addReturnEvent });
+
+/*   Health / DB  */
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
@@ -178,9 +220,7 @@ app.get('/api/db/ping', async (_req, res) => {
   }
 });
 
-// ---------------------------------------------
-// HOME (KPIs / Pendências / Avisos / Integrações)
-// ---------------------------------------------
+/*  HOME (KPIs / Pendências / Avisos / Integrações)  */
 app.get('/api/home/kpis', async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -233,11 +273,7 @@ app.get('/api/home/pending', async (_req, res) => {
       ${cols.conciliado_em ? 'WHERE conciliado_em IS NULL' : ''}
       ORDER BY id DESC LIMIT 20
     `;
-    const [r1, r2] = await Promise.all([
-      query(sql1),
-      query(sql2)
-    ]);
-    // CSV pendente é apenas indicativo; aqui devolvemos vazio até termos fila
+    const [r1, r2] = await Promise.all([ query(sql1), query(sql2) ]);
     res.json({
       recebidos_sem_inspecao: r1.rows || [],
       sem_conciliacao_csv: (cols.conciliado_em ? r2.rows : []) || [],
@@ -276,9 +312,7 @@ app.get('/api/integrations/health', async (_req, res) => {
   }
 });
 
-// ---------------------------------------------
-// LOG DE CUSTOS EXISTENTE (mantido)
-// ---------------------------------------------
+/*  Log de custos (view/tabela agregada) */
 app.get('/api/returns/logs', async (req, res) => {
   try {
     const {
@@ -395,9 +429,7 @@ app.get('/api/returns/logs', async (req, res) => {
   }
 });
 
-// ---------------------------------------------
-// Bling helpers (mantidos)
-// ---------------------------------------------
+/*   Bling: OAuth + helpers HTTP  */
 function cabecalhoBasicAuth() {
   const cru = `${process.env.BLING_CLIENT_ID}:${process.env.BLING_CLIENT_SECRET}`;
   const base64 = Buffer.from(cru).toString('base64');
@@ -486,9 +518,7 @@ async function blingGet(apelido, url) {
   }
 }
 
-// ---------------------------------------------
-// Loja helpers (cache + heurística) — mantidos
-// ---------------------------------------------
+/*   Loja helpers (cache + heurística)  */
 async function pegarNomeLojaPorId(apelido, lojaId) {
   if (lojaId === null || lojaId === undefined) return null;
 
@@ -571,9 +601,7 @@ function deduzirNomeLojaPelosPadroes(numeroLoja, sugestaoAtual = null) {
   return hit ? hit.nome : null;
 }
 
-// ---------------------------------------------
-// OAuth Bling
-// ---------------------------------------------
+/*  OAuth Bling (autorizar e callback) */
 app.get('/auth/bling', (req, res) => {
   const apelido = String(req.query.account || 'Conta de Teste');
   const url = new URL(process.env.BLING_AUTHORIZE_URL);
@@ -625,9 +653,7 @@ app.get('/callback', async (req, res) => {
   }
 });
 
-// ---------------------------------------------
-// Vendas / Notas — mantidos
-// ---------------------------------------------
+/*  Vendas / Notas — exemplo de consulta   */
 async function handlerBuscarVenda(req, res) {
   try {
     const idOuNumero = String(req.params.id);
@@ -700,12 +726,7 @@ async function handlerBuscarVenda(req, res) {
 app.get('/api/sales/:id',  handlerBuscarVenda);
 app.get('/api/vendas/:id', handlerBuscarVenda);
 
-// (demais rotas de invoice / sales by invoice / chave — mantidas do seu arquivo)
-// ... [para economizar, mantive todo o bloco original que você postou sem alterações] ...
-
-// ---------------------------------------------
-// EVENTS API — mantida
-// ---------------------------------------------
+/*  Events API — listar eventos por return_id (auditoria) */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
     const returnId = parseInt(req.params.id, 10);
@@ -740,322 +761,17 @@ app.get('/api/returns/:id/events', async (req, res) => {
   }
 });
 
-// ---------------------------------------------
-// Devoluções CRUD + Dashboard — mantidos
-// (todo o bloco que você postou foi mantido igual)
-// ---------------------------------------------
-
-// ===================================================================
-// ========================== CSV: UPLOAD ============================
-// ===================================================================
-
-// CSV básico (sem libs)
-function parseCsvBasico(texto) {
-  const linhas = String(texto).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  // remove vazias no final
-  while (linhas.length && !linhas[linhas.length - 1].trim()) linhas.pop();
-  if (!linhas.length) return { headers: [], rows: [] };
-
-  const headers = linhas[0].split(',').map(h => h.trim());
-  const rows = [];
-
-  for (let i = 1; i < linhas.length; i++) {
-    const raw = linhas[i];
-    if (!raw.trim()) continue;
-
-    // parse simplificado (CSV sem vírgula entre aspas múltiplas)
-    const cols = [];
-    let acc = '';
-    let quoted = false;
-    for (let c = 0; c < raw.length; c++) {
-      const ch = raw[c];
-      if (ch === '"') {
-        // toggle aspas
-        if (quoted && raw[c + 1] === '"') { acc += '"'; c++; }
-        else quoted = !quoted;
-      } else if (ch === ',' && !quoted) {
-        cols.push(acc); acc = '';
-      } else {
-        acc += ch;
-      }
-    }
-    cols.push(acc);
-
-    const obj = {};
-    headers.forEach((h, idx) => { obj[h] = (cols[idx] ?? '').trim(); });
-    rows.push(obj);
-  }
-  return { headers, rows };
-}
-
-// Normalizador para relatório pós-venda do ML exportado como CSV
-function normalizarCabecalhosMl(headers) {
-  const map = {};
-  headers.forEach((h) => {
-    const clean = h.toLowerCase().trim();
-    if (clean.includes('(order_id)')) map[h] = 'order_id';
-    else if (clean.includes('(date_created)')) map[h] = 'event_date';
-    else if (clean === 'fluxo (flow)' || clean.endsWith('(flow)')) map[h] = 'event_type';
-    else if (clean.includes('(reason_detail)')) map[h] = 'reason';
-    else if (clean.includes('(amount)')) map[h] = 'total';
-    else if (clean.includes('(product_id)') || clean.includes('(item_id)')) map[h] = 'sku';
-  });
-  return map;
-}
-function aplicarNormalizacaoMl(map, row) {
-  const out = {};
-  Object.entries(row).forEach(([orig, val]) => {
-    const alvo = map[orig] || null;
-    if (alvo) out[alvo] = val;
-  });
-  // ajustes de tipo
-  if (out.order_id != null) out.order_id = String(out.order_id).replace(/\.0+$/,'');
-  if (out.total != null) out.total = paraNumero(out.total);
-  return out;
-}
-
-// Gera hash da linha para idempotência de conciliação
-function gerarHashLinha(obj) {
-  const base = JSON.stringify(obj);
-  return crypto.createHash('sha1').update(base).digest('hex');
-}
-
-// Tenta localizar a devolução pelo order_id (primário) e fallbacks
-async function encontrarDevolucaoParaLinha(linha) {
-  const orderId = str(linha.order_id);
-  if (orderId) {
-    const r = await query(`SELECT * FROM devolucoes WHERE id_venda = $1 ORDER BY id DESC LIMIT 1`, [orderId]);
-    if (r.rows[0]) return r.rows[0];
-  }
-
-  // Fallbacks (se chegar algum dia): por nfe_numero/chave
-  if (linha.nfe_numero) {
-    const r = await query(`SELECT * FROM devolucoes WHERE nfe_numero = $1 ORDER BY id DESC LIMIT 1`, [str(linha.nfe_numero)]);
-    if (r.rows[0]) return r.rows[0];
-  }
-  if (linha.nfe_chave) {
-    const r = await query(`SELECT * FROM devolucoes WHERE nfe_chave = $1 ORDER BY id DESC LIMIT 1`, [str(linha.nfe_chave)]);
-    if (r.rows[0]) return r.rows[0];
-  }
-
-  // último fallback fraco: sku + data aproximada (±5 dias)
-  if (linha.sku && linha.event_date) {
-    const dt = new Date(linha.event_date);
-    if (!isNaN(dt)) {
-      const ini = new Date(dt.getTime() - 5*86400000);
-      const fim = new Date(dt.getTime() + 5*86400000);
-      const r = await query(
-        `SELECT * FROM devolucoes
-          WHERE sku = $1
-            AND created_at BETWEEN $2 AND $3
-          ORDER BY id DESC LIMIT 1`,
-        [str(linha.sku), ini, fim]
-      );
-      if (r.rows[0]) return r.rows[0];
-    }
-  }
-  return null;
-}
-
-// Aplica atualização de custo (frete/produto) se a linha trouxer detalhamento
-async function aplicarCustosPorCsv(devolucao, linha, secoesAtualizaveis) {
-  const cols = await tabelaTemColunas('devolucoes', ['valor_produto','valor_frete','conciliado_em','conciliado_fonte','conciliado_hash']);
-  const freteCsv = Math.max(0, (linha.shipping_out || 0) + (linha.shipping_return || 0));
-  const produtoCsv = Math.max(0, Math.abs(linha.product_price || 0));
-
-  const sets = [];
-  const args = [];
-  if (cols.valor_produto && secoesAtualizaveis.produto) { args.push(produtoCsv); sets.push(`valor_produto = $${args.length}`); }
-  if (cols.valor_frete   && secoesAtualizaveis.frete)   { args.push(freteCsv);   sets.push(`valor_frete = $${args.length}`); }
-
-  const hash = gerarHashLinha({ ...linha, tipo:'custo' });
-
-  if (cols.conciliado_em)  sets.push(`conciliado_em = now()`);
-  if (cols.conciliado_fonte) { args.push('mercado_livre_csv'); sets.push(`conciliado_fonte = $${args.length}`); }
-  if (cols.conciliado_hash)  { args.push(hash);                sets.push(`conciliado_hash  = $${args.length}`); }
-
-  if (sets.length) {
-    args.push(devolucao.id);
-    await query(`UPDATE devolucoes SET ${sets.join(', ')}, updated_at = now() WHERE id = $${args.length}`, args);
-  }
-
-  await adicionarEventoDevolucao({
-    returnId: devolucao.id,
-    type: 'custo',
-    title: 'CSV conciliado',
-    message: `Custos conciliados via CSV (produto/frete).`,
-    meta: {
-      regra: 'csv_conciliado',
-      impacto: { valor_produto: produtoCsv, valor_frete: freteCsv },
-      csv: { order_id: linha.order_id, shipment_id: linha.shipment_id || null }
-    },
-    createdBy: 'csv'
-  });
-
-  return { hash, produtoCsv, freteCsv };
-}
-
-// Apenas registra um ajuste financeiro (claim/chargeback) sem mexer nos custos
-async function registrarAjusteMl(devolucao, linha) {
-  const cols = await tabelaTemColunas('devolucoes', ['conciliado_em','conciliado_fonte','conciliado_hash']);
-  const hash = gerarHashLinha({ ...linha, tipo:'ajuste' });
-
-  const sets = [];
-  const args = [];
-  if (cols.conciliado_em)     sets.push(`conciliado_em = now()`);
-  if (cols.conciliado_fonte) { args.push('mercado_livre_csv'); sets.push(`conciliado_fonte = $${args.length}`); }
-  if (cols.conciliado_hash)  { args.push(hash);                sets.push(`conciliado_hash  = $${args.length}`); }
-
-  if (sets.length) {
-    args.push(devolucao.id);
-    await query(`UPDATE devolucoes SET ${sets.join(', ')}, updated_at = now() WHERE id = $${args.length}`, args);
-  }
-
-  await adicionarEventoDevolucao({
-    returnId: devolucao.id,
-    type: 'ajuste',
-    title: `Ajuste ML (${linha.event_type || 'evento'})`,
-    message: `Evento do Mercado Livre ${linha.reason ? `(${linha.reason}) ` : ''}no valor de ${Number(linha.total || 0).toFixed(2)}.`,
-    meta: {
-      regra: 'csv_conciliado',
-      impacto: {
-        total_evento: linha.total || 0,
-        event_type: linha.event_type || null,
-        reason: linha.reason || null
-      },
-      csv: { order_id: linha.order_id, sku: linha.sku || null }
-    },
-    createdBy: 'csv'
-  });
-
-  return { hash };
-}
-
-// Upload CSV
-app.post('/api/csv/upload', async (req, res) => {
-  try {
-    const csvTxt = req.body || '';
-    const dryRun = String(req.query.dry || req.get('x-dry-run') || '').toLowerCase() === '1';
-    if (!csvTxt.trim()) return res.status(400).json({ error: 'Arquivo CSV vazio.' });
-
-    const resumo = {
-      linhas_lidas: 0,
-      conciliadas: 0,
-      ignoradas: 0,
-      erros: [],
-      sem_match: []
-    };
-
-    const { headers, rows } = parseCsvBasico(csvTxt);
-
-    // Detecta relatório ML e normaliza
-    const mapaMl = normalizarCabecalhosMl(headers);
-    const ehCsvMl = Object.keys(mapaMl).length >= 3; // achou >=3 campos relevantes
-
-    let linhas = rows;
-    let headersNorm = headers;
-
-    if (ehCsvMl) {
-      linhas = rows.map(r => aplicarNormalizacaoMl(mapaMl, r));
-      headersNorm = ['order_id','event_date','event_type','reason','total','sku'];
-    }
-
-    // Validação de colunas
-    const obrigComFrete = ['order_id','event_date','product_price','shipping_out','shipping_return','total'];
-    const obrigMl = ['order_id','event_date','event_type','total'];
-    const falta = (ehCsvMl ? obrigMl : obrigComFrete)
-      .filter(h => !headersNorm.includes(h));
-    if (falta.length) {
-      return res.status(400).json({ error: `CSV sem colunas obrigatórias: ${falta.join(', ')}` });
-    }
-
-    // Processamento
-    resumo.linhas_lidas = linhas.length;
-
-    for (let i = 0; i < linhas.length; i++) {
-      const r = linhas[i];
-
-      const linha = ehCsvMl ? {
-        order_id: str(r.order_id),
-        shipment_id: '',
-        event_date: r.event_date ? new Date(r.event_date) : null,
-        product_price: 0,
-        shipping_out: 0,
-        shipping_return: 0,
-        cancellation_fee: 0,
-        ml_fee: 0,
-        total: paraNumero(r.total),
-        reason: str(r.reason).toLowerCase(),
-        event_type: str(r.event_type).toLowerCase(),
-        sku: str(r.sku)
-      } : {
-        order_id: str(r.order_id || r.id),
-        shipment_id: str(r.shipment_id),
-        event_date: r.event_date ? new Date(r.event_date) : null,
-        product_price: paraNumero(r.product_price),
-        shipping_out: paraNumero(r.shipping_out),
-        shipping_return: paraNumero(r.shipping_return),
-        cancellation_fee: paraNumero(r.cancellation_fee),
-        ml_fee: paraNumero(r.ml_fee),
-        total: paraNumero(r.total),
-        reason: str(r.reason || r.event_type).toLowerCase(),
-        event_type: str(r.event_type).toLowerCase(),
-        sku: str(r.sku)
-      };
-
-      // localizar devolução
-      const devolucao = await encontrarDevolucaoParaLinha(linha);
-      if (!devolucao) {
-        resumo.ignoradas++; 
-        resumo.sem_match.push({ linha: i+1, order_id: linha.order_id, sku: linha.sku || null });
-        continue;
-      }
-
-      if (dryRun) {
-        resumo.conciliadas++;
-        continue;
-      }
-
-      try {
-        if (ehCsvMl) {
-          await registrarAjusteMl(devolucao, linha);
-        } else {
-          // decide o que pode atualizar: frete/produto
-          const secoes = { frete: true, produto: true };
-          await aplicarCustosPorCsv(devolucao, linha, secoes);
-        }
-        resumo.conciliadas++;
-      } catch (e) {
-        resumo.erros.push({ linha: i+1, order_id: linha.order_id, erro: String(e?.message || e) });
-      }
-    }
-
-    res.json(resumo);
-  } catch (e) {
-    console.error('POST /api/csv/upload erro:', e);
-    res.status(500).json({ error: 'Falha ao processar CSV.' });
-  }
-});
-
-// (opcional) Template de CSV com fretes
-app.get('/api/csv/template', (_req, res) => {
-  const modelo =
-`order_id,shipment_id,event_date,product_price,shipping_out,shipping_return,cancellation_fee,ml_fee,total,reason,event_type,sku
-1234567890,998877,"2025-10-03T13:00:00Z",100,15,15,0,0,130,arrependimento,claim,SKU-XYZ
-`;
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.send(modelo);
-});
-
-// ---------------------------------------------
-// CD: Recebimento / Inspeção — mantidos (seus)
-// ---------------------------------------------
-// ... [mantive exatamente como você enviou] ...
-
-// ---------------------------------------------
-// Start
-// ---------------------------------------------
+/*  Start */
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Servidor rodando em http://localhost:${port}`);
 });
+
+/**
+ * - Upload CSV do ML: POST /api/csv/upload  (módulo routes/csv-upload.js)
+ *   - `?dry=1` = dry-run (simula tudo, não grava nada).
+ * - Template CSV: GET /api/csv/template (também no módulo de CSV).
+ * - Eventos de auditoria: tabela return_events; use addReturnEvent() para manter idempotência.
+ * - KPIs/Home/Logs: rotas /api/home/* e /api/returns/logs.
+ * - Integração Bling: OAuth em /auth/bling -> /callback; use blingGet() para chamadas.
+ */
