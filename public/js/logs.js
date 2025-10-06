@@ -1,250 +1,230 @@
-/* logs.js — Auditoria de custos (v_return_cost_log) com filtros, paginação e CSV */
+/* util */
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+const money = (v) => Number(v || 0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 
-/* Helpers básicos */
-const qs = new URLSearchParams(location.search);
-const $ = (sel) =>
-  sel && sel.startsWith('#') ? document.querySelector(sel) : document.getElementById(sel);
-const money = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const esc = (s='') => String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const escapeHtml = esc; // alias
+let state = {
+  page: 1,
+  pageSize: 50,
+  orderBy: 'event_at',
+  orderDir: 'desc',
+  total: 0,
+  sum: 0,
+  items: []
+};
 
-let page     = Math.max(1, Number(qs.get('page') || 1));
-let pageSize = Math.max(1, Number(qs.get('pageSize') || 50));
-let lastResp = { items: [], total: 0, sum_total: 0 };
-
-/* -------- Regras de custo (fallback do front) --------
-   - Rejeitado/Negado => 0
-   - Motivo do cliente => 0
-   - Recebido no CD / Em inspeção => apenas frete
-   - Demais => produto + frete
------------------------------------------------------- */
-function calcPrejuizoRow(row = {}) {
-  const st  = String(row.status || '').toLowerCase();
-  const lgs = String(row.log_status || '').toLowerCase();
-  const motivo = (row.motivo_codigo || row.tipo_reclamacao || row.reclamacao || '').toLowerCase();
-  const vp  = Number(row.valor_produto || 0);
-  const vf  = Number(row.valor_frete || 0);
-
-  if (st.includes('rej') || st.includes('neg')) return 0;
-  if (motivo.includes('cliente')) return 0;
-  if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
-  return vp + vf;
+function getFilters() {
+  return {
+    from: $('#filtro-data-de')?.value || '',
+    to:   $('#filtro-data-ate')?.value || '',
+    status: $('#filtro-status')?.value || '',
+    log_status: '',
+    responsavel: $('#filtro-responsavel')?.value || '',
+    loja: $('#filtro-loja')?.value || '',
+    q: $('#filtro-busca')?.value || '',
+    page: String(state.page),
+    pageSize: String(state.pageSize),
+    orderBy: state.orderBy,
+    orderDir: state.orderDir
+  };
 }
 
-/* Usa o total do back se existir; senão, aplica a regra local */
-function calcTotal(row) {
-  if (row.total != null && !Number.isNaN(Number(row.total))) return Number(row.total);
-  return calcPrejuizoRow(row);
+function buildQuery(obj) {
+  const u = new URLSearchParams();
+  Object.entries(obj).forEach(([k,v]) => { if (v!=='' && v!=null) u.set(k,v); });
+  return u.toString();
 }
 
-/* -------- Prefill dos filtros (mês atual por padrão) -------- */
-(function initFilters () {
-  const hoje = new Date();
-  const from = qs.get('from') || new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10);
-  const to   = qs.get('to')   || new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString().slice(0, 10);
-
-  $('filtro-data-de').value      = from;
-  $('filtro-data-ate').value     = to;
-
-  // Mapeia query param para o select único:
-  const qStatus = (qs.get('status') || '').toLowerCase();
-  const qLogSt  = (qs.get('log_status') || '').toLowerCase();
-  $('filtro-status').value = qLogSt || qStatus || '';
-
-  $('filtro-responsavel').value  = qs.get('responsavel')  || '';
-  $('filtro-loja').value         = qs.get('loja')         || '';
-  $('filtro-busca').value        = qs.get('q')            || '';
-  $('filtro-itens-pagina').value = String(pageSize);
-})();
-
-/* ------------------ Eventos ------------------ */
-$('botao-aplicar').addEventListener('click', () => { page = 1; load(); });
-
-$('botao-limpar').addEventListener('click', () => {
-  const hoje = new Date();
-  $('filtro-data-de').value  = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10);
-  $('filtro-data-ate').value = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString().slice(0, 10);
-  $('filtro-status').value = '';
-  $('filtro-responsavel').value = '';
-  $('filtro-loja').value = '';
-  $('filtro-busca').value = '';
-  page = 1;
-  load();
-});
-
-$('botao-exportar').addEventListener('click', exportCSV);
-
-$('filtro-itens-pagina').addEventListener('change', () => {
-  pageSize = Number($('filtro-itens-pagina').value || 50);
-  page = 1;
-  load();
-});
-
-$('botao-anterior').addEventListener('click', () => {
-  if (page > 1) { page--; load(); }
-});
-
-$('botao-proxima').addEventListener('click', () => {
-  const max = Math.max(1, Math.ceil((lastResp.total || 0) / pageSize));
-  if (page < max) { page++; load(); }
-});
-
-/* ------------------ Helpers ------------------ */
-function buildParams () {
-  const p = new URLSearchParams();
-  p.set('from', $('filtro-data-de').value || '');
-  p.set('to',   $('filtro-data-ate').value || '');
-
-  // Mapeia status do select: se for "recebido_cd" ou "em_inspecao" => log_status
-  const selStatus = String($('filtro-status').value || '').toLowerCase();
-  if (selStatus === 'recebido_cd' || selStatus === 'em_inspecao') {
-    p.set('log_status', selStatus);
-  } else if (selStatus) {
-    p.set('status', selStatus);
-  }
-
-  if ($('filtro-responsavel').value) p.set('responsavel', $('filtro-responsavel').value);
-  if ($('filtro-loja').value)        p.set('loja', $('filtro-loja').value);
-  if ($('filtro-busca').value)       p.set('q', $('filtro-busca').value);
-  p.set('page', String(page));
-  p.set('pageSize', String(pageSize));
-  p.set('orderBy', 'event_at');
-  p.set('orderDir', 'desc');
-  return p;
-}
-
-// pílula por status
-function statusPill(st) {
-  const s = String(st||'').toLowerCase();
-  const cls = s.includes('pend') ? '-pendente' :
-              s.includes('aprov') ? '-aprovado' :
-              (s.includes('rej') || s.includes('neg')) ? '-rejeitado' :
-              (s.includes('receb') || s.includes('insp')) ? '-neutro' : '';
-  return `<span class="rf-pill ${cls}">${escapeHtml(st||'—')}</span>`;
-}
-
-/* ------------------ Carregamento ------------------ */
-async function load () {
-  const params = buildParams();
-
-  // mantém URL compartilhável
-  history.replaceState(null, '', `/logs.html?${params.toString()}`);
-
-  $('corpo-tabela').innerHTML = `
-    <tr><td colspan="6" class="celula-carregando">Carregando dados...</td></tr>
-  `;
+async function loadLogs() {
+  const tbody = $('#corpo-tabela');
+  tbody.innerHTML = `<tr><td colspan="6" class="celula-carregando"><div class="loading-spinner"></div> Carregando…</td></tr>`;
 
   try {
-    const r = await fetch('/api/returns/logs?' + params.toString());
-    if (!r.ok) throw new Error('Falha ao carregar');
-    const data = await r.json();
-    lastResp = data || { items: [], total: 0, sum_total: 0 };
-    render(lastResp);
+    const qs = buildQuery(getFilters());
+    const r = await fetch(`/api/returns/logs?${qs}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Falha ao buscar log');
+
+    state.total = j.total || 0;
+    state.sum = j.sum_total || 0;
+    state.items = Array.isArray(j.items) ? j.items : [];
+
+    renderTable();
+    renderSummary();
+    renderPager();
   } catch (e) {
-    $('corpo-tabela').innerHTML = `
-      <tr><td colspan="6" class="celula-vazia">Erro ao carregar os dados.</td></tr>
-    `;
-    showToast('Não foi possível carregar o log.', 'error');
+    tbody.innerHTML = `<tr><td colspan="6" class="celula-carregando">Erro: ${e.message}</td></tr>`;
+    toast(`Erro ao carregar: ${e.message}`);
   }
 }
 
-function render({ items=[], total=0, sum_total=0 }) {
-  const tbody = $('corpo-tabela');
-  if (!items.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="celula-vazia">Sem registros nesse período.</td></tr>`;
-  } else {
-    tbody.innerHTML = items.map((row, idx) => {
-      const dt = new Date(row.event_at || row.created_at || Date.now()).toLocaleString('pt-BR');
-      const pedido = row.numero_pedido || row.id_venda || row.return_id || '—';
-      const cliente= (row.cliente_nome || '—').slice(0, 48);
-      const loja   = row.loja_nome || '—';
-      const totalCalc = calcTotal(row);
-      return `
-        <tr data-idx="${idx}">
-          <td class="celula-data">${dt}</td>
-          <td><span class="badge-pedido">#${escapeHtml(pedido)}</span></td>
-          <td class="celula-cliente">${escapeHtml(cliente)}</td>
-          <td class="celula-loja">${escapeHtml(loja)}</td>
-          <td>${statusPill(row.status)}</td>
-          <td class="celula-total texto-direita">${money(totalCalc)}</td>
-        </tr>`;
-    }).join('');
+function renderSummary() {
+  $('#total-registros').textContent = state.total.toLocaleString('pt-BR');
+  $('#soma-periodo').textContent = money(state.sum);
+}
+
+function renderTable() {
+  const tbody = $('#corpo-tabela');
+  if (!state.items.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="celula-carregando">Nada encontrado.</td></tr>`;
+    return;
   }
 
-  // resumo e paginação (usa sum_total do back se tiver; senão soma local)
-  const sumLocal = (items || []).reduce((acc, r) => acc + calcTotal(r), 0);
-  const sumShow = (sum_total != null) ? Number(sum_total) : sumLocal;
+  tbody.innerHTML = state.items.map(it => {
+    const dt = it.event_at ? new Date(it.event_at) : null;
+    const dataFmt = dt ? dt.toLocaleString('pt-BR') : '—';
+    const status = (it.status || '').toLowerCase();
+    const tag =
+      status.includes('rej') ? 'tag -neg' :
+      status.includes('aprov') ? 'tag -ok' :
+      status.includes('pend') ? 'tag -warn' : 'tag';
 
-  $('total-registros').textContent = String(total);
-  $('soma-periodo').textContent    = money(sumShow || 0);
+    return `
+      <tr data-id="${it.return_id ?? ''}">
+        <td>${dataFmt}</td>
+        <td>${it.numero_pedido ?? '—'}</td>
+        <td>${it.cliente_nome ?? '—'}</td>
+        <td>${it.loja_nome ?? '—'}</td>
+        <td><span class="${tag}">${it.status ?? '—'}</span></td>
+        <td class="texto-direita">${money(it.total)}</td>
+      </tr>
+    `;
+  }).join('');
+}
 
-  const max = Math.max(1, Math.ceil((total || 0) / pageSize));
-  $('info-paginacao').textContent = `Página ${page} de ${max}`;
-  $('botao-anterior').disabled = page <= 1;
-  $('botao-proxima').disabled  = page >= max;
+function renderPager() {
+  const pages = Math.max(1, Math.ceil(state.total / state.pageSize));
+  $('#info-paginacao').textContent = `Página ${state.page} de ${pages}`;
+  $('#botao-anterior').disabled = state.page <= 1;
+  $('#botao-proxima').disabled  = state.page >= pages;
+}
 
-  // ao clicar na linha, navegar para a página de edição
-  tbody.querySelectorAll('tr[data-idx]').forEach(tr => {
-    tr.addEventListener('click', () => {
-      const idx = Number(tr.getAttribute('data-idx'));
-      const row = items[idx];
-      const rid = row?.return_id || row?.id;
-      if (rid) {
-        location.href = `/devolucao-editar.html?id=${encodeURIComponent(rid)}`;
+// Toast
+function toast(msg) {
+  const el = $('#toast');
+  el.querySelector('.toast-message').textContent = msg;
+  el.classList.add('is-visible');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=> el.classList.remove('is-visible'), 3500);
+}
+
+// Debounce helper
+function debounce(fn, wait) {
+  let t; return (...args) => { clearTimeout(t); t = setTimeout(()=> fn(...args), wait); };
+}
+
+/* eventos */
+document.addEventListener('DOMContentLoaded', () => {
+  // tamanho da página
+  $('#filtro-itens-pagina')?.addEventListener('change', (e) => {
+    state.pageSize = parseInt(e.target.value, 10) || 50;
+    state.page = 1;
+    loadLogs();
+  });
+
+  // aplicar / limpar
+  $('#botao-aplicar')?.addEventListener('click', () => { state.page = 1; loadLogs(); });
+  $('#botao-limpar')?.addEventListener('click', () => {
+    ['#filtro-data-de','#filtro-data-ate','#filtro-status','#filtro-responsavel','#filtro-loja','#filtro-busca']
+      .forEach(sel => { const el = $(sel); if (el) el.value = ''; });
+    state.page = 1;
+    loadLogs();
+  });
+
+  // ordenar por cabeçalho
+  $$('th[data-col]').forEach(th => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const col = th.getAttribute('data-col');
+      if (state.orderBy === col) {
+        state.orderDir = state.orderDir === 'asc' ? 'desc' : 'asc';
       } else {
-        showToast('Sem vínculo de devolução para abrir.', 'error');
+        state.orderBy = col;
+        state.orderDir = 'asc';
       }
+      // aria-sort feedback visual
+      $$('th[data-col]').forEach(h => h.setAttribute('aria-sort','none'));
+      th.setAttribute('aria-sort', state.orderDir === 'asc' ? 'ascending' : 'descending');
+      loadLogs();
     });
   });
-}
 
-/* ------------------ Exportar CSV ------------------ */
-function toCSV (rows) {
-  if (!rows.length) return '';
-  const headers = Object.keys(rows[0]);
-  const escv = (v) => {
-    if (v == null) return '';
-    const s = String(v);
-    return (s.includes(',') || s.includes('"') || s.includes('\n')) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  return [headers.join(','), ...rows.map(r => headers.map(h => escv(r[h])).join(','))].join('\n');
-}
+  // paginação
+  $('#botao-anterior')?.addEventListener('click', () => { if (state.page > 1) { state.page--; loadLogs(); } });
+  $('#botao-proxima')?.addEventListener('click',  () => { state.page++; loadLogs(); });
 
-function exportCSV () {
-  const rows = (lastResp.items || []).map(r => ({
-    data: new Date(r.event_at || r.created_at || Date.now()).toISOString(),
-    pedido: r.numero_pedido || r.id_venda || r.return_id || '',
-    cliente: r.cliente_nome || '',
-    sku: r.sku || '',
-    motivo: r.motivo_codigo || r.tipo_reclamacao || r.reclamacao || '',
-    status: r.status || '',
-    log_status: r.log_status || '',
-    politica: r.regra_aplicada || r.politica || '',
-    responsavel: r.responsavel_custo || '',
-    valor_produto: Number(r.valor_produto || 0),
-    valor_frete: Number(r.valor_frete || 0),
-    total: Number(calcTotal(r)),
-    loja: r.loja_nome || ''
-  }));
-  const csv  = toCSV(rows);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'log_custos.csv';
-  a.click();
-}
+  // export CSV
+  $('#botao-exportar')?.addEventListener('click', async () => {
+    try {
+      const qs = buildQuery({ ...getFilters(), page: '1', pageSize: '1000' });
+      const r = await fetch(`/api/returns/logs?${qs}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Falha ao exportar.');
 
-/* ------------------ Toast simples ------------------ */
-function showToast (msg, type = 'info') {
-  const t = $('toast');
-  if (!t) return;
-  t.className = 'toast ' + (type || 'info');
-  t.textContent = msg;
-  requestAnimationFrame(() => {
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 3000);
+      const rows = Array.isArray(j.items) ? j.items : [];
+      const head = ['Data','Pedido','Cliente','Loja','Status','Total'];
+      const csv = [
+        head.join(';'),
+        ...rows.map(x => [
+          (x.event_at ? new Date(x.event_at).toISOString() : ''),
+          x.numero_pedido ?? '',
+          String(x.cliente_nome ?? '').replace(/;/g, ','),
+          String(x.loja_nome ?? '').replace(/;/g, ','),
+          x.status ?? '',
+          String(x.total ?? '0').replace('.', ',')
+        ].join(';'))
+      ].join('\r\n');
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `log-de-custos-${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast('Exportação concluída');
+    } catch (e) { toast(e.message || 'Falha ao exportar'); }
   });
-}
 
-/* ------------------ Boot ------------------ */
-document.addEventListener('DOMContentLoaded', load);
+  // ======== Importar CSV (com dry-run) ========
+  const input = document.getElementById('inputCsv');
+  const btn   = document.getElementById('btnImportarCsv');
+  const dryEl = document.getElementById('chkDryRun');
+
+  btn?.addEventListener('click', () => input?.click());
+
+  input?.addEventListener('change', async () => {
+    const file = input.files[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const dry  = dryEl?.checked ? '1' : '0';
+
+      const r = await fetch(`/api/csv/upload?dry=${dry}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/csv; charset=utf-8' },
+        body: text
+      });
+
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Falha ao importar.');
+
+      toast(`Importação ${dry==='1' ? '(SIMULAÇÃO) ' : ''}ok: linhas lidas ${j.linhas_lidas}, conciliadas ${j.conciliadas}, ignoradas ${j.ignoradas}`);
+      loadLogs();
+    } catch (e) {
+      toast('Erro ao importar CSV: ' + (e.message || e));
+    } finally {
+      input.value = '';
+    }
+  });
+
+  // Busca com debounce para melhor alinhamento de UX
+  const onSearch = debounce(() => { state.page = 1; loadLogs(); }, 350);
+  $('#filtro-busca')?.addEventListener('input', onSearch);
+
+  // Primeira carga
+  loadLogs();
+});

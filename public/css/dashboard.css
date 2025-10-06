@@ -79,11 +79,13 @@
 body.dashboard-page {
   background: var(--dash-bg-primary);
   color: var(--dash-text-primary);
+  font-family: 'Roboto', sans-serif;
+  font-size: 1rem;
 }
 
 /* Container */
 .dashboard-container {
-  max-width: 1400px;
+  max-width: 1900px;
   margin: 0 auto;
   padding: 2rem 1.5rem;
 }

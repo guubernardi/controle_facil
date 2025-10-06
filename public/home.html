@@ -1,12 +1,160 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="css/home.css">
-    <title>Home - Controle Facil</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Home — Retorno Fácil</title>
+  <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/navbar.css" />
+  <link rel="stylesheet" href="css/home.css" />
 </head>
-<body>
-    
+<body class="home-page">
+  <div id="cabecalho"></div>
+  <script src="js/header.js"></script>
+
+  <main class="container">
+    <!-- Topo: avisos do sistema (promoções, novidades, etc.) -->
+    <section class="faixa" aria-label="avisos e onboarding">
+      <div class="card info" id="av_card_1">
+        <div class="card-flex">
+          <div class="card-1">
+            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+              <line x1="12" y1="22.08" x2="12" y2="12"></line>
+            </svg>
+          </div>
+          <div class="right">
+            <h3>Conciliação por CSV do Mercado Livre</h3>
+            <p>Agora o sistema concilia fretes, tarifas e estornos automaticamente a partir do CSV de pós-venda.</p>
+            <small>Saiba mais em <a href="/logs.html">Log de Custos</a>.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="card info" id="av_card_2">
+        <div class="card-flex">
+          <div class="card-1 accent">
+            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+          </div>
+          <div class="right">
+            <h3>Regras de custo</h3>
+            <ul class="card-list">
+              <li><b>Rejeitado</b> → prejuízo R$ 0</li>
+              <li><b>Recebido CD / Em inspeção</b> → só frete</li>
+              <li><b>Motivos do cliente</b> → sem custo</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="card info" id="av_card_3">
+        <div class="card-flex">
+          <div class="card-1 warning">
+            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3zm-8.27 4a2 2 0 0 1-3.46 0"></path>
+            </svg>
+          </div>
+          <div class="right">
+            <h3>Integração Mercado Livre</h3>
+            <p>Conexão direta chegando em breve. Por enquanto, use o CSV.</p>
+            <small>Status: <span class="tag -warn">em breve</span></small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider">
+
+    <!-- Botões -->
+    <section class="abas">
+      <button class="aba ativa" data-tab="visao">Visão geral</button>
+      <button class="aba" data-tab="eventos">Eventos</button>
+    </section>
+
+    <!-- Visão Geral -->
+    <section id="tab_visao" class="tab painel ativo">
+      <!-- 3 blocos: pendências, novidades e um que ainda não sei -->
+      <div class="grid3">
+        <article class="bloco">
+          <header class="bloco-header">
+            <h3>Pendências</h3>
+          </header>
+          <hr class="linha">
+          <ul class="lista">
+            <li class="lista-item">
+              <span class="lista-label">Recebidos no CD sem inspeção:</span>
+              <div class="lista-action">
+                <b id="qtd_rcd" class="lista-value">0</b>
+                <button class="seta">
+                  <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
+                  </svg>
+                </button>
+              </div>
+            </li>
+            <hr class="linha">
+
+            <li class="lista-item">
+              <span class="lista-label">Sem conciliação CSV:</span>
+              <div class="lista-action">
+                <b id="qtd_semcsv" class="lista-value">0</b>
+                <button class="seta">
+                  <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
+                  </svg>
+                </button>
+              </div>
+            </li>
+            <hr class="linha">
+
+            <li class="lista-item">
+              <span class="lista-label">Últimos imports de CSV:</span>
+              <div class="lista-action">
+                <b id="qtd_csvpend" class="lista-value">0</b>
+                <button class="seta">
+                  <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
+                  </svg>
+                </button>
+              </div>
+            </li>
+            <hr class="linha">
+          </ul>
+        </article>
+
+        <article class="bloco">
+          <header class="bloco-header">
+            <h3>Avisos & Novidades</h3>
+          </header>
+          <hr class="linha">
+          <ul id="ann_list" class="lista">
+            <li class="lista-item announcement">Novos recursos em desenvolvimento...</li>
+          </ul>
+        </article>
+
+    <!-- Eventos -->
+    <section id="tab_eventos" class="tab painel" aria-labelledby="Eventos">
+      <div class="bloco bloco-wide" id="bloco_eventos">
+        <header class="bloco-header">
+          <h3>Eventos recentes</h3>
+        </header>
+        <hr class="linha">
+        <ul id="event_feed" class="lista">
+          <li class="lista-item">Carregando…</li>
+        </ul>
+        <small class="eventos-footer">Fonte: timeline das devoluções (últimos 50 eventos).</small>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/home.js"></script>
 </body>
 </html>

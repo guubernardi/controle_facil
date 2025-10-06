@@ -62,7 +62,7 @@
 }
 
 body {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-family: 'Roboto', system-ui, -apple-system, sans-serif;
     background: linear-gradient(135deg, var(--background) 0%, hsl(210, 40%, 98%) 50%, hsl(214, 88%, 97%) 100%);
     color: var(--foreground);
     line-height: 1.6;
@@ -91,7 +91,7 @@ body {
 
 /* Container */
 .container {
-    max-width: 1200px;
+    max-width: 1900px;
     margin: 0 auto;
     padding: 25px 1.5rem;
 }
@@ -732,7 +732,7 @@ body {
 .modal-conteudo {
   position: relative;
   width: 100%;           /* garante que use toda a largura disponível */
-  max-width: 960px;      /* largura máxima do modal */
+  max-width: 1900px;      /* largura máxima do modal */
   max-height: 92vh;      /* altura máx. responsiva */
   overflow-y: auto;      /* rolagem só vertical */
   background: var(--card);
@@ -1276,7 +1276,7 @@ body {
   margin-top: .5rem;
   z-index: 30;
   min-width: 260px;
-  max-width: 360px;
+  max-width: 260px;
   background: #0f172a;      /* slate-900 */
   color: #fff;
   border-radius: .5rem;

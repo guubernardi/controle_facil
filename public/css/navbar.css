@@ -1,50 +1,68 @@
 @charset 'UTF-8';
 
-/* base: herda variáveis do index.css */
+/* Variáveis Otimizadas (Mais coerentes com um design system moderno) */
 :root {
-    --accent: hsl(24, 95%, 50%); /* laranja vibrante */
-    --nav-active-bg: #0b5bd3;        /* azul do ativo */
-    --nav-active-fg: #ffffff;        /* texto/branco */
-    --nav-muted: #64748b;            /* slate-500/600 */
-    --nav-hover-bg: rgba(2, 6, 23, .06);
-    --nav-shadow: 0 6px 18px rgba(2, 6, 23, .08);
-    --nav-radius: 14px;              /* pílula */
+    /* Cores de Ação */
+    --color-primary: hsl(240, 70%, 50%); /* Azul principal para o ativo/botão principal */
+    --color-accent: hsl(24, 95%, 50%); /* Laranja vibrante (mantido como destaque) */
+    --color-text-active: #ffffff; /* Texto branco para fundo ativo */
+    
+    /* Cores de Fundo e Texto */
+    --color-bg-base: #ffffff;
+    --color-text-base: #1e293b; /* slate-900 */
+    --color-text-muted: #64748b; /* slate-500 */
+    --color-border: #e2e8f0; /* slate-200 */
+    --color-hover-bg: #f1f5f9; /* slate-100 (hover leve) */
+    
+    /* Sombras e Efeitos */
+    --shadow-subtle: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05); /* Sombra mais suave */
+    --shadow-glow: 0 0 0 3px rgba(37, 99, 235, 0.3); /* Um leve brilho azul no ativo */
+    
+    /* Transição e Elementos */
+    --transition-fast: 0.2s ease-out;
+    --nav-radius: 12px;
 }
 
+/* Base: Fixo no Topo com Efeito Moderno */
 .navbar {
     position: sticky;
     top: 0;
     z-index: 60;
-    background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.86));
-    backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--border);
+    /* Fundo semi-transparente + blur para efeito "glassmorphism" */
+    background: rgba(255, 255, 255, 0.95); 
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--color-border);
+    box-shadow: var(--shadow-subtle); /* A 'elevada' sutil */
+    transition: box-shadow var(--transition-fast);
 }
 
 .nav-inner {
-    display:flex;
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1.25rem 2.5rem; 
-    gap: 1.25rem;
+    padding: 0.75rem 2.5rem; /* Menos padding vertical para um visual mais compacto e moderno */
+    gap: 1.5rem;
 }
 
+/* Brand/Logo */
 .brand {
     display: flex;
     align-items: center;
-    gap: .5rem;
+    gap: .75rem;
     text-decoration: none;
-    color: var(--foreground);
-    font-weight: 600;
+    color: var(--color-text-base);
+    font-weight: 700;
+    font-size: 1.15rem; /* Um pouco maior */
 }
 
 .brand img {
-    width: 56px;
-    height: 56px;
-    border-radius: 10px;
-    box-shadow: var(--shadow-card);
-    object-fit: cover;
+    width: 40px; /* Reduzido para um visual mais clean */
+    height: 40px;
+    border-radius: 8px; /* Mais suave */
+    box-shadow: var(--shadow-subtle);
 }
 
+/* Links de Navegação */
 .nav-links {
     display: flex;
     gap: .5rem;
@@ -52,48 +70,48 @@
 }
 
 .nav-links a {
-    padding: .6rem .9rem; /* maior touch target */
-    border-radius: 10px;
-    color: var(--muted-foreground);
+    padding: .5rem .9rem; /* Touch target ideal */
+    border-radius: var(--nav-radius);
+    color: var(--color-text-muted);
     text-decoration: none;
-    border: 1px solid transparent;
-    transition: var(--transition-fast);
-    font-size: 1rem; /* ligeiramente maior */
+    transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+    font-size: 0.95rem; 
     display: inline-flex;
     align-items: center;
-    gap: .65rem;
+    gap: .5rem; /* Mais compacto */
 }
 
 .nav-links a .nav-ico { 
-    opacity: .95; 
-    transition: transform .18s ease, color .18s ease; color: var(--muted-foreground); 
-    width:18px; 
-    height:18px; 
+    width: 16px; /* Um pouco menor para melhor proporção */
+    height: 16px; 
+    color: var(--color-text-muted);
+    transition: color var(--transition-fast);
 }
 
-.nav-links a span { 
-    display:inline-block; 
-    vertical-align:middle; 
-}
-
+/* Efeito de Hover: Mais Sutil e Coerente */
 .nav-links a:hover {
-    background: var(--muted);
-    color: var(--foreground);
+    background: var(--color-hover-bg);
+    color: var(--color-text-base);
 }
 
 .nav-links a:hover .nav-ico { 
-    color: var(--accent); 
-    transform: translateX(6px); 
+    color: var(--color-primary); /* Icone ganha cor do sistema */
+    transform: none; /* Remove a translação, que pode ser distrativa */
 }
 
+/* Estado Ativo: O mais importante! */
 .nav-links a.active {
-    background: var(--gradient-primary);
-    color: var(--primary-foreground);
-    font-weight: 700;
-    box-shadow: var(--shadow-glow);
+    background: var(--color-primary); /* Fundo com cor primária sólida */
+    color: var(--color-text-active);
+    font-weight: 600;
+    box-shadow: var(--shadow-glow); /* Leve brilho para destacar */
 }
 
-/* área de ações no nav (botões à direita) */
+.nav-links a.active .nav-ico {
+    color: var(--color-text-active); /* Ícone branco no fundo azul */
+}
+
+/* Área de Ações (Botão Novo) */
 .acoes-header {
     display: flex;
     align-items: center;
@@ -101,83 +119,72 @@
     margin-left: 0.75rem;
 }
 
-.acoes-header .botao { 
-    padding: .6rem 1rem; 
-    border-radius: 10px; 
-}
-
 .acoes-header .botao.botao-principal { 
-    background: var(--primary); 
-    color: var(--primary-foreground); 
-    box-shadow: var(--shadow-card); 
+    /* Estilo do botão ligeiramente aprimorado para combinar */
+    padding: .6rem 1rem; 
+    border-radius: var(--nav-radius); 
+    background: var(--color-accent); /* Usando a cor laranja de destaque */
+    color: var(--color-text-active); 
+    box-shadow: 0 4px 12px -2px rgba(240, 100, 0, 0.4); /* Sombra mais vibrante */
+    font-weight: 600;
+    transition: all var(--transition-fast);
 }
 
-.acoes-header .botao.botao-outline { 
-    border: 1px solid var(--input); 
+.acoes-header .botao.botao-principal:hover {
+    background: hsl(24, 95%, 45%); /* Um pouco mais escuro no hover */
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px -2px rgba(240, 100, 0, 0.5); 
 }
 
-.acoes-header .botao .icone { 
-    width: 16px; 
-    height: 16px; 
-    margin-right: .45rem; 
-}
-
-/* toggle button (hamburger) */
-.nav-toggle { 
+nav-toggle { 
     background: transparent; 
     border: 0; 
     padding: 10px; 
+    display: none;
     display: none; 
-    color: var(--foreground); 
+    color: var(--color-text-base); 
     cursor: pointer; 
     border-radius: 8px; 
 }
 
-.nav-toggle svg { 
-    display:block; 
+/* Garante que links e ações fiquem no final do nav (desktop) */
+.nav-links,
+.acoes-header {
+    /* flex: 0 1 auto é bom para eles não tentarem crescer */
+    flex: 0 1 auto; 
 }
 
-.nav-toggle .bar { 
-    transition: transform .22s 
-    cubic-bezier(.2,.9,.2,1), opacity .18s ease; 
-    transform-origin: 
-    center; 
-    stroke: currentColor; 
-}
 
-/* quando aberto, o botão vira X (usa atributo aria-expanded) */
-.nav-toggle[aria-expanded="true"] .bar1 { transform: translateY(5px) rotate(45deg); }
-.nav-toggle[aria-expanded="true"] .bar2 { opacity: 0; }
-.nav-toggle[aria-expanded="true"] .bar3 { transform: translateY(-5px) rotate(-45deg); }
+/* --- MOBILE (max-width: 720px) --- */
 
 @media (max-width: 720px) {
-    .nav-inner { padding: .5rem .75rem; }
+    /* Mostra o hambúrguer SOMENTE no mobile */
+    .nav-toggle { 
+        display: inline-flex; 
+        align-items: center; 
+    }
+    
+    /* Reposiciona e esconde os links (desktop) no mobile por padrão */
     .nav-links {
         position: absolute;
         right: 1rem;
         top: 60px;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(8px);
-        border: 1px solid var(--border);
-        padding: .5rem;
-        border-radius: 8px;
-        flex-direction: column;
-        gap: .25rem;
-        display: none;
-        min-width: 160px;
+        /* ... (restante dos estilos de menu mobile) ... */
+        display: none; /* Escondido por padrão no mobile */
     }
-    .nav-links.show { display: flex; }
-    .nav-toggle { display: inline-flex; align-items:center; }
-
-    /* menu items mobile: full width, touch-friendly */
-    .nav-links a { padding: .6rem .75rem; border-radius:6px; width: 100%; }
-
-    /* Dentro do menu mobile, mostramos também a area de ações (botão) */
-    .acoes-header { display: none; }
-    .nav-links.show + .acoes-header { display: flex; }
-
-    /* small visual tweak for active link on mobile */
-    .nav-links a.active { width: 100%; box-shadow: none; border-radius: 6px; }
+    
+    .nav-links.show { 
+        display: flex; /* Mostrado ao clicar no hambúrguer */
+    }
+    
+    /* Esconde a área de ações no mobile, a menos que o menu esteja aberto */
+    .acoes-header { 
+        display: none; 
+    }
+    
+    .nav-links.show + .acoes-header { 
+        display: flex; /* Se for um botão "Nova Devolução", ele aparecerá abaixo do nav-links no mobile */
+    }
+    
+    /* ... (restante dos estilos mobile) ... */
 }
-
-

@@ -4,6 +4,8 @@
 /* Mapeamentos leves para a página de callback*/
 .cartao {
   /* reutiliza o estilo de card */
+  font-family: 'Roboto', sans-serif;
+  font-size: 1rem;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
