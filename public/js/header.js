@@ -14,7 +14,9 @@
     if (body.classList.contains('home-page') || body.classList.contains('home-page')) {
       activeKey = 'home';
     }
-
+    if (body.classList.contains('csv-page') || body.classList.contains('csv-page')) {
+      activeKey = 'csv';
+    }
   }
 
   // --- 2) fallback pela rota

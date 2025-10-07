@@ -11,33 +11,19 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/logs.css">
   <link rel="stylesheet" href="css/navbar.css">
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="icon">
 </head>
 <body class="logs-page">
-    <script src="js/header.js"></script>
-  <main class="container-principal">
-    <!-- Header -->
+  <script src="js/header.js"></script>
+  
+  <main class="container-principal"> 
     <header class="cabecalho-pagina animate-slide-down">
       <div class="info-cabecalho">
-        <div class="titulo-container">
-          <div class="icone-pagina shimmer" aria-hidden="true">📊</div>
-          <div>
-            <h1 class="titulo-pagina">Log de Custos</h1>
-            <p class="subtitulo-pagina">
-              <span class="regra-item">💳 Rejeitado = R$ 0</span>
-              <span class="regra-item">👤 Motivos do cliente = R$ 0</span>
-              <span class="regra-item">📦 Recebido no CD/Inspeção = só frete</span>
-            </p>
-          </div>
-        </div>
+        <h1 class="titulo-pagina">Log de Custos</h1>
+        <p class="subtitulo-pagina">Auditoria de custos com regras aplicadas automaticamente</p>
       </div>
 
       <div class="acoes-topo">
-        <label class="chk-inline">
-          <input type="checkbox" id="chkDryRun">
-          <span class="checkbox-custom"></span>
-          <span>Simular (dry-run)</span>
-        </label>
-
         <button id="btnImportarCsv" class="botao botao-primario">
           <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
@@ -50,179 +36,172 @@
           <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
           </svg>
-          Baixar modelo CSV
+          Modelo CSV
         </a>
       </div>
     </header>
 
-    <!-- Filtros -->
-    <section class="cartao-filtros animate-fade-in" aria-labelledby="filtros-title" style="animation-delay: 0.1s">
-      <div class="cabecalho-filtros">
-        <h2 id="filtros-title" class="titulo-secao">
-          <svg class="icone-secao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M6,13H18V11H6M3,6V8H21V6M10,18H14V16H10V18Z"/>
+    <section class="resumo-totais animate-fade-in" aria-live="polite" style="animation-delay: 0.1s">
+      <div class="item-resumo">
+        <div class="icone-resumo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3M19,5V19H5V5H19Z"/>
           </svg>
-          Filtros
-        </h2>
-        <div class="contador-resultados" id="contador-filtros">
-          <span class="contador-badge">Todos os registros</span>
         </div>
-      </div>
-      
-      <div class="grade-filtros">
-        <div class="grupo-filtro">
-          <label class="rotulo-filtro" for="filtro-data-de">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M9,10V12H7V10H9M13,10V12H11V10H13M17,10V12H15V10H17M19,3A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5C3.89,21 3,20.1 3,19V5A2,2 0 0,1 5,3H6V1H8V3H16V1H18V3H19M19,19V8H5V19H19M9,14V16H7V14H9M13,14V16H11V14H13M17,14V16H15V14H17Z"/>
-            </svg>
-            Data de
-          </label>
-          <input type="date" id="filtro-data-de" class="campo-entrada">
-        </div>
-
-        <div class="grupo-filtro">
-          <label class="rotulo-filtro" for="filtro-data-ate">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M9,10V12H7V10H9M13,10V12H11V10H13M17,10V12H15V10H17M19,3A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5C3.89,21 3,20.1 3,19V5A2,2 0 0,1 5,3H6V1H8V3H16V1H18V3H19M19,19V8H5V19H19M9,14V16H7V14H9M13,14V16H11V14H13M17,14V16H15V14H17Z"/>
-            </svg>
-            Data até
-          </label>
-          <input type="date" id="filtro-data-ate" class="campo-entrada">
-        </div>
-
-        <div class="grupo-filtro">
-          <label class="rotulo-filtro" for="filtro-status">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,16.5L6.5,12L7.91,10.59L11,13.67L16.59,8.09L18,9.5L11,16.5Z"/>
-            </svg>
-            Status
-          </label>
-          <div class="select-wrapper">
-            <select id="filtro-status" class="campo-entrada">
-              <option value="">Todos</option>
-              <option value="pendente">Pendente</option>
-              <option value="aprovado">Aprovado</option>
-              <option value="rejeitado">Rejeitado</option>
-              <option value="recebido_cd">Recebido no CD</option>
-              <option value="em_inspecao">Em inspeção</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grupo-filtro">
-          <label class="rotulo-filtro" for="filtro-responsavel">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M16,13C15.71,13 15.38,13 15.03,13.05C16.19,13.89 17,15 17,16.5V19H23V16.5C23,14.17 18.33,13 16,13M8,13C5.67,13 1,14.17 1,16.5V19H15V16.5C15,14.17 10.33,13 8,13M8,11A3,3 0 0,0 11,8A3,3 0 0,0 8,5A3,3 0 0,0 5,8A3,3 0 0,0 8,11M16,11A3,3 0 0,0 19,8A3,3 0 0,0 16,5A3,3 0 0,0 13,8A3,3 0 0,0 16,11Z"/>
-            </svg>
-            Responsável custo
-          </label>
-          <div class="select-wrapper">
-            <select id="filtro-responsavel" class="campo-entrada">
-              <option value="">Todos</option>
-              <option value="plataforma">Plataforma</option>
-              <option value="loja">Loja</option>
-              <option value="logistica">Logística</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grupo-filtro">
-          <label class="rotulo-filtro" for="filtro-loja">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12,18H6V14H12M21,14V12L20,7H4L3,12V14H4V20H14V14H18V20H20V14M20,4H4V6H20V4Z"/>
-            </svg>
-            Loja
-          </label>
-          <input type="text" id="filtro-loja" class="campo-entrada" placeholder="Nome da loja">
-        </div>
-
-        <div class="grupo-filtro">
-          <label class="rotulo-filtro" for="filtro-itens-pagina">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M3,5H9V11H3V5M5,7V9H7V7H5M11,7H21V5H11V7M11,19H21V17H11V19M11,13H21V11H11V13M3,13H9V19H3V13M5,15V17H7V15H5Z"/>
-            </svg>
-            Itens por página
-          </label>
-          <div class="select-wrapper">
-            <select id="filtro-itens-pagina" class="campo-entrada">
-              <option value="25">25</option>
-              <option value="50" selected>50</option>
-              <option value="100">100</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grupo-filtro coluna-completa">
-          <label class="rotulo-filtro" for="filtro-busca">
-            <svg class="icone-campo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M9.5,3A6.5,6.5 0 0,1 16,9.5C16,11.11 15.41,12.59 14.44,13.73L14.71,14H15.5L20.5,19L19,20.5L14,15.5V14.71L13.73,14.44C12.59,15.41 11.11,16 9.5,16A6.5,6.5 0 0,1 3,9.5A6.5,6.5 0 0,1 9.5,3M9.5,5C7,5 5,7 5,9.5C5,12 7,14 9.5,14C12,14 14,12 14,9.5C14,7 12,5 9.5,5Z"/>
-            </svg>
-            Busca
-          </label>
-          <div class="campo-busca">
-            <svg class="icone-busca" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <circle cx="11" cy="11" r="8"></circle>
-              <path d="m21 21-4.35-4.35"></path>
-            </svg>
-            <input type="text" id="filtro-busca" class="campo-entrada-busca" placeholder="Pedido, cliente, SKU ou motivo…">
-            <button type="button" class="botao-limpar-busca" onclick="document.getElementById('filtro-busca').value = ''" aria-label="Limpar busca">
-              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <div class="acoes-filtros coluna-completa">
-          <button id="botao-aplicar" class="botao botao-primario">
-            <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z"/>
-            </svg>
-            Aplicar filtros
-          </button>
-          <button id="botao-limpar" class="botao botao-secundario">
-            <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
-            </svg>
-            Limpar
-          </button>
-          <button id="botao-exportar" class="botao botao-secundario">
-            <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M23,12L19,8V11H10V13H19V16M1,18V6C1,4.89 1.89,4 3,4H15A2,2 0 0,1 17,6V9H15V6H3V18H15V15H17V18A2,2 0 0,1 15,20H3C1.89,20 1,19.11 1,18Z"/>
-            </svg>
-            Exportar CSV
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <!-- Resumo -->
-    <section class="resumo-totais animate-fade-in" aria-live="polite" style="animation-delay: 0.2s">
-      <div class="item-resumo pulse-subtle">
-        <div class="icone-resumo" aria-hidden="true">📋</div>
         <div>
           <span class="rotulo-resumo">Total de registros</span>
           <span class="valor-resumo" id="total-registros">0</span>
         </div>
       </div>
-      <div class="item-resumo destaque-valor pulse-subtle" style="animation-delay: 0.1s">
-        <div class="icone-resumo shimmer" aria-hidden="true">💰</div>
+      <div class="item-resumo destaque-valor">
+        <div class="icone-resumo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7,15H9C9,16.08 10.37,17 12,17C13.63,17 15,16.08 15,15C15,13.9 13.96,13.5 11.76,12.97C9.64,12.44 7,11.78 7,9C7,7.21 8.47,5.69 10.5,5.18V3H13.5V5.18C15.53,5.69 17,7.21 17,9H15C15,7.92 13.63,7 12,7C10.37,7 9,7.92 9,9C9,10.1 10.04,10.5 12.24,11.03C14.36,11.56 17,12.22 17,15C17,16.79 15.53,18.31 13.5,18.82V21H10.5V18.82C8.47,18.31 7,16.79 7,15Z"/>
+          </svg>
+        </div>
         <div>
           <span class="rotulo-resumo">Soma do período</span>
           <span class="valor-resumo destaque" id="soma-periodo">R$ 0,00</span>
         </div>
       </div>
     </section>
+ 
+    <section class="cartao-filtros animate-fade-in" aria-labelledby="filtros-title" style="animation-delay: 0.2s">
+      <div class="cabecalho-filtros">
+        <button class="toggle-filtros" id="toggle-filtros" aria-expanded="true" aria-controls="filtros-conteudo">
+          <svg class="icone-toggle" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M6,13H18V11H6M3,6V8H21V6M10,18H14V16H10V18Z"/>
+          </svg>
+          <h2 id="filtros-title" class="titulo-secao">Filtros</h2>
+          <svg class="icone-chevron" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z"/>
+          </svg>
+        </button>
+        <div class="contador-resultados" id="contador-filtros">
+          <span class="contador-badge">Todos os registros</span>
+        </div>
+      </div>
+      
+      <div class="filtros-conteudo" id="filtros-conteudo">
+         Simplified filter layout with better grouping 
+        <div class="grade-filtros">
+          <div class="grupo-filtro-linha">
+            <div class="grupo-filtro">
+              <label class="rotulo-filtro" for="filtro-data-de">Data de</label>
+              <input type="date" id="filtro-data-de" class="campo-entrada">
+            </div>
 
-    <!-- Tabela -->
+            <div class="grupo-filtro">
+              <label class="rotulo-filtro" for="filtro-data-ate">Data até</label>
+              <input type="date" id="filtro-data-ate" class="campo-entrada">
+            </div>
+          </div>
+
+          <div class="grupo-filtro-linha">
+            <div class="grupo-filtro">
+              <label class="rotulo-filtro" for="filtro-status">Status</label>
+              <div class="select-wrapper">
+                <select id="filtro-status" class="campo-entrada">
+                  <option value="">Todos</option>
+                  <option value="pendente">Pendente</option>
+                  <option value="aprovado">Aprovado</option>
+                  <option value="rejeitado">Rejeitado</option>
+                  <option value="recebido_cd">Recebido no CD</option>
+                  <option value="em_inspecao">Em inspeção</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="grupo-filtro">
+              <label class="rotulo-filtro" for="filtro-responsavel">Responsável</label>
+              <div class="select-wrapper">
+                <select id="filtro-responsavel" class="campo-entrada">
+                  <option value="">Todos</option>
+                  <option value="plataforma">Plataforma</option>
+                  <option value="loja">Loja</option>
+                  <option value="logistica">Logística</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="grupo-filtro-linha">
+            <div class="grupo-filtro">
+              <label class="rotulo-filtro" for="filtro-loja">Loja</label>
+              <input type="text" id="filtro-loja" class="campo-entrada" placeholder="Nome da loja">
+            </div>
+
+            <div class="grupo-filtro">
+              <label class="rotulo-filtro" for="filtro-itens-pagina">Itens por página</label>
+              <div class="select-wrapper">
+                <select id="filtro-itens-pagina" class="campo-entrada">
+                  <option value="25">25</option>
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="grupo-filtro coluna-completa">
+            <label class="rotulo-filtro" for="filtro-busca">Buscar</label>
+            <div class="campo-busca">
+              <svg class="icone-busca" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+              </svg>
+              <input type="text" id="filtro-busca" class="campo-entrada-busca" placeholder="Pedido, cliente, SKU ou motivo…">
+              <button type="button" class="botao-limpar-busca" onclick="document.getElementById('filtro-busca').value = ''" aria-label="Limpar busca">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="acoes-filtros coluna-completa">
+            <button id="botao-aplicar" class="botao botao-primario">
+              <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z"/>
+              </svg>
+              Aplicar
+            </button>
+            <button id="botao-limpar" class="botao botao-secundario">
+              <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+              </svg>
+              Limpar
+            </button>
+            <button id="botao-exportar" class="botao botao-secundario">
+              <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M23,12L19,8V11H10V13H19V16M1,18V6C1,4.89 1.89,4 3,4H15A2,2 0 0,1 17,6V9H15V6H3V18H15V15H17V18A2,2 0 0,1 15,20H3C1.89,20 1,19.11 1,18Z"/>
+              </svg>
+              Exportar
+            </button>
+            
+            <label class="chk-inline">
+              <input type="checkbox" id="chkDryRun">
+              <span class="checkbox-custom"></span>
+              <span>Simular importação</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="regras-info">
+          <svg class="icone-info" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M13,9H11V7H13M13,17H11V11H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
+          </svg>
+          <div>
+            <strong>Regras de cálculo:</strong>
+            <span>Rejeitado = R$ 0 · Motivo do cliente = R$ 0 · Recebido no CD/Inspeção = só frete</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="cartao-tabela animate-fade-in" style="animation-delay: 0.3s">
       <div class="cabecalho-tabela">
-        <h3 class="titulo-tabela">
-          <svg class="icone-secao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M5,4H7V6H5V4M9,4H21V6H9V4M5,8H7V10H5V8M9,8H21V10H9V8M5,12H7V14H5V12M9,12H21V14H9V12M5,16H7V18H5V16M9,16H21V18H9V16M5,20H7V22H5V20M9,20H21V22H9V20Z"/>
-          </svg>
-          Registros encontrados
-        </h3>
+        <h3 class="titulo-tabela">Registros</h3>
       </div>
       <div class="container-tabela">
         <table class="tabela-logs">
@@ -230,9 +209,6 @@
             <tr>
               <th data-col="event_at" class="sortable">
                 <span class="th-content">
-                  <svg class="icone-coluna" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M9,10V12H7V10H9M13,10V12H11V10H13M17,10V12H15V10H17M19,3A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5C3.89,21 3,20.1 3,19V5A2,2 0 0,1 5,3H6V1H8V3H16V1H18V3H19M19,19V8H5V19H19M9,14V16H7V14H9M13,14V16H11V14H13M17,14V16H15V14H17Z"/>
-                  </svg>
                   Data
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M18,21L14,17H17V7H14L18,3L22,7H19V17H22M2,19V17H12V19M2,13V11H9V13M2,7V5H6V7H2Z"/>
@@ -241,9 +217,6 @@
               </th>
               <th data-col="numero_pedido" class="sortable">
                 <span class="th-content">
-                  <svg class="icone-coluna" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M17,9H7V7H17M17,13H7V11H17M14,17H7V15H14M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3Z"/>
-                  </svg>
                   Pedido
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M18,21L14,17H17V7H14L18,3L22,7H19V17H22M2,19V17H12V19M2,13V11H9V13M2,7V5H6V7H2Z"/>
@@ -252,9 +225,6 @@
               </th>
               <th data-col="cliente_nome" class="sortable">
                 <span class="th-content">
-                  <svg class="icone-coluna" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M12,4A4,4 0 0,1 16,8A4,4 0 0,1 12,12A4,4 0 0,1 8,8A4,4 0 0,1 12,4M12,14C16.42,14 20,15.79 20,18V20H4V18C4,15.79 7.58,14 12,14Z"/>
-                  </svg>
                   Cliente
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M18,21L14,17H17V7H14L18,3L22,7H19V17H22M2,19V17H12V19M2,13V11H9V13M2,7V5H6V7H2Z"/>
@@ -263,9 +233,6 @@
               </th>
               <th data-col="loja_nome" class="sortable">
                 <span class="th-content">
-                  <svg class="icone-coluna" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M12,18H6V14H12M21,14V12L20,7H4L3,12V14H4V20H14V14H18V20H20V14M20,4H4V6H20V4Z"/>
-                  </svg>
                   Loja
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M18,21L14,17H17V7H14L18,3L22,7H19V17H22M2,19V17H12V19M2,13V11H9V13M2,7V5H6V7H2Z"/>
@@ -274,9 +241,6 @@
               </th>
               <th data-col="status" class="sortable">
                 <span class="th-content">
-                  <svg class="icone-coluna" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,16.5L6.5,12L7.91,10.59L11,13.67L16.59,8.09L18,9.5L11,16.5Z"/>
-                  </svg>
                   Status
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M18,21L14,17H17V7H14L18,3L22,7H19V17H22M2,19V17H12V19M2,13V11H9V13M2,7V5H6V7H2Z"/>
@@ -285,9 +249,6 @@
               </th>
               <th class="texto-direita sortable" data-col="total">
                 <span class="th-content">
-                  <svg class="icone-coluna" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M7,15H9C9,16.08 10.37,17 12,17C13.63,17 15,16.08 15,15C15,13.9 13.96,13.5 11.76,12.97C9.64,12.44 7,11.78 7,9C7,7.21 8.47,5.69 10.5,5.18V3H13.5V5.18C15.53,5.69 17,7.21 17,9H15C15,7.92 13.63,7 12,7C10.37,7 9,7.92 9,9C9,10.1 10.04,10.5 12.24,11.03C14.36,11.56 17,12.22 17,15C17,16.79 15.53,18.31 13.5,18.82V21H10.5V18.82C8.47,18.31 7,16.79 7,15Z"/>
-                  </svg>
                   Total
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                     <path d="M18,21L14,17H17V7H14L18,3L22,7H19V17H22M2,19V17H12V19M2,13V11H9V13M2,7V5H6V7H2Z"/>
@@ -303,7 +264,6 @@
       </div>
     </section>
 
-    <!-- Paginação -->
     <nav class="controles-paginacao animate-fade-in" aria-live="polite" style="animation-delay: 0.4s">
       <button id="botao-anterior" class="botao botao-paginacao" disabled>
         <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -320,7 +280,6 @@
       </button>
     </nav>
 
-    <!-- Toast -->
     <div id="toast" class="toast" role="status" aria-live="polite">
       <div class="toast-content">
         <svg class="toast-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

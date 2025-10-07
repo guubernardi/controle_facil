@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retorno Facil - CSV</title>
+  <meta name="description" content="Sistema profissional de conciliação de devoluções do Mercado Livre via CSV">
+  <link rel="stylesheet" href="css/csv.css">
+  <link rel="stylesheet" href="css/navbar.css">
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="icon">
+</head>
+<body class="csv-page">
+  <script src="js/header.js"></script>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div class="logo-area">
+          <div class="logo-wrapper">
+            <div class="logo-icon">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                <line x1="12" y1="22.08" x2="12" y2="12"/>
+              </svg>
+            </div>
+            <div class="logo-badge">
+              <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+              </svg>
+            </div>
+          </div>
+          <div class="header-text">
+            <h1 class="header-title">Retorno Facil</h1>
+            <p class="header-subtitle">Upload de CSV</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="main-content">
+    <div class="container">
+      <!-- Stats Section -->
+      <section class="stats-section">
+        <div class="stats-grid">
+          <div class="stat-card" data-variant="default">
+            <div class="stat-header">
+              <span class="stat-title">Total de Devoluções</span>
+              <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+              </svg>
+            </div>
+            <div class="stat-value" id="stat-total">5</div>
+            <div class="stat-description">Registros no sistema</div>
+          </div>
+
+          <div class="stat-card" data-variant="warning">
+            <div class="stat-header">
+              <span class="stat-title">Pendentes</span>
+              <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </div>
+            <div class="stat-value" id="stat-pending">2</div>
+            <div class="stat-description">Aguardando análise</div>
+          </div>
+
+          <div class="stat-card" data-variant="success">
+            <div class="stat-header">
+              <span class="stat-title">Aprovadas</span>
+              <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+              </svg>
+            </div>
+            <div class="stat-value" id="stat-approved">2</div>
+            <div class="stat-description">Reembolso autorizado</div>
+          </div>
+
+          <div class="stat-card" data-variant="danger">
+            <div class="stat-header">
+              <span class="stat-title">Rejeitadas</span>
+              <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="15" y1="9" x2="9" y2="15"/>
+                <line x1="9" y1="9" x2="15" y2="15"/>
+              </svg>
+            </div>
+            <div class="stat-value" id="stat-rejected">1</div>
+            <div class="stat-description">Fora das políticas</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Upload -->
+      <section class="upload-section">
+        <div class="upload-card">
+          <div class="upload-header">
+            <h2 class="section-title">Upload de CSV</h2>
+            <p class="section-description">Envie o relatório de pós-venda do Mercado Livre</p>
+          </div>
+
+          <div class="upload-area" id="uploadArea">
+            <input type="file" id="fileInput" accept=".csv" hidden>
+            <div class="upload-content">
+              <div class="upload-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              </div>
+              <p class="upload-text">Arraste e solte seu CSV</p>
+              <p class="upload-subtext">ou clique para selecionar</p>
+              <div class="file-selected" id="fileSelected" hidden>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                </svg>
+                <span id="fileName">arquivo.csv</span>
+                <svg class="icon-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <div class="upload-info">
+            <svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <div class="info-text">
+              <p class="info-title">Formato esperado</p>
+              <p class="info-description">O CSV deve conter: ID da devolução, Data, SKU, Cliente, Motivo, Status e Valor</p>
+            </div>
+          </div>
+
+            <div class="upload-actions" style="display:flex; gap:.5rem; flex-wrap:wrap; margin: .5rem 0 1rem;">
+              <button class="btn btn-outline" id="btnTplDefault">Baixar modelo (default)</button>
+              <button class="btn btn-outline" id="btnTplAC">Baixar modelo (after_collection)</button>
+
+              <div class="idemp-wrap" style="display:flex; gap:.5rem; align-items:center;">
+                <label for="idempBatch" style="font-size:.875rem; color:#64748b;">Idempotência do arquivo:</label>
+                <input id="idempBatch" placeholder="ex.: LOTE-ML-2025-10-07" style="padding:.5rem .75rem; border:1px solid #e2e8f0; border-radius:.5rem; min-width: 240px;">
+              </div>
+            </div>
+
+
+          <button class="btn btn-primary btn-lg" id="uploadBtn" disabled>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Enviar CSV
+          </button>
+        </div>
+      </section>
+
+      <!-- Seleção de filtros  -->
+      <section class="filter-section">
+        <div class="filter-bar">
+          <div class="search-input">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input type="text" id="searchInput" placeholder="Buscar por ID, SKU ou cliente...">
+          </div>
+          <select id="statusFilter" class="status-select">
+            <option value="all">Todos os status</option>
+            <option value="pending">Pendente</option>
+            <option value="approved">Aprovado</option>
+            <option value="rejected">Rejeitado</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="returns-section">
+        <div class="section-header">
+          <h2 class="section-title">Devoluções Recentes</h2>
+          <p class="section-subtitle" id="resultsCount">5 resultado(s) encontrado(s)</p>
+        </div>
+
+        <div class="returns-list" id="returnsList">
+          <!-- Cards retorna via javascript -->
+        </div>
+
+        <div class="empty-state" id="emptyState" hidden>
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+          </svg>
+          <h3 class="empty-title">Nenhuma devolução encontrada</h3>
+          <p class="empty-description">Tente ajustar os filtros ou fazer uma nova busca</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="js/csv.js"></script>
+</body>
+</html>

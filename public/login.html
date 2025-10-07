@@ -5,235 +5,120 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-    <style>
-
-        body {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Inter', sans-serif;
-        }
-
-
-
-        .form {
-            --bg-light: #efefef;
-            --bg-dark: hsl(214, 88%, 27%);
-            --clr: #4052D6;
-            --clr-alpha: #ffffff60;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1rem;
-            width: 100%;
-            max-width: 300px;
-        }
-
-            .form .input-span {
-            width: 100%;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-            .form input[type="email"],
-            .form input[type="password"] {
-            border-radius: 0.5rem;
-            padding: 1rem 0.75rem;
-            width: 100%;
-            border: none;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            background-color: var(--clr-alpha);
-            outline: 2px solid var(--bg-dark);
-        }
-
-            .form input[type="email"]:focus,
-            .form input[type="password"]:focus {
-            outline: 2px solid var(--clr);
-        }
-
-            .label {
-            align-self: flex-start;
-            color: var(--clr);
-            font-weight: 600;
-        }
-
-            .form .submit {
-            padding: 1rem 0.75rem;
-            width: 100%;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            border-radius: 3rem;
-            background-color: var(--bg-dark);
-            color: var(--bg-light);
-            border: none;
-            cursor: pointer;
-            transition: all 300ms;
-            font-weight: 600;
-            font-size: 0.9rem;
-        }
-
-            .form .submit:hover {
-            background-color: var(--clr);
-            color: white;
-        }
-
-            .span {
-            text-decoration: none;
-            font-family: Arial, Helvetica, sans-serif;
-            font-weight: bold;
-            color: var(--bg-dark);
-        }
-
-            .span a {
-            font-family: Arial, Helvetica, sans-serif;
-            color:  hsl(25, 95%, 53%);
-            text-decoration: none;
-            }
-
-            .span a:hover {
-            text-decoration: underline;
-        }
-
-        .container {
-            width: 100%;
-            max-width: 300px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 50vh;
-        }
-
-        .card {
-            display: flex;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background-color: white;
-            border-radius: 2rem;
-            border: 2px solid black;
-            padding: 3rem 3rem 2rem 3rem;
-            margin: 0px;
-            width: 100%;
-            max-width: 600px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background-color: white;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        button {
-        position: relative;
-        right: 60%;
-        max-width: 320px;
-        display: flex;
-        padding: 0.5rem 1.4rem;
-        font-size: 0.875rem;
-        line-height: 1.25rem;
-        font-weight: 700;
-        text-align: center;
-        text-transform: uppercase;
-        vertical-align: middle;
-        align-items: center;
-        border: 2px solid black;
-        border-radius: 25px;
-        gap: 0.75rem;
-        color: rgb(65, 63, 63);
-        background-color: #fff;
-        cursor: pointer;
-        margin-top: 35px;
-        transition: all .6s ease;
-        }
-
-        .button svg {
-        height: 24px;
-        }
-
-        button:hover {
-        transform: scale(1.02);
-        color: #4052D6;
-        border-color: #4052D6
-        }
-
-        .facebook{
-            display: flex;
-            position: relative;
-            position: absolute;
-            left: 50%;
-            top: 76%;
-            width: 100%;
-            max-width: 320px;
-            background-image: linear-gradient(to top right, #0163E0,#18ACFE);
-            color: #ffffff;
-            padding: 0.5rem 1.4rem;
-            font-size: 0.875rem;
-            line-height: 1.25rem;
-            font-weight: 700;
-            text-align: center;
-            vertical-align: middle;
-            align-items: center;
-            border-radius: 0.5rem;
-            gap: 0.75rem;
-            border: none;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            cursor: pointer;
-            transition: .6s ease;
-            }
-
-            .facebook svg {
-            height: 30px;
-            }
-
-            .facebook:hover {
-            box-shadow: none;
-            color: white;
-            }
-    </style>
-    <title>Login - Controle Facil</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/login.css">
+    <link rel="shortcut icon" href="assets/img/logo_rf.png" type="icon">
+    <title>Login - Retorno Fácil</title>
 </head>
 <body>
+    <div class="login-container">
+        <!-- Left Side - Image -->
+        <div class="login-image-section">
+            <div class="image-content">
+                <img src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/tela_login-HM2Wj5Dlxvv55exoXY9TsFC3Ba0OjD.png" alt="Entrega de Devolução" class="delivery-image">
+                <div class="image-overlay">
+                    <h2>Gestão de Devoluções Simplificada</h2>
+                    <p>Controle total sobre suas devoluções e logística reversa</p>
+                </div>
+            </div>
+        </div>
 
-    <div class="container">
-        <div class="card">
-            <form class="form">
-            <span class="input-span">
-            <label for="email" class="label">
-                Email
-            </label>
+        <!-- Right Side - Login Form -->
+        <div class="login-form-section">
+            <div class="form-wrapper">
+                <div class="logo-section">
+                    <div class="logo-circle">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                            <polyline points="7.5 4.21 12 6.81 16.5 4.21"></polyline>
+                            <polyline points="7.5 19.79 7.5 14.6 3 12"></polyline>
+                            <polyline points="21 12 16.5 14.6 16.5 19.79"></polyline>
+                            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                        </svg>
+                    </div>
+                    <h1>Retorno Fácil</h1>
+                </div>
 
-            <input type="email" name="email" id="email"/></span>
-            <span class="input-span">
-            <label for="password" class="label">Senha</label>
-            <input type="password" name="password" id="password"/></span>
-            <span class="span"><a href="#">Esqueceu a Senha?</a></span>
-            <input class="submit" type="submit" value="Log in" />
-            <span class="span">Não tem uma conta? <a href="#">Cadastra-se</a></span>
- 
-            <button class="button">
-            <svg xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid" viewBox="0 0 256 262">
-            <path fill="#4285F4" d="M255.878 133.451c0-10.734-.871-18.567-2.756-26.69H130.55v48.448h71.947c-1.45 12.04-9.283 30.172-26.69 42.356l-.244 1.622 38.755 30.023 2.685.268c24.659-22.774 38.875-56.282 38.875-96.027"></path>
-            <path fill="#34A853" d="M130.55 261.1c35.248 0 64.839-11.605 86.453-31.622l-41.196-31.913c-11.024 7.688-25.82 13.055-45.257 13.055-34.523 0-63.824-22.773-74.269-54.25l-1.531.13-40.298 31.187-.527 1.465C35.393 231.798 79.49 261.1 130.55 261.1"></path>
-            <path fill="#FBBC05" d="M56.281 156.37c-2.756-8.123-4.351-16.827-4.351-25.82 0-8.994 1.595-17.697 4.206-25.82l-.073-1.73L15.26 71.312l-1.335.635C5.077 89.644 0 109.517 0 130.55s5.077 40.905 13.925 58.602l42.356-32.782"></path>
-            <path fill="#EB4335" d="M130.55 50.479c24.514 0 41.05 10.589 50.479 19.438l36.844-35.974C195.245 12.91 165.798 0 130.55 0 79.49 0 35.393 29.301 13.925 71.947l42.211 32.783c10.59-31.477 39.891-54.251 74.414-54.251"></path>
-            </svg>
-            Continue com Google
-            </button>
+                <div class="welcome-text">
+                    <h2>Bem-vindo de volta!</h2>
+                    <p>Entre com suas credenciais para acessar o sistema</p>
+                </div>
 
-            <button class="facebook">
-                <svg stroke="#ffffff" xml:space="preserve" viewBox="-143 145 512 512" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns="http://www.w3.org/2000/svg" id="Layer_1" version="1.1" fill="#ffffff"><g stroke-width="0" id="SVGRepo_bgCarrier"></g><g stroke-linejoin="round" stroke-linecap="round" id="SVGRepo_tracerCarrier"></g><g id="SVGRepo_iconCarrier"> <path d="M329,145h-432c-22.1,0-40,17.9-40,40v432c0,22.1,17.9,40,40,40h432c22.1,0,40-17.9,40-40V185C369,162.9,351.1,145,329,145z M169.5,357.6l-2.9,38.3h-39.3v133H77.7v-133H51.2v-38.3h26.5v-25.7c0-11.3,0.3-28.8,8.5-39.7c8.7-11.5,20.6-19.3,41.1-19.3 c33.4,0,47.4,4.8,47.4,4.8l-6.6,39.2c0,0-11-3.2-21.3-3.2c-10.3,0-19.5,3.7-19.5,14v29.9H169.5z"></path> </g></svg>
-                Continue com Facebook
-                </button>
+                <form class="form" id="loginForm">
+                    <div class="input-group">
+                        <label for="email" class="label">E-mail</label>
+                        <input 
+                            type="email" 
+                            name="email" 
+                            id="email" 
+                            placeholder="seu@email.com"
+                            required
+                        />
+                    </div>
+
+                    <div class="input-group">
+                        <label for="password" class="label">Senha</label>
+                        <div class="password-wrapper">
+                            <input 
+                                type="password" 
+                                name="password" 
+                                id="password" 
+                                placeholder="••••••••"
+                                required
+                            />
+                            <button type="button" class="toggle-password" id="togglePassword">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-options">
+                        <label class="remember-me">
+                            <input type="checkbox" id="rememberMe" name="rememberMe">
+                            <span>Lembrar-me</span>
+                        </label>
+                        <a href="#" class="forgot-password">Esqueceu a senha?</a>
+                    </div>
+
+                    <button type="submit" class="submit-btn">
+                        Entrar
+                    </button>
+
+                    <div class="divider">
+                        <span>ou continue com</span>
+                    </div>
+
+                    <div class="social-login">
+                        <button type="button" class="social-btn google-btn">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" preserveAspectRatio="xMidYMid" viewBox="0 0 256 262">
+                                <path fill="#4285F4" d="M255.878 133.451c0-10.734-.871-18.567-2.756-26.69H130.55v48.448h71.947c-1.45 12.04-9.283 30.172-26.69 42.356l-.244 1.622 38.755 30.023 2.685.268c24.659-22.774 38.875-56.282 38.875-96.027"></path>
+                                <path fill="#34A853" d="M130.55 261.1c35.248 0 64.839-11.605 86.453-31.622l-41.196-31.913c-11.024 7.688-25.82 13.055-45.257 13.055-34.523 0-63.824-22.773-74.269-54.25l-1.531.13-40.298 31.187-.527 1.465C35.393 231.798 79.49 261.1 130.55 261.1"></path>
+                                <path fill="#FBBC05" d="M56.281 156.37c-2.756-8.123-4.351-16.827-4.351-25.82 0-8.994 1.595-17.697 4.206-25.82l-.073-1.73L15.26 71.312l-1.335.635C5.077 89.644 0 109.517 0 130.55s5.077 40.905 13.925 58.602l42.356-32.782"></path>
+                                <path fill="#EB4335" d="M130.55 50.479c24.514 0 41.05 10.589 50.479 19.438l36.844-35.974C195.245 12.91 165.798 0 130.55 0 79.49 0 35.393 29.301 13.925 71.947l42.211 32.783c10.59-31.477 39.891-54.251 74.414-54.251"></path>
+                            </svg>
+                            Google
+                        </button>
+
+                        <button type="button" class="social-btn facebook-btn">
+                            <svg width="20" height="20" viewBox="-143 145 512 512" xmlns="http://www.w3.org/2000/svg" fill="#ffffff">
+                                <path d="M329,145h-432c-22.1,0-40,17.9-40,40v432c0,22.1,17.9,40,40,40h432c22.1,0,40-17.9,40-40V185C369,162.9,351.1,145,329,145z M169.5,357.6l-2.9,38.3h-39.3v133H77.7v-133H51.2v-38.3h26.5v-25.7c0-11.3,0.3-28.8,8.5-39.7c8.7-11.5,20.6-19.3,41.1-19.3 c33.4,0,47.4,4.8,47.4,4.8l-6.6,39.2c0,0-11-3.2-21.3-3.2c-10.3,0-19.5,3.7-19.5,14v29.9H169.5z"></path>
+                            </svg>
+                            Facebook
+                        </button>
+                    </div>
+
+                    <div class="signup-link">
+                        Não tem uma conta? <a href="#">Cadastre-se</a>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
-    
-</form>
+
+    <script src="js/login.js"></script>
 </body>
 </html>

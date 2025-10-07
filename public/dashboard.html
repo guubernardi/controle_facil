@@ -11,55 +11,67 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="icon">>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
 </head>
 <body class="dashboard-page">
-  <!-- header.js injeta o menu aqui em cima -->
 
   <main class="dashboard-container">
-
-    <!-- Header -->
+ 
     <section class="dashboard-header">
       <div class="dashboard-header-content">
         <h1 class="dashboard-welcome">Bem-vindo ao Dashboard</h1>
-        <p class="dashboard-subtitle">Acompanhe as métricas e devoluções do seu comércio</p>
+        <p class="dashboard-subtitle">Acompanhe as métricas e devoluções do seu comércio em tempo real</p>
       </div>
     </section>
 
-    <!-- Filtros -->
+     Filtros 
     <section class="dashboard-filters">
-      <div class="campo-filtro">
-        <input type="date" id="filtro-from" class="input-form" />
+      <div class="filtros-grupo">
+        <div class="campo-filtro">
+          <label for="filtro-from" class="filtro-label">Data inicial</label>
+          <input type="date" id="filtro-from" class="input-form" />
+        </div>
+        <div class="campo-filtro">
+          <label for="filtro-to" class="filtro-label">Data final</label>
+          <input type="date" id="filtro-to" class="input-form" />
+        </div>
+        <button id="btn-aplicar" class="botao botao-principal">
+          <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/>
+            <path d="M10.5 2.5L13.5 5.5"/>
+          </svg>
+          Aplicar Filtros
+        </button>
       </div>
-      <div class="campo-filtro">
-        <input type="date" id="filtro-to" class="input-form" />
-      </div>
-      <button id="btn-aplicar" class="botao botao-principal">Aplicar Filtros</button>
     </section>
 
-    <!-- KPIs -->
+     KPIs 
     <section class="dashboard-stats-grid">
 
       <div class="stat-card total">
         <div class="stat-card-header">
-          <span class="stat-card-title">Total</span>
+          <span class="stat-card-title">Total de Devoluções</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--total" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+            <svg class="dash-icon icon--total" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
           </div>
         </div>
         <div class="stat-card-value" id="dash-total">0</div>
-        <div class="stat-card-change">Devoluções totais</div>
+        <div class="stat-card-change">Todas as devoluções registradas</div>
       </div>
 
       <div class="stat-card pendente">
         <div class="stat-card-header">
           <span class="stat-card-title">Pendentes</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--pendente" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14z"/>
-              <path d="M8 4a.5.5 0 0 1 .5.5v3H12a.5.5 0 0 1 0 1H7.5a.5.5 0 0 1-.5-.5V4.5A.5.5 0 0 1 8 4z"/>
+            <svg class="dash-icon icon--pendente" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
             </svg>
           </div>
         </div>
@@ -71,8 +83,9 @@
         <div class="stat-card-header">
           <span class="stat-card-title">Aprovadas</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--aprovado" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M10.97 4.97a.75.75 0 0 1 1.07 1.05l-4 5a.75.75 0 0 1-1.08.02L4.324 8.384a.75.75 0 1 1 1.06-1.06l2.094 2.093 3.492-4.446z"/>
+            <svg class="dash-icon icon--aprovado" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
           </div>
         </div>
@@ -84,8 +97,10 @@
         <div class="stat-card-header">
           <span class="stat-card-title">Rejeitadas</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--rejeitado" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 1 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+            <svg class="dash-icon icon--rejeitado" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
             </svg>
           </div>
         </div>
@@ -95,31 +110,68 @@
 
     </section>
 
-    <!-- Linha 2: Gráfico + Resumo -->
+     Linha 2: Gráfico + Resumo 
     <section class="dashboard-main-grid">
       <div class="dashboard-card chart-card">
         <div class="dashboard-card-header">
           <div>
-            <h2 class="dashboard-card-title">Prejuízo Total</h2>
-            <a id="link-log" class="btn ghost" title="Ver log de custos">Ver log</a>
-              <script>
-                document.addEventListener('DOMContentLoaded', () => {
-                  const f = document.getElementById('filtro-from')?.value;
-                  const t = document.getElementById('filtro-to')?.value;
-                  const a = document.getElementById('link-log');
-                  if (a && f && t) a.href = `/logs.html?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
-                });
-              </script>
-            <p class="dashboard-card-subtitle">Análise financeira do período</p>
+            <h2 class="dashboard-card-title">Análise de Prejuízo</h2>
+            <p class="dashboard-card-subtitle">Acompanhe o impacto financeiro das devoluções</p>
           </div>
+          <a id="link-log" href="/logs.html" class="btn-link" title="Ver log detalhado de custos">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            Ver log completo
+          </a>
+          <script>
+            document.addEventListener('DOMContentLoaded', () => {
+              const f = document.getElementById('filtro-from')?.value;
+              const t = document.getElementById('filtro-to')?.value;
+              const a = document.getElementById('link-log');
+              if (a && f && t) a.href = `/logs.html?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+            });
+          </script>
         </div>
         <div class="chart-controls" role="tablist" aria-label="Modos do gráfico">
-          <button id="btn-graf-dia" class="botao botao-outline active" aria-pressed="true">Últimos 30 dias</button>
-          <button id="btn-graf-mes" class="botao botao-outline" aria-pressed="false">Mês atual</button>
-          <button id="btn-graf-6mes" class="botao botao-outline" aria-pressed="false">Últimos 6 meses</button>
-          <button id="btn-graf-status" class="botao botao-outline" aria-pressed="false">Por Status</button>
+          <button id="btn-graf-dia" class="botao botao-outline active" aria-pressed="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Últimos 30 dias
+          </button>
+          <button id="btn-graf-mes" class="botao botao-outline" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Mês atual
+          </button>
+          <button id="btn-graf-6mes" class="botao botao-outline" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="1" x2="12" y2="23"/>
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            Últimos 6 meses
+          </button>
+          <button id="btn-graf-status" class="botao botao-outline" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+              <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+            </svg>
+            Por Status
+          </button>
         </div>
-        <div class="chart-wrapper" style="min-height: 360px;">
+        <div class="chart-wrapper">
           <canvas id="chart-prejuizo-dia"></canvas>
           <canvas id="chart-prejuizo-mes" style="display:none;"></canvas>
           <canvas id="chart-prejuizo-6mes" style="display:none;"></canvas>
@@ -130,24 +182,24 @@
       <div class="dashboard-card summary-card">
         <div class="dashboard-card-header">
           <div>
-            <h2 class="dashboard-card-title">Resumo</h2>
-            <p class="dashboard-card-subtitle">Visão geral do período</p>
+            <h2 class="dashboard-card-title">Resumo do Período</h2>
+            <p class="dashboard-card-subtitle">Visão consolidada</p>
           </div>
         </div>
         <div id="resumo-periodo" class="summary-list"></div>
       </div>
     </section>
 
-    <!-- Linha 3: Ranking (full width) -->
+     Linha 3: Ranking (full width) 
     <section class="dashboard-ranking-full">
       <div class="dashboard-card">
         <div class="dashboard-card-header">
           <div>
-            <h2 class="dashboard-card-title">Top Devoluções</h2>
-            <p class="dashboard-card-subtitle">Itens mais devolvidos</p>
+            <h2 class="dashboard-card-title">Top Produtos Devolvidos</h2>
+            <p class="dashboard-card-subtitle">Produtos com maior índice de devolução no período</p>
           </div>
         </div>
-        <div id="ranking-lista" class="ranking-list-modern"></div>
+        <div id="ranking-lista" class="ranking-list-modern" role="list"></div>
       </div>
     </section>
   </main>

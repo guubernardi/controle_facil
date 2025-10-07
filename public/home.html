@@ -10,87 +10,108 @@
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/navbar.css" />
   <link rel="stylesheet" href="css/home.css" />
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/x-icon">
 </head>
 <body class="home-page">
   <div id="cabecalho"></div>
   <script src="js/header.js"></script>
 
-  <main class="container">
-    <!-- Topo: avisos do sistema (promoções, novidades, etc.) -->
+  <main class="container"> 
     <section class="faixa" aria-label="avisos e onboarding">
-      <div class="card info" id="av_card_1">
-        <div class="card-flex">
-          <div class="card-1">
-            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-              <line x1="12" y1="22.08" x2="12" y2="12"></line>
-            </svg>
-          </div>
-          <div class="right">
-            <h3>Conciliação por CSV do Mercado Livre</h3>
-            <p>Agora o sistema concilia fretes, tarifas e estornos automaticamente a partir do CSV de pós-venda.</p>
-            <small>Saiba mais em <a href="/logs.html">Log de Custos</a>.</small>
-          </div>
-        </div>
-      </div>
-
-      <div class="card info" id="av_card_2">
-        <div class="card-flex">
-          <div class="card-1 accent">
-            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-          </div>
-          <div class="right">
-            <h3>Regras de custo</h3>
-            <ul class="card-list">
-              <li><b>Rejeitado</b> → prejuízo R$ 0</li>
-              <li><b>Recebido CD / Em inspeção</b> → só frete</li>
-              <li><b>Motivos do cliente</b> → sem custo</li>
-            </ul>
+      <div class="banner-carousel">
+        <div class="card info" id="av_card_1">
+          <div class="card-flex">
+            <div class="card-1">
+              <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+              </svg>
+            </div>
+            <div class="right">
+              <h3>Conciliação por CSV do Mercado Livre</h3>
+              <p>Agora o sistema concilia fretes, tarifas e estornos automaticamente a partir do CSV de pós-venda.</p>
+              <small>Saiba mais em <a href="/logs.html">Log de Custos</a>.</small>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="card info" id="av_card_3">
-        <div class="card-flex">
-          <div class="card-1 warning">
-            <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3zm-8.27 4a2 2 0 0 1-3.46 0"></path>
-            </svg>
+        <div class="card info" id="av_card_2">
+          <div class="card-flex">
+            <div class="card-1 accent">
+              <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+            </div>
+            <div class="right">
+              <h3>Regras de custo</h3>
+              <ul class="card-list">
+                <li><b>Rejeitado</b> → prejuízo R$ 0</li>
+                <li><b>Recebido CD / Em inspeção</b> → só frete</li>
+                <li><b>Motivos do cliente</b> → sem custo</li>
+              </ul>
+            </div>
           </div>
-          <div class="right">
-            <h3>Integração Mercado Livre</h3>
-            <p>Conexão direta chegando em breve. Por enquanto, use o CSV.</p>
-            <small>Status: <span class="tag -warn">em breve</span></small>
+        </div>
+
+        <div class="card info" id="av_card_3">
+          <div class="card-flex">
+            <div class="card-1 warning">
+              <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3zm-8.27 4a2 2 0 0 1-3.46 0"></path>
+              </svg>
+            </div>
+            <div class="right">
+              <h3>Integração Mercado Livre</h3>
+              <p>Conexão direta chegando em breve. Por enquanto, use o CSV.</p>
+              <small>Status: <span class="tag -warn">em breve</span></small>
+            </div>
           </div>
         </div>
       </div>
     </section>
 
-    <hr class="divider">
-
-    <!-- Botões -->
     <section class="abas">
-      <button class="aba ativa" data-tab="visao">Visão geral</button>
-      <button class="aba" data-tab="eventos">Eventos</button>
+      <button class="aba ativa" data-tab="visao">
+        <svg class="aba-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+          <polyline points="9 22 9 12 15 12 15 22"></polyline>
+        </svg>
+        Visão geral
+      </button>
+      <button class="aba" data-tab="eventos">
+        <svg class="aba-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="16" y1="2" x2="16" y2="6"></line>
+          <line x1="8" y1="2" x2="8" y2="6"></line>
+          <line x1="3" y1="10" x2="21" y2="10"></line>
+        </svg>
+        Eventos
+      </button>
     </section>
-
-    <!-- Visão Geral -->
+     
     <section id="tab_visao" class="tab painel ativo">
-      <!-- 3 blocos: pendências, novidades e um que ainda não sei -->
       <div class="grid3">
         <article class="bloco">
           <header class="bloco-header">
+            <svg class="bloco-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="8" x2="12" y2="12"></line>
+              <line x1="12" y1="16" x2="12.01" y2="16"></line>
+            </svg>
             <h3>Pendências</h3>
           </header>
           <hr class="linha">
           <ul class="lista">
             <li class="lista-item">
-              <span class="lista-label">Recebidos no CD sem inspeção:</span>
+              <div class="lista-content">
+                <svg class="lista-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                </svg>
+                <span class="lista-label">Recebidos no CD sem inspeção</span>
+              </div>
               <div class="lista-action">
                 <b id="qtd_rcd" class="lista-value">0</b>
                 <button class="seta">
@@ -103,7 +124,16 @@
             <hr class="linha">
 
             <li class="lista-item">
-              <span class="lista-label">Sem conciliação CSV:</span>
+              <div class="lista-content">
+                <svg class="lista-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                <span class="lista-label">Sem conciliação CSV</span>
+              </div>
               <div class="lista-action">
                 <b id="qtd_semcsv" class="lista-value">0</b>
                 <button class="seta">
@@ -116,7 +146,14 @@
             <hr class="linha">
 
             <li class="lista-item">
-              <span class="lista-label">Últimos imports de CSV:</span>
+              <div class="lista-content">
+                <svg class="lista-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span class="lista-label">Últimos imports de CSV</span>
+              </div>
               <div class="lista-action">
                 <b id="qtd_csvpend" class="lista-value">0</b>
                 <button class="seta">
@@ -126,24 +163,40 @@
                 </button>
               </div>
             </li>
-            <hr class="linha">
           </ul>
         </article>
 
         <article class="bloco">
           <header class="bloco-header">
+            <svg class="bloco-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3zm-8.27 4a2 2 0 0 1-3.46 0"></path>
+            </svg>
             <h3>Avisos & Novidades</h3>
           </header>
           <hr class="linha">
           <ul id="ann_list" class="lista">
-            <li class="lista-item announcement">Novos recursos em desenvolvimento...</li>
+            <li class="lista-item announcement">
+              <svg class="announcement-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              Novos recursos em desenvolvimento...
+            </li>
           </ul>
         </article>
+      </div>
+    </section>
 
-    <!-- Eventos -->
     <section id="tab_eventos" class="tab painel" aria-labelledby="Eventos">
       <div class="bloco bloco-wide" id="bloco_eventos">
         <header class="bloco-header">
+          <svg class="bloco-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
           <h3>Eventos recentes</h3>
         </header>
         <hr class="linha">

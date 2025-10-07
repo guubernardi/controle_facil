@@ -2,18 +2,7 @@
 
 /**
  * Server HTTP (Express) do Retorno Fácil
- * 
- * Organização:
- * - Este arquivo sobe o app, configura middlewares globais, helpers, OAuth do Bling,
- *   endpoints de KPIs, pendências, log de custos e proxies utilitários.
- * - A **importação e conciliação de CSV do Mercado Livre** foi extraída para
- *   `./routes/csv-upload.js`, registrada por injeção de dependência (para podermos
- *   reutilizar a função de eventos com idempotência).
- *
- * Por que extrair o CSV para um módulo?
- * - Evita import circular (server ⇄ csv).
- * - Mantém a rota autocontida (faz seu próprio body-parser de texto).
- * - Fica claro para qualquer dev que toda a lógica de CSV está em um único lugar.
+ * - CSV do ML foi extraído para ./routes/csv-upload-extended.js
  */
 
 require('dotenv').config();
@@ -23,39 +12,60 @@ const path = require('path');
 const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('./db');
+const utilsRoutes = require('./routes/utils');
+app.use(utilsRoutes);
+
 
 const app = express();
 
-/** 
- * Middlewares globais
- * - Limitamos JSON para 1MB para evitar payloads acidentais gigantes.
- * - O body-parser de **texto** do CSV NÃO fica aqui; ele é configurado
- *   dentro do módulo `routes/csv-upload.js`, para não haver conflito.
- */
+// Events API — listar eventos por return_id (auditoria)
+app.get('/api/returns/:id/events', async (req, res) => {
+  try {
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) {
+      return res.status(400).json({ error: 'return_id inválido' });
+    }
+
+    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
+
+    const sql = `
+      SELECT
+        id,
+        return_id AS "returnId",
+        type,
+        title,
+        message,
+        meta,
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+      FROM return_events
+      WHERE return_id = $1
+      ORDER BY created_at ASC, id ASC
+      LIMIT $2 OFFSET $3
+    `;
+    const { rows } = await query(sql, [returnId, limit, offset]);
+    const items = rows.map(r => ({ ...r, meta: (() => { try { return JSON.parse(r.meta); } catch { return r.meta; } })() }));
+    res.json({ items, limit, offset });
+  } catch (err) {
+    console.error('GET /api/returns/:id/events error:', err);
+    res.status(500).json({ error: 'Falha ao listar eventos' });
+  }
+});
+
+/** Middlewares globais */
 app.use(express.json({ limit: '1mb' }));
 
-/** 
- * Servimos a pasta /public (HTML/CSS/JS do frontend).
- * Estrutura típica:
- *   /public
- *     /css
- *     /js
- *     *.html
- */
+/** Static */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-/**
- * Todas as rotas /api retornam JSON UTF-8 explícito.
- * (evita charset default diferente em alguns clientes)
- */
+/** JSON UTF-8 nas rotas /api */
 app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-/**
- * Aviso se variáveis .env importantes estiverem faltando.
- */
+/** Aviso se .env faltar */
 [
   'BLING_AUTHORIZE_URL',
   'BLING_TOKEN_URL',
@@ -68,61 +78,40 @@ app.use('/api', (req, res, next) => {
   if (!process.env[k]) console.warn(`[WARN] .env faltando ${k}`);
 });
 
-/*  Helpers/utilitários compartilhados  */
-
-/** Parse seguro de JSON em string (não explode). */
+/* Helpers compartilhados */
 function seguroParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
   try { return JSON.parse(String(s)); } catch { return null; }
 }
-const safeParseJson = seguroParseJson; // alias
+const safeParseJson = seguroParseJson;
 
-/** Lê um header Idempotency-Key (se usarmos futuramente em outras rotas). */
 function pegarChaveIdempotencia(req) {
   const v = (req.get('Idempotency-Key') || '').trim();
   return v || null;
 }
-const getIdempKey = pegarChaveIdempotencia; // alias
+const getIdempKey = pegarChaveIdempotencia;
 
-/** Normaliza corpo de evento aceitando PT/EN (mantido para compat). */
 function normalizarCorpoEvento(body = {}) {
   const typeRaw = body.type ?? body.tipo;
   const type = typeof typeRaw === 'string' ? typeRaw.toLowerCase() : undefined;
 
-  const title =
-    body.title ??
-    body.titulo ??
-    null;
+  const title = body.title ?? body.titulo ?? null;
+  const message = body.message ?? body.mensagem ?? null;
 
-  const message =
-    body.message ??
-    body.mensagem ??
-    null;
-
-  // meta pode vir como objeto ou string JSON
   let meta = body.meta ?? body.metadados ?? body.dados ?? null;
   if (typeof meta === 'string') {
     const parsed = seguroParseJson(meta);
     if (parsed !== null) meta = parsed;
   }
 
-  const created_by =
-    body.created_by ??
-    body.criado_por ??
-    body.usuario ??
-    'system';
-
+  const created_by = body.created_by ?? body.criado_por ?? body.usuario ?? 'system';
   return { type, title, message, meta, created_by };
 }
-const normalizeEventBody = normalizarCorpoEvento; // alias
+const normalizeEventBody = normalizarCorpoEvento;
 
 /**
- * addReturnEvent (com idempotência)
- * - É a função oficial de registro de eventos (auditoria) de uma devolução.
- * - O módulo de CSV usa **esta** função por injeção de dependência, garantindo:
- *   - formato único de eventos;
- *   - idempotência via `idemp_key` (evita duplicidade em reenvios).
+ * addReturnEvent (idempotente)
  */
 async function adicionarEventoDevolucao({
   returnId,
@@ -147,7 +136,6 @@ async function adicionarEventoDevolucao({
     ev.meta = seguroParseJson(ev.meta);
     return ev;
   } catch (e) {
-    // 23505 = unique_violation (índice único parcial em idemp_key)
     if (String(e?.code) === '23505' && idempKey) {
       const { rows } = await query(
         `
@@ -167,9 +155,8 @@ async function adicionarEventoDevolucao({
     throw e;
   }
 }
-const addReturnEvent = adicionarEventoDevolucao; // alias
+const addReturnEvent = adicionarEventoDevolucao;
 
-/* Verifica existência de colunas numa tabela (ajuda a ser resiliente a migrações). */
 async function tabelaTemColunas(table, columns) {
   const { rows } = await query(
     `SELECT column_name FROM information_schema.columns
@@ -181,9 +168,8 @@ async function tabelaTemColunas(table, columns) {
   for (const c of columns) out[c] = set.has(c);
   return out;
 }
-const tableHasColumns = tabelaTemColunas; // alias
+const tableHasColumns = tabelaTemColunas;
 
-/** Utils de número/string, tolerantes a BR (1.234,56). */
 function paraNumero(v, def = 0) {
   if (v == null || v === '') return def;
   const n = Number(String(v).replace(/\./g, '').replace(',', '.'));
@@ -191,19 +177,9 @@ function paraNumero(v, def = 0) {
 }
 function str(v) { return v == null ? '' : String(v); }
 
-/*   Rotas de CSV (Mercado Livre pós-venda) */
-/**
- * Importante:
- * - NÃO implementei aqui a rota /api/csv/upload nem body-parser de texto.
- * - Tudo isso vive no módulo abaixo. Ele já faz:
- *   - parse heurístico do CSV,
- *   - normalização de cabeçalhos,
- *   - conciliação em `devolucoes`,
- *   - auditoria de import (quando não é dry-run),
- *   - e aceita `?dry=1` para simulação (dry-run).
- */
-const registrarRotasCsv = require('./routes/csv-upload');
-registrarRotasCsv(app, { addReturnEvent }); // <- **ESSENCIAL** (ativa POST /api/csv/upload)
+/* ========= ROTAS CSV (NOVAS) ========= */
+const registerCsvUploadExtended = require('./routes/csv-upload-extended');
+registerCsvUploadExtended(app, { addReturnEvent }); // <-- usa a rota nova e injeta addReturnEvent
 
 /*   Health / DB  */
 app.get('/api/health', (_req, res) => {
@@ -296,10 +272,8 @@ app.get('/api/home/announcements', (_req, res) => {
 
 app.get('/api/integrations/health', async (_req, res) => {
   try {
-    // Bling OK se houver token salvo
     const q = await query(`select count(*)::int as n from bling_accounts`);
     const blingOk = (q.rows[0]?.n || 0) > 0;
-    // Mercado Livre ainda sem OAuth: usar CSV
     res.json({
       bling: { ok: blingOk, mode: 'oauth' },
       mercado_livre: { ok: false, mode: 'csv' }
@@ -312,7 +286,7 @@ app.get('/api/integrations/health', async (_req, res) => {
   }
 });
 
-/*  Log de custos (view/tabela agregada) */
+/*  Log de custos */
 app.get('/api/returns/logs', async (req, res) => {
   try {
     const {
@@ -326,23 +300,10 @@ app.get('/api/returns/logs', async (req, res) => {
 
     if (from) { params.push(from); where.push(`event_at >= $${params.length}`); }
     if (to)   { params.push(to);   where.push(`event_at <  $${params.length}`); }
-
-    if (status) {
-      params.push(String(status).toLowerCase());
-      where.push(`LOWER(status) = $${params.length}`);
-    }
-    if (log_status) {
-      params.push(String(log_status).toLowerCase());
-      where.push(`LOWER(log_status) = $${params.length}`);
-    }
-    if (responsavel) {
-      params.push(String(responsavel).toLowerCase());
-      where.push(`LOWER(responsavel_custo) = $${params.length}`);
-    }
-    if (loja) {
-      params.push(`%${loja}%`);
-      where.push(`loja_nome ILIKE $${params.length}`);
-    }
+    if (status)      { params.push(String(status).toLowerCase());      where.push(`LOWER(status) = $${params.length}`); }
+    if (log_status)  { params.push(String(log_status).toLowerCase());  where.push(`LOWER(log_status) = $${params.length}`); }
+    if (responsavel) { params.push(String(responsavel).toLowerCase()); where.push(`LOWER(responsavel_custo) = $${params.length}`); }
+    if (loja)        { params.push(`%${loja}%`);                       where.push(`loja_nome ILIKE $${params.length}`); }
     if (q) {
       const like = `%${q}%`;
       params.push(like, like, like, like);
@@ -429,349 +390,8 @@ app.get('/api/returns/logs', async (req, res) => {
   }
 });
 
-/*   Bling: OAuth + helpers HTTP  */
-function cabecalhoBasicAuth() {
-  const cru = `${process.env.BLING_CLIENT_ID}:${process.env.BLING_CLIENT_SECRET}`;
-  const base64 = Buffer.from(cru).toString('base64');
-  return `Basic ${base64}`;
-}
-
-async function salvarTokens({ apelido, access_token, refresh_token, expires_in }) {
-  const expires_at = dayjs().add(expires_in, 'second').toDate();
-  const sql = `
-    insert into bling_accounts (apelido, access_token, refresh_token, expires_at)
-    values ($1, $2, $3, $4)
-    returning id, apelido, expires_at
-  `;
-  const { rows } = await query(sql, [apelido, access_token, refresh_token, expires_at]);
-  return rows[0];
-}
-
-async function getAccessTokenValido(apelido) {
-  const { rows } = await query(
-    `select id, access_token, refresh_token, expires_at
-       from bling_accounts
-      where apelido=$1
-      order by id desc
-      limit 1`,
-    [apelido]
-  );
-  if (!rows[0]) throw new Error('Nenhum token encontrado. Autorize a conta primeiro.');
-
-  const t = rows[0];
-  const expiraMs = new Date(t.expires_at).getTime() - Date.now();
-  const margemMs = 120 * 1000;
-
-  if (expiraMs > margemMs) return t.access_token;
-  return await refreshAccessToken(apelido, t.refresh_token);
-}
-
-async function refreshAccessToken(apelido, refresh_token) {
-  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token });
-  const { data } = await axios.post(process.env.BLING_TOKEN_URL, body.toString(), {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': '1.0',
-      'Authorization': cabecalhoBasicAuth()
-    },
-    timeout: 15000
-  });
-
-  await salvarTokens({
-    apelido,
-    access_token: data.access_token,
-    refresh_token: data.refresh_token || refresh_token,
-    expires_in: data.expires_in
-  });
-
-  return data.access_token;
-}
-
-async function blingGet(apelido, url) {
-  let token = await getAccessTokenValido(apelido);
-
-  const doGet = (tok) =>
-    axios.get(url, {
-      headers: { Authorization: `Bearer ${tok}`, Accept: 'application/json' },
-      timeout: 15000
-    });
-
-  try {
-    const r = await doGet(token);
-    return r.data;
-  } catch (e) {
-    const st  = e?.response?.status;
-    const msg = e?.response?.data;
-    const precisaRefresh = st === 401 || (msg && String(msg).includes('invalid_token'));
-    if (!precisaRefresh) throw e;
-
-    const rtk = await query(
-      `select refresh_token from bling_accounts 
-        where apelido=$1 order by id desc limit 1`,
-      [apelido]
-    );
-    if (!rtk.rows[0]?.refresh_token) throw e;
-
-    token = await refreshAccessToken(apelido, rtk.rows[0].refresh_token);
-    const r2 = await doGet(token);
-    return r2.data;
-  }
-}
-
-/*   Loja helpers (cache + heurística)  */
-async function pegarNomeLojaPorId(apelido, lojaId) {
-  if (lojaId === null || lojaId === undefined) return null;
-
-  const cache = await query('select nome from lojas_bling where id = $1', [lojaId]);
-  if (cache.rows[0]?.nome) return cache.rows[0].nome;
-
-  const base = process.env.BLING_API_BASE;
-
-  try {
-    const data = await blingGet(apelido, `${base}/lojas/${encodeURIComponent(lojaId)}`);
-    const item = data?.data;
-    const nomeApi = item?.nome || item?.descricao || item?.apelido || null;
-    if (nomeApi) {
-      await query(
-        `insert into lojas_bling (id, nome)
-         values ($1, $2)
-         on conflict (id) do update set nome = excluded.nome, updated_at = now()`,
-        [lojaId, nomeApi]
-      );
-      return nomeApi;
-    }
-  } catch (err) {
-    const st = err?.response?.status;
-    if (st && st !== 404) {
-      console.warn('[LOJA LOOKUP] /lojas/{id} status:', st, 'payload:', err?.response?.data || err.message);
-    }
-  }
-
-  const baseUrl = `${base}/lojas`;
-  for (let pagina = 1; pagina <= 5; pagina++) {
-    try {
-      const data = await blingGet(apelido, `${baseUrl}?pagina=${pagina}&limite=100`);
-      const arr = Array.isArray(data?.data) ? data.data : [];
-      const item = arr.find((x) => String(x.id) === String(lojaId));
-      const nomeApi = item?.nome || item?.descricao || item?.apelido || null;
-      if (nomeApi) {
-        await query(
-          `insert into lojas_bling (id, nome)
-           values ($1, $2)
-           on conflict (id) do update set nome = excluded.nome, updated_at = now()`,
-          [lojaId, nomeApi]
-        );
-        return nomeApi;
-      }
-      if (arr.length < 100) break;
-    } catch (err) {
-      console.warn('[LOJA LOOKUP] listagem status:', err?.response?.status, 'payload:', err?.response?.data || err.message);
-      break;
-    }
-  }
-  return null;
-}
-
-function deduzirNomeLojaPelosPadroes(numeroLoja, sugestaoAtual = null) {
-  if (sugestaoAtual) return sugestaoAtual;
-  const s = String(numeroLoja || '').toUpperCase().trim();
-  if (!s) return null;
-
-  const PADROES_LOJAS = [
-    { nome: 'Mercado Livre RLD',  test: (t) => t.includes('RLD') },
-    { nome: 'Mercado Livre',      test: (t) => t.startsWith('MLB') || t.includes('MERCADO LIVRE') },
-    { nome: 'Magazine Luiza',     test: (t) => t.includes('MAGALU') || t.includes(' MAG ') || t.startsWith('MGLU') },
-    { nome: 'Shopee',             test: (t) => t.includes('SHOPEE') || t.startsWith('SHP') },
-    { nome: 'Amazon',             test: (t) => t.includes('AMAZON') || t.startsWith('AMZ') || t.includes('BRD') },
-    { nome: 'Americanas',         test: (t) => t.includes('AMERICANAS') || t.includes('B2W') || t.includes('LAME') },
-    { nome: 'Submarino',          test: (t) => t.includes('SUBMARINO') },
-    { nome: 'Shoptime',           test: (t) => t.includes('SHOPTIME') },
-    { nome: 'Casas Bahia',        test: (t) => t.includes('CASAS BAHIA') || t.includes('VIA VAREJO') || t.includes('CB') },
-    { nome: 'Ponto',              test: (t) => t.includes('PONTO FRIO') || t.includes(' PONTO ') },
-    { nome: 'Carrefour',          test: (t) => t.includes('CARREFOUR') },
-    { nome: 'Netshoes',           test: (t) => t.includes('NETSHOES') || t.includes('ZATTINI') },
-    { nome: 'Dafiti',             test: (t) => t.includes('DAFITI') },
-    { nome: 'MadeiraMadeira',     test: (t) => t.includes('MADEIRAMADEIRA') || t.includes(' MM ') },
-    { nome: 'Nuvemshop',          test: (t) => t.includes('NUVEMSHOP') || t.includes(' NS ') },
-    { nome: 'Tray',               test: (t) => t.includes('TRAY') },
-    { nome: 'Shopify',            test: (t) => t.includes('SHOPIFY') }
-  ];
-
-  const hit = PADROES_LOJAS.find((p) => p.test(s));
-  return hit ? hit.nome : null;
-}
-
-/*  OAuth Bling (autorizar e callback) */
-app.get('/auth/bling', (req, res) => {
-  const apelido = String(req.query.account || 'Conta de Teste');
-  const url = new URL(process.env.BLING_AUTHORIZE_URL);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('client_id', process.env.BLING_CLIENT_ID);
-  url.searchParams.set('state', encodeURIComponent(apelido));
-  return res.redirect(url.toString());
-});
-
-app.get('/callback', async (req, res) => {
-  try {
-    const { code, state, error, error_description } = req.query;
-    if (error) return res.status(400).send(`<h3>Erro</h3><pre>${error}: ${error_description || ''}</pre>`);
-    if (!code) return res.status(400).send('Faltou o "code".');
-
-    const apelido = decodeURIComponent(state || 'Conta de Teste');
-
-    const body = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: process.env.BLING_REDIRECT_URI
-    });
-
-    const { data } = await axios.post(process.env.BLING_TOKEN_URL, body.toString(), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': '1.0',
-        'Authorization': cabecalhoBasicAuth()
-      }
-    });
-
-    const salvo = await salvarTokens({
-      apelido,
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_in: data.expires_in
-    });
-
-    res.send(`
-      <h2>Autorizado com sucesso!</h2>
-      <p>Conta: <b>${apelido}</b></p>
-      <p>Token expira em: <b>${dayjs(salvo.expires_at).format('YYYY-MM-DD HH:mm:ss')}</b></p>
-      <a href="/">Voltar para o app</a>
-    `);
-  } catch (e) {
-    const payload = e?.response?.data || e.message;
-    console.error('Erro no callback:', payload);
-    res.status(500).send(`<pre>${JSON.stringify(payload, null, 2)}</pre>`);
-  }
-});
-
-/*  Vendas / Notas — exemplo de consulta   */
-async function handlerBuscarVenda(req, res) {
-  try {
-    const idOuNumero = String(req.params.id);
-    const apelido = String(req.query.account || 'Conta de Teste');
-    const base = process.env.BLING_API_BASE;
-
-    let pedido = null;
-    try {
-      const d1 = await blingGet(apelido, `${base}/pedidos/vendas/${encodeURIComponent(idOuNumero)}`);
-      pedido = d1?.data || null;
-    } catch (e1) {
-      if (e1?.response?.status && e1.response.status !== 404) {
-        console.error('Erro consultando por ID interno:', e1?.response?.data || e1);
-      }
-    }
-
-    if (!pedido) {
-      try {
-        const d2 = await blingGet(apelido, `${base}/pedidos/vendas?numero=${encodeURIComponent(idOuNumero)}`);
-        const lista = Array.isArray(d2?.data) ? d2.data : [];
-        pedido = lista[0] || null;
-      } catch (e2) {
-        if (e2?.response?.status && e2.response.status !== 404) {
-          console.error('Erro consultando por número:', e2?.response?.data || e2);
-        }
-      }
-    }
-
-    if (!pedido) {
-      return res.status(404).json({
-        error: `Pedido não encontrado: tente com o ID interno ou use o 'numero' visível no Bling (ex.: /api/sales/1).`
-      });
-    }
-
-    const lojaId     = pedido?.loja?.id ?? null;
-    const numeroLoja = pedido?.numeroLoja ?? '';
-    const numero     = pedido?.numero ?? null;
-
-    let lojaNome = pedido?.loja?.nome || pedido?.loja?.descricao || null;
-    if (!lojaNome && lojaId !== null) {
-      lojaNome = await pegarNomeLojaPorId(apelido, lojaId);
-    }
-    lojaNome = deduzirNomeLojaPelosPadroes(numeroLoja, lojaNome);
-    if (!lojaNome && (lojaId === 0 || lojaId === null)) lojaNome = 'Pedido manual (sem loja)';
-    if (!lojaNome && lojaId) lojaNome = `Loja #${lojaId}`;
-
-    const clienteNome =
-      pedido?.cliente?.nome ||
-      pedido?.contato?.nome ||
-      pedido?.destinatario?.nome ||
-      pedido?.cliente_nome ||
-      pedido?.cliente?.fantasia ||
-      null;
-
-    return res.json({
-      idVenda: String(pedido.id || idOuNumero),
-      numeroPedido: numero,
-      lojaId,
-      lojaNome,
-      numeroLoja,
-      clienteNome,
-      debug: { usadoParametro: idOuNumero }
-    });
-  } catch (e) {
-    console.error('Falha ao consultar venda:', e?.response?.data || e);
-    const status = e?.response?.status || 400;
-    return res.status(status).json({ error: 'Falha ao consultar venda no Bling.' });
-  }
-}
-app.get('/api/sales/:id',  handlerBuscarVenda);
-app.get('/api/vendas/:id', handlerBuscarVenda);
-
-/*  Events API — listar eventos por return_id (auditoria) */
-app.get('/api/returns/:id/events', async (req, res) => {
-  try {
-    const returnId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(returnId)) {
-      return res.status(400).json({ error: 'return_id inválido' });
-    }
-
-    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
-    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
-
-    const sql = `
-      SELECT
-        id,
-        return_id AS "returnId",
-        type,
-        title,
-        message,
-        meta,
-        created_by AS "createdBy",
-        created_at AS "createdAt"
-      FROM return_events
-      WHERE return_id = $1
-      ORDER BY created_at ASC, id ASC
-      LIMIT $2 OFFSET $3
-    `;
-    const { rows } = await query(sql, [returnId, limit, offset]);
-    const items = rows.map(r => ({ ...r, meta: seguroParseJson(r.meta) }));
-    res.json({ items, limit, offset });
-  } catch (err) {
-    console.error('GET /api/returns/:id/events error:', err);
-    res.status(500).json({ error: 'Falha ao listar eventos' });
-  }
-});
-
-/*  Start */
+/* Start */
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Servidor rodando em http://localhost:${port}`);
 });
-
-/**
- * - Upload CSV do ML: POST /api/csv/upload  (módulo routes/csv-upload.js)
- *   - `?dry=1` = dry-run (simula tudo, não grava nada).
- * - Template CSV: GET /api/csv/template (também no módulo de CSV).
- * - Eventos de auditoria: tabela return_events; use addReturnEvent() para manter idempotência.
- * - KPIs/Home/Logs: rotas /api/home/* e /api/returns/logs.
- * - Integração Bling: OAuth em /auth/bling -> /callback; use blingGet() para chamadas.
- */

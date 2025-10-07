@@ -5,10 +5,13 @@ const crypto  = require('crypto');
 const { query } = require('../db');
 
 /**
- * Registra as rotas de CSV (Mercado Livre pós-venda).
- * Usa addReturnEvent injetado; se não vier, cai em fallback com tratamento de 23505.
+ * Rotas de CSV (Mercado Livre pós-venda).
+ * Suporta ?dry=1 e ?autocreate=1|true|yes
  */
 module.exports = function registrarRotasCsv(app, deps = {}) {
+  // ---------- utils ----------
+  const isTrue = (v) => ['1','true','yes','y','on'].includes(String(v || '').toLowerCase());
+
   // addReturnEvent com tolerância a 23505 (idempotência)
   const addReturnEvent =
     typeof deps.addReturnEvent === 'function'
@@ -24,7 +27,7 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
               `,
               [
                 ev.returnId,
-                ev.type || 'status',         // default seguro
+                ev.type || 'status', // default seguro para o CHECK
                 ev.title || null,
                 ev.message || null,
                 metaStr,
@@ -34,13 +37,10 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
             );
             return rows[0];
           } catch (e) {
-            // 23505: já existe evento com o mesmo idemp_key → OK, idempotente
-            if (String(e?.code) === '23505') return { id: null, duplicate: true };
+            if (String(e?.code) === '23505') return { id: null, duplicate: true }; // idempotente
             throw e;
           }
         };
-
-  /* ---------- helpers ---------- */
 
   /** Heurística simples para detectar delimitador. */
   function detectDelimiter(text) {
@@ -84,14 +84,12 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
 
     const orderId   = pick(o, ['id_da_venda', 'id_venda', 'order_id', 'idpedido', 'pedido']);
     const shipment  = pick(o, ['id_do_envio', 'shipment_id', 'idenvio']);
-    const tipo      = pick(o, ['tipo', 'type', 'evento', 'movimento']);
-    const descricao = pick(o, ['descricao', 'description', 'detalhe', 'motivo']);
-    const data      = pick(o, ['data', 'data_da_operacao', 'created_at', 'data_evento']);
+    const tipo      = pick(o, ['tipo', 'type', 'evento', 'movimento', 'event_type']);
+    const descricao = pick(o, ['descricao', 'description', 'detalhe', 'motivo', 'reason']);
+    const data      = pick(o, ['data', 'data_da_operacao', 'created_at', 'data_evento', 'event_date']);
 
-    // valores aceitos (vários layouts):
-    // - valor / amount / total
-    // - frete (ou soma de shipping_out + shipping_return)
-    const valor     = pick(o, ['valor', 'amount', 'valor_total', 'valor_da_operacao', 'total']);
+    // valores:
+    const valor     = pick(o, ['valor', 'amount', 'valor_total', 'valor_da_operacao', 'total', 'product_price']);
     const freteOne  = pick(o, ['frete', 'shipping_cost', 'custo_envio']);
     const shipOut   = toNum(pick(o, ['shipping_out']));
     const shipRet   = toNum(pick(o, ['shipping_return']));
@@ -99,7 +97,7 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
     const frete     = (freteCalc != null ? freteCalc : ((shipOut || 0) + (shipRet || 0)));
 
     const moeda     = pick(o, ['moeda', 'currency']);
-    const tarifa    = pick(o, ['tarifa', 'fee', 'taxa']);
+    const tarifa    = pick(o, ['tarifa', 'fee', 'taxa', 'ml_fee']);
 
     return {
       orderId: orderId ? String(orderId).trim() : null,
@@ -131,34 +129,91 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
     return crypto.createHash('sha256').update(s).digest('hex');
   }
 
+  /** Garante que exista uma devolução (stub) para o id_venda. */
+  async function ensureDevolucao(orderId, { sku = null, loja = 'Mercado Livre' } = {}) {
+    // busca a mais nova
+    let r = await query(
+      `select id, status, valor_produto, valor_frete, loja_nome
+         from devolucoes
+        where id_venda::text = $1
+        order by id desc limit 1`,
+      [String(orderId)]
+    );
+    let dev = r.rows[0] || null;
+    if (dev) return dev;
+
+    // cria stub idempotente (sem ON CONFLICT)
+    await query(
+      `insert into devolucoes (id_venda, status, valor_produto, valor_frete, loja_nome, sku, created_at, updated_at)
+       select $1,'pendente',0,0,$2,$3, now(), now()
+       where not exists (select 1 from devolucoes where id_venda::text = $1)`,
+      [String(orderId), loja, sku]
+    );
+
+    r = await query(
+      `select id, status, valor_produto, valor_frete, loja_nome
+         from devolucoes
+        where id_venda::text = $1
+        order by id desc limit 1`,
+      [String(orderId)]
+    );
+    dev = r.rows[0] || null;
+    return dev;
+  }
+
   /** Aplica conciliação para 1 linha. */
-  async function conciliarLinha(model, { dryRun = false } = {}) {
-    // localizar devolução
+  async function conciliarLinha(model, { dryRun = false, autocreate = false } = {}) {
     let dev = null;
+
     if (model.orderId) {
-      const r = await query(
-        `select id, status, valor_produto, valor_frete, loja_nome
-           from devolucoes
-          where id_venda::text = $1
-          order by id desc limit 1`,
-        [String(model.orderId)]
-      );
-      dev = r.rows[0] || null;
+      if (autocreate && !dryRun) {
+        // garante stub
+        dev = await ensureDevolucao(model.orderId, { sku: model.raw?.sku || null });
+
+        // evento de criação (idempotente)
+        if (dev?.id) {
+          await addReturnEvent({
+            returnId: dev.id,
+            type: 'status',
+            title: 'Devolução criada automaticamente',
+            message: `Criada via CSV (autocreate) para id_venda=${model.orderId}`,
+            meta: { ml_csv_autocreate: true },
+            createdBy: 'csv-import',
+            idempKey: `csv-autocreate:${String(model.orderId)}`
+          });
+        }
+      } else {
+        const r = await query(
+          `select id, status, valor_produto, valor_frete, loja_nome
+             from devolucoes
+            where id_venda::text = $1
+            order by id desc limit 1`,
+          [String(model.orderId)]
+        );
+        dev = r.rows[0] || null;
+      }
     }
+
     if (!dev) return { ok: false, reason: 'no-match' };
 
     const before = { vp: Number(dev.valor_produto || 0), vf: Number(dev.valor_frete || 0) };
     const updates = {};
 
-    // frete: guarda o maior absoluto visto
+    // frete: guarda o maior absoluto visto (somente se realmente mudar)
     if (model.frete != null && Math.abs(model.frete) > 0) {
-      updates.valor_frete = Math.max(Math.abs(before.vf), Math.abs(model.frete));
+      const novoFrete = Math.max(Math.abs(before.vf), Math.abs(model.frete));
+      if (novoFrete !== before.vf) {
+        updates.valor_frete = novoFrete;
+      }
     }
 
-    // refund: reduz valor_produto (piso zero)
+    // refund: reduz valor_produto (piso zero) — somente se realmente mudar
     if (model.tipo && /reembolso|refund/i.test(model.tipo)) {
-      const novo = Math.max(0, before.vp - Math.abs(model.valor || 0));
-      updates.valor_produto = novo;
+      const abatimento = Math.abs(model.valor || 0);
+      const novoVP = Math.max(0, before.vp - abatimento);
+      if (novoVP !== before.vp) {
+        updates.valor_produto = novoVP;
+      }
     }
 
     const changed = Object.keys(updates).length > 0 &&
@@ -176,13 +231,12 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
         args
       );
 
-      // tipo compatível com o CHECK da tabela return_events
+      // tipo compatível com o CHECK de return_events
       const eventType =
         (updates.valor_produto != null) ? 'ajuste' :
-        (updates.valor_frete   != null /*|| updates.tarifa_ml != null*/) ? 'custo' :
-        'status'; // fallback seguro
+        (updates.valor_frete   != null) ? 'custo'  :
+        'status';
 
-      // evento (idempotente via idemp_key; 23505 tratado no addReturnEvent)
       await addReturnEvent({
         returnId: dev.id,
         type: eventType,
@@ -197,25 +251,24 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
     return { ok: true, reason: 'updated' };
   }
 
-  /* ---------- rotas ---------- */
+  // ---------- rotas ----------
 
   // POST /api/csv/upload — recebe CSV como texto
   app.post(
     '/api/csv/upload',
-    // importante: body como TEXTO para aceitar CSV puro
     express.text({ type: ['text/*', 'application/octet-stream', '*/*'], limit: '10mb' }),
     async (req, res) => {
       try {
-        const dry = String(req.query.dry || '0') === '1';
-        const filename = req.get('X-Filename') || 'upload.csv';
-        const text = (req.body || '').trim();
+        const dry        = isTrue(req.query.dry);
+        const autocreate = isTrue(req.query.autocreate);
+        const filename   = req.get('X-Filename') || 'upload.csv';
+        const text = String(req.body || '').replace(/^\uFEFF/, '').trim(); // remove BOM
         if (!text) return res.status(400).json({ error: 'Arquivo vazio.' });
 
-        const delim = detectDelimiter(text);
-        const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+        const delim  = detectDelimiter(text);
+        const lines  = text.split(/\r?\n/).filter(l => l.trim() !== '');
         if (lines.length < 2) return res.status(400).json({ error: 'CSV sem conteúdo.' });
 
-        // CSV simples: split por delimitador (se tiver vírgula dentro de aspas, trocar por parser robusto)
         const headers = lines[0].split(delim).map(h => h.replace(/^"|"$/g, ''));
 
         // abre import (se não for dry)
@@ -230,6 +283,7 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
         }
 
         let total = 0, conc = 0, ign = 0, err = 0;
+        const errorsDetail = [];
 
         const makeRowObj = (arr) => {
           const obj = {};
@@ -240,12 +294,11 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
         for (let i = 1; i < lines.length; i++) {
           total++;
           try {
-            const cols = lines[i].split(delim);
+            const cols   = lines[i].split(delim);
             const rowObj = makeRowObj(cols);
-            const model = mapRowToModel(rowObj);
-            const h = lineHash(model);
+            const model  = mapRowToModel(rowObj);
+            const h      = lineHash(model);
 
-            // audita linha se não for dry
             if (!dry) {
               try {
                 await query(
@@ -253,15 +306,16 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
                    values ($1,$2,$3,$4)`,
                   [importId, i + 1, JSON.stringify(rowObj), h]
                 );
-              } catch (_) { /* prov. duplicata pelo mesmo hash nessa import → ignora */ }
+              } catch (_) { /* hash duplicado no mesmo import → ignora */ }
             }
 
-            const r = await conciliarLinha(model, { dryRun: dry });
+            const r = await conciliarLinha(model, { dryRun: dry, autocreate });
             if (r.ok) conc++;
             else if (r.reason === 'no-match' || r.reason === 'no-op') ign++;
-            else err++;
+            else err++; // motivo genérico
           } catch (e) {
             console.warn('[CSV linha ERRO]', { linha: i+1, erro: String(e?.message || e) });
+            errorsDetail.push({ line: i+1, error: String(e?.message || e) });
             err++;
           }
         }
@@ -282,6 +336,7 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
           conciliadas: conc,
           ignoradas: ign,
           erros: err,
+          ...(errorsDetail.length ? { errors_detail: errorsDetail } : {}),
           import_id: importId
         });
       } catch (e) {
@@ -293,7 +348,6 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
 
   // GET /api/csv/template — CSV mínimo compatível
   app.get('/api/csv/template', (req, res) => {
-    // Cabeçalhos compatíveis com o parser (aceita tanto 'frete' quanto shipping_out/return)
     const csv = [
       'order_id,shipment_id,event_date,product_price,shipping_out,shipping_return,cancellation_fee,ml_fee,total,reason,event_type,sku',
       '1234567890,998877,2025-10-03T13:00:00Z,100,15,15,0,0,130,arrependimento,refund,SKU-XYZ'

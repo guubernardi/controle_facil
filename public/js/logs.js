@@ -138,6 +138,18 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLogs();
   });
 
+    document.addEventListener("DOMContentLoaded", () => {
+      // Toggle filters
+      const toggleBtn = document.getElementById("toggle-filtros")
+      if (toggleBtn) {
+        toggleBtn.addEventListener("click", () => {
+          const isExpanded = toggleBtn.getAttribute("aria-expanded") === "true"
+          toggleBtn.setAttribute("aria-expanded", !isExpanded)
+        })
+      }
+    })
+
+
   // Apply filters button
   $('#botao-aplicar')?.addEventListener('click', () => {
     state.page = 1;
@@ -182,6 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
       loadLogs();
     }
   });
+
 
   $('#botao-proxima')?.addEventListener('click', () => {
     state.page++;
