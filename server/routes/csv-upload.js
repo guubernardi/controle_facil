@@ -1,117 +1,105 @@
 'use strict';
 
-/**
- * CSV Upload (Mercado Livre pós-venda)
- *
- * Este módulo expõe a rota POST /api/csv/upload que:
- *  - aceita um CSV bruto (texto) do relatório de pós-venda do ML,
- *  - detecta o delimitador de forma heurística,
- *  - normaliza cabeçalhos (acentos, espaços),
- *  - mapeia campos relevantes (orderId/shipment/tipo/descrição/valores),
- *  - aplica regras de conciliação em nossa tabela `devolucoes`,
- *  - registra auditoria (ml_csv_imports + ml_csv_raw) quando NÃO é dry-run,
- *  - gera eventos em `return_events` via addReturnEvent(injetado).
- *
- * ⚠️ Importante:
- *  - Não dependemos do server.js para evitar import circular.
- *  - Recebemos `app` e `deps` de fora (injeção de dependências).
- */
-
 const express = require('express');
 const crypto  = require('crypto');
-const { query } = require('../db');   // <- caminho certo pro seu layout
+const { query } = require('../db');
 
 /**
- * Registra as rotas deste módulo.
- * @param {import('express').Express} app - instância do Express do seu servidor
- * @param {{ addReturnEvent?: Function }} deps - dependências injetadas
+ * Registra as rotas de CSV (Mercado Livre pós-venda).
+ * Usa addReturnEvent injetado; se não vier, cai em fallback com tratamento de 23505.
  */
 module.exports = function registrarRotasCsv(app, deps = {}) {
-  // Preferimos usar a função de eventos do servidor (para manter idempotência, formato etc.)
-  const addReturnEvent =  
+  // addReturnEvent com tolerância a 23505 (idempotência)
+  const addReturnEvent =
     typeof deps.addReturnEvent === 'function'
       ? deps.addReturnEvent
       : async function fallbackAddReturnEvent(ev) {
-          // Fallback ultra-minimalista, só para não quebrar se esquecer de injetar.
-          // Recomendo FORTEMENTE usar a versão do server.js (tem idempotência e meta).
           const metaStr = ev.meta ? JSON.stringify(ev.meta) : null;
-          const { rows } = await query(
-            `
+          try {
+            const { rows } = await query(
+              `
               INSERT INTO return_events (return_id, type, title, message, meta, created_by, created_at, idemp_key)
               VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
               RETURNING id
-            `,
-            [
-              ev.returnId,
-              ev.type || 'csv',
-              ev.title || null,
-              ev.message || null,
-              metaStr,
-              ev.createdBy || 'csv-upload',
-              ev.idempKey || null
-            ]
-          );
-          return rows[0];
+              `,
+              [
+                ev.returnId,
+                ev.type || 'status',         // default seguro
+                ev.title || null,
+                ev.message || null,
+                metaStr,
+                ev.createdBy || 'csv-upload',
+                ev.idempKey || null
+              ]
+            );
+            return rows[0];
+          } catch (e) {
+            // 23505: já existe evento com o mesmo idemp_key → OK, idempotente
+            if (String(e?.code) === '23505') return { id: null, duplicate: true };
+            throw e;
+          }
         };
 
-  /** Heurística simples para detectar delimitador do CSV.
-   *  - prioriza ; depois , depois TAB
-   *  - ⚠️ não lida com vírgulas dentro de aspas (gambiarra “suficiente” pro nosso relatório).
-   *    Se precisar 100% robusto, trocar por `csv-parse` ou `papaparse` no backend.
-   */
+  /* ---------- helpers ---------- */
+
+  /** Heurística simples para detectar delimitador. */
   function detectDelimiter(text) {
-    const firstLine = text.split(/\r?\n/).find(Boolean) || '';
+    const first = text.split(/\r?\n/).find(Boolean) || '';
     const counts = {
-      ';': (firstLine.match(/;/g) || []).length,
-      ',': (firstLine.match(/,/g) || []).length,
-      '\t': (firstLine.match(/\t/g) || []).length,
+      ';': (first.match(/;/g) || []).length,
+      ',': (first.match(/,/g) || []).length,
+      '\t': (first.match(/\t/g) || []).length,
     };
-    const delim = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
-    return delim || ',';
+    return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0] || ',';
   }
 
-  /** Normaliza rótulos de coluna: remove acento, põe snake_case, tira símbolos. */
+  /** Normaliza rótulos: sem acento, snake_case, só [a-z0-9_]. */
   function norm(s = '') {
     return String(s)
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // tira acento
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .replace(/\s+/g, '_')
       .replace(/[^\w_]/g, '')
       .trim();
   }
 
-  /** Pega o primeiro valor existente dentre várias chaves candidatas. */
+  /** Pega a 1ª chave com valor não-vazio. */
   function pick(obj, keys) {
-    for (const k of keys) {
-      if (obj[k] != null && obj[k] !== '') return obj[k];
-    }
+    for (const k of keys) if (obj[k] != null && obj[k] !== '') return obj[k];
     return null;
   }
 
-  /** Converte uma linha (obj cabeçalho->valor) em nosso modelo interno. */
+  /** Converte número pt-BR/EN para float. */
+  function toNum(x) {
+    if (x == null || x === '') return null;
+    const s = String(x).replace(/\./g, '').replace(',', '.');
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /** Mapeia a linha crua para o nosso modelo. */
   function mapRowToModel(rowObj) {
-    // headers normalizados
     const o = {};
     for (const [k, v] of Object.entries(rowObj)) o[norm(k)] = v;
 
-    // Tolerância a diversos nomes entre países / layouts.
     const orderId   = pick(o, ['id_da_venda', 'id_venda', 'order_id', 'idpedido', 'pedido']);
     const shipment  = pick(o, ['id_do_envio', 'shipment_id', 'idenvio']);
     const tipo      = pick(o, ['tipo', 'type', 'evento', 'movimento']);
     const descricao = pick(o, ['descricao', 'description', 'detalhe', 'motivo']);
     const data      = pick(o, ['data', 'data_da_operacao', 'created_at', 'data_evento']);
-    const valor     = pick(o, ['valor', 'amount', 'valor_total', 'valor_da_operacao']);
+
+    // valores aceitos (vários layouts):
+    // - valor / amount / total
+    // - frete (ou soma de shipping_out + shipping_return)
+    const valor     = pick(o, ['valor', 'amount', 'valor_total', 'valor_da_operacao', 'total']);
+    const freteOne  = pick(o, ['frete', 'shipping_cost', 'custo_envio']);
+    const shipOut   = toNum(pick(o, ['shipping_out']));
+    const shipRet   = toNum(pick(o, ['shipping_return']));
+    const freteCalc = (freteOne != null ? toNum(freteOne) : null);
+    const frete     = (freteCalc != null ? freteCalc : ((shipOut || 0) + (shipRet || 0)));
+
     const moeda     = pick(o, ['moeda', 'currency']);
     const tarifa    = pick(o, ['tarifa', 'fee', 'taxa']);
-    const frete     = pick(o, ['frete', 'shipping_cost', 'custo_envio']);
-
-    // Converte números em float (gambiarra para “1.234,56” virar 1234.56).
-    const toNum = (x) => {
-      if (x == null || x === '') return null;
-      const s = String(x).replace(/\./g, '').replace(',', '.');
-      const n = Number(s);
-      return Number.isFinite(n) ? n : null;
-    };
 
     return {
       orderId: orderId ? String(orderId).trim() : null,
@@ -127,7 +115,7 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
     };
   }
 
-  /** Hash idempotente por linha, baseado nos campos relevantes. */
+  /** Hash idempotente por linha com campos relevantes. */
   function lineHash(model) {
     const s = JSON.stringify({
       orderId: model.orderId,
@@ -143,16 +131,9 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
     return crypto.createHash('sha256').update(s).digest('hex');
   }
 
-  /**
-   * Aplica regras de conciliação na nossa devolução, dado o "model" (linha CSV).
-   * Gambis/assunções:
-   *  - Procuramos devolução por `id_venda` (pode mudar para NFe etc).
-   *  - Se a linha falar de frete/tarifa, atualizamos `valor_frete` com o MAIOR absoluto.
-   *  - Se for "reembolso" (refund), reduzimos `valor_produto` (nunca < 0).
-   *  - É propositalmente simples; refine os “if” conforme os tipos/descrições do seu CSV.
-   */
+  /** Aplica conciliação para 1 linha. */
   async function conciliarLinha(model, { dryRun = false } = {}) {
-    // Localiza devo por id_venda
+    // localizar devolução
     let dev = null;
     if (model.orderId) {
       const r = await query(
@@ -164,52 +145,47 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
       );
       dev = r.rows[0] || null;
     }
+    if (!dev) return { ok: false, reason: 'no-match' };
 
-    if (!dev) {
-      // Sem correspondência — consideramos “ignorada” por ora (no-match).
-      return { ok: false, reason: 'no-match' };
-    }
-
+    const before = { vp: Number(dev.valor_produto || 0), vf: Number(dev.valor_frete || 0) };
     const updates = {};
 
-    // se linha reporta um custo de frete, guardamos o maior (absoluto) visto
+    // frete: guarda o maior absoluto visto
     if (model.frete != null && Math.abs(model.frete) > 0) {
-      updates.valor_frete = Math.max(Math.abs(Number(dev.valor_frete || 0)), Math.abs(model.frete));
+      updates.valor_frete = Math.max(Math.abs(before.vf), Math.abs(model.frete));
     }
 
-    // se linha reporta tarifa, você pode guardar em coluna própria (se existir)
-    if (model.tarifa != null && Math.abs(model.tarifa) > 0) {
-      // TODO opcional: se tiver coluna `tarifa_ml`, habilite:
-      // updates.tarifa_ml = Number(model.tarifa);
-    }
-
-    // reembolso/refund → reduz valor_produto
+    // refund: reduz valor_produto (piso zero)
     if (model.tipo && /reembolso|refund/i.test(model.tipo)) {
-      const vp = Number(dev.valor_produto || 0);
-      const novo = Math.max(0, vp - Math.abs(model.valor || 0));
+      const novo = Math.max(0, before.vp - Math.abs(model.valor || 0));
       updates.valor_produto = novo;
     }
 
-    if (Object.keys(updates).length === 0) {
-      return { ok: false, reason: 'no-op' };
-    }
+    const changed = Object.keys(updates).length > 0 &&
+                    (updates.valor_frete !== before.vf || updates.valor_produto !== before.vp);
+
+    if (!changed) return { ok: false, reason: 'no-op' };
 
     if (!dryRun) {
+      // update
       const sets = [], args = [];
-      for (const [k, v] of Object.entries(updates)) {
-        args.push(v);
-        sets.push(`${k} = $${args.length}`);
-      }
+      for (const [k, v] of Object.entries(updates)) { args.push(v); sets.push(`${k} = $${args.length}`); }
       args.push(dev.id);
       await query(
         `update devolucoes set ${sets.join(', ')}, updated_at = now() where id = $${args.length}`,
         args
       );
 
-      // Evento de auditoria (idempotente, usando hash da linha)
+      // tipo compatível com o CHECK da tabela return_events
+      const eventType =
+        (updates.valor_produto != null) ? 'ajuste' :
+        (updates.valor_frete   != null /*|| updates.tarifa_ml != null*/) ? 'custo' :
+        'status'; // fallback seguro
+
+      // evento (idempotente via idemp_key; 23505 tratado no addReturnEvent)
       await addReturnEvent({
         returnId: dev.id,
-        type: 'csv_conciliacao',
+        type: eventType,
         title: 'Conciliação Mercado Livre (CSV)',
         message: `Atualizado via CSV: ${Object.keys(updates).join(', ')}`,
         meta: { ml_csv: model.raw },
@@ -221,15 +197,12 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
     return { ok: true, reason: 'updated' };
   }
 
-  /**
-   * POST /api/csv/upload
-   * Body: texto CSV
-   * Query: ?dry=1  -> simulação (não grava ml_csv_imports/ml_csv_raw e não atualiza devoluções)
-   * Header opcional: X-Filename para registrar nome do arquivo no import.
-   */
+  /* ---------- rotas ---------- */
+
+  // POST /api/csv/upload — recebe CSV como texto
   app.post(
     '/api/csv/upload',
-    // Middleware para aceitar texto puro até 10mb (⚠️ ajuste se necessário)
+    // importante: body como TEXTO para aceitar CSV puro
     express.text({ type: ['text/*', 'application/octet-stream', '*/*'], limit: '10mb' }),
     async (req, res) => {
       try {
@@ -242,10 +215,10 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
         const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
         if (lines.length < 2) return res.status(400).json({ error: 'CSV sem conteúdo.' });
 
-        // ⚠️ CSV simplista: split por delimitador sem tratar aspas/escapes.
-        // Se o seu relatório tiver vírgulas dentro de campos, use um parser robusto.
+        // CSV simples: split por delimitador (se tiver vírgula dentro de aspas, trocar por parser robusto)
         const headers = lines[0].split(delim).map(h => h.replace(/^"|"$/g, ''));
 
+        // abre import (se não for dry)
         let importId = null;
         if (!dry) {
           const rImp = await query(
@@ -272,7 +245,7 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
             const model = mapRowToModel(rowObj);
             const h = lineHash(model);
 
-            // Auditoria de linha (só se não for dry-run)
+            // audita linha se não for dry
             if (!dry) {
               try {
                 await query(
@@ -280,16 +253,15 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
                    values ($1,$2,$3,$4)`,
                   [importId, i + 1, JSON.stringify(rowObj), h]
                 );
-              } catch (e) {
-                // Provável duplicata por hash único: ignoramos silenciosamente.
-              }
+              } catch (_) { /* prov. duplicata pelo mesmo hash nessa import → ignora */ }
             }
 
             const r = await conciliarLinha(model, { dryRun: dry });
             if (r.ok) conc++;
             else if (r.reason === 'no-match' || r.reason === 'no-op') ign++;
             else err++;
-          } catch (_) {
+          } catch (e) {
+            console.warn('[CSV linha ERRO]', { linha: i+1, erro: String(e?.message || e) });
             err++;
           }
         }
@@ -318,4 +290,16 @@ module.exports = function registrarRotasCsv(app, deps = {}) {
       }
     }
   );
+
+  // GET /api/csv/template — CSV mínimo compatível
+  app.get('/api/csv/template', (req, res) => {
+    // Cabeçalhos compatíveis com o parser (aceita tanto 'frete' quanto shipping_out/return)
+    const csv = [
+      'order_id,shipment_id,event_date,product_price,shipping_out,shipping_return,cancellation_fee,ml_fee,total,reason,event_type,sku',
+      '1234567890,998877,2025-10-03T13:00:00Z,100,15,15,0,0,130,arrependimento,refund,SKU-XYZ'
+    ].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.status(200).send(csv);
+  });
 };

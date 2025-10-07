@@ -194,7 +194,7 @@ function str(v) { return v == null ? '' : String(v); }
 /*   Rotas de CSV (Mercado Livre pós-venda) */
 /**
  * Importante:
- * - NÃO iplementei aqui a rota /api/csv/upload nem body-parser de texto.
+ * - NÃO implementei aqui a rota /api/csv/upload nem body-parser de texto.
  * - Tudo isso vive no módulo abaixo. Ele já faz:
  *   - parse heurístico do CSV,
  *   - normalização de cabeçalhos,
@@ -203,7 +203,7 @@ function str(v) { return v == null ? '' : String(v); }
  *   - e aceita `?dry=1` para simulação (dry-run).
  */
 const registrarRotasCsv = require('./routes/csv-upload');
-registrarRotasCsv(app, { addReturnEvent });
+registrarRotasCsv(app, { addReturnEvent }); // <- **ESSENCIAL** (ativa POST /api/csv/upload)
 
 /*   Health / DB  */
 app.get('/api/health', (_req, res) => {
