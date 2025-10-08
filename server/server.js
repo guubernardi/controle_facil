@@ -12,46 +12,9 @@ const path = require('path');
 const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('./db');
-const utilsRoutes = require('./routes/utils');
-app.use(utilsRoutes);
 
-
+// --- instância do express deve vir ANTES de qualquer app.use / rotas
 const app = express();
-
-// Events API — listar eventos por return_id (auditoria)
-app.get('/api/returns/:id/events', async (req, res) => {
-  try {
-    const returnId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(returnId)) {
-      return res.status(400).json({ error: 'return_id inválido' });
-    }
-
-    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
-    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
-
-    const sql = `
-      SELECT
-        id,
-        return_id AS "returnId",
-        type,
-        title,
-        message,
-        meta,
-        created_by AS "createdBy",
-        created_at AS "createdAt"
-      FROM return_events
-      WHERE return_id = $1
-      ORDER BY created_at ASC, id ASC
-      LIMIT $2 OFFSET $3
-    `;
-    const { rows } = await query(sql, [returnId, limit, offset]);
-    const items = rows.map(r => ({ ...r, meta: (() => { try { return JSON.parse(r.meta); } catch { return r.meta; } })() }));
-    res.json({ items, limit, offset });
-  } catch (err) {
-    console.error('GET /api/returns/:id/events error:', err);
-    res.status(500).json({ error: 'Falha ao listar eventos' });
-  }
-});
 
 /** Middlewares globais */
 app.use(express.json({ limit: '1mb' }));
@@ -64,6 +27,16 @@ app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
+
+// Tenta carregar rotas utilitárias, se existirem e exportarem um Router
+try {
+  const utilsRoutes = require('./routes/utils');
+  if (utilsRoutes && typeof utilsRoutes === 'function' && utilsRoutes.name === 'router') {
+    app.use(utilsRoutes); // ou app.use('/api/utils', utilsRoutes) se fizer sentido
+  }
+} catch (e) {
+  // arquivo não existe ou não exporta router — segue sem quebrar
+}
 
 /** Aviso se .env faltar */
 [
@@ -179,7 +152,50 @@ function str(v) { return v == null ? '' : String(v); }
 
 /* ========= ROTAS CSV (NOVAS) ========= */
 const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-registerCsvUploadExtended(app, { addReturnEvent }); // <-- usa a rota nova e injeta addReturnEvent
+registerCsvUploadExtended(app, { addReturnEvent }); // <-- injeta addReturnEvent
+
+// ML OAuth + client (registra somente se o arquivo existir)
+try {
+  const registerMlAuth = require('./routes/ml-auth');
+  if (typeof registerMlAuth === 'function') registerMlAuth(app);
+} catch (e) {
+  // ainda não criado; sem problemas
+}
+
+// Events API — listar eventos por return_id (auditoria)
+app.get('/api/returns/:id/events', async (req, res) => {
+  try {
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) {
+      return res.status(400).json({ error: 'return_id inválido' });
+    }
+
+    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
+
+    const sql = `
+      SELECT
+        id,
+        return_id AS "returnId",
+        type,
+        title,
+        message,
+        meta,
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+      FROM return_events
+      WHERE return_id = $1
+      ORDER BY created_at ASC, id ASC
+      LIMIT $2 OFFSET $3
+    `;
+    const { rows } = await query(sql, [returnId, limit, offset]);
+    const items = rows.map(r => ({ ...r, meta: (() => { try { return JSON.parse(r.meta); } catch { return r.meta; } })() }));
+    res.json({ items, limit, offset });
+  } catch (err) {
+    console.error('GET /api/returns/:id/events error:', err);
+    res.status(500).json({ error: 'Falha ao listar eventos' });
+  }
+});
 
 /*   Health / DB  */
 app.get('/api/health', (_req, res) => {

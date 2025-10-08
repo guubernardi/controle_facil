@@ -156,5 +156,29 @@
       });
     })();
   </script>
+
+  <script>
+    (async () => {
+      const params = new URLSearchParams(location.search);
+      const code = params.get('code');
+      const el = document.getElementById('status');
+      try {
+        if (!code) { el.textContent = 'Sem code na URL.'; return; }
+        el.textContent = 'Conectando ao Mercado Livre...';
+        const r = await fetch('/api/ml/auth/exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Falha na troca do code');
+        el.textContent = `Conectado: ${j.account.nickname} (id ${j.account.user_id}). Redirecionando...`;
+        setTimeout(() => location.href = '/dashboard.html', 800);
+      } catch (e) {
+        el.textContent = 'Erro: ' + e.message;
+      }
+    })();
+  </script>
+  <div id="status">Aguardando callback...</div>
 </body>
 </html>

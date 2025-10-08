@@ -1,20 +1,12 @@
 {
   "name": "devolucoes-buscou",
   "version": "0.1.0",
-  "main": "server/server.js",
-  "type": "commonjs",
+  "private": true,
   "scripts": {
-    "dev": "node server/server.js"
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js"
   },
-  "dependencies": {
-    "axios": "^1.12.2",
-    "dayjs": "^1.11.18",
-    "dotenv": "^16.6.1",
-    "express": "^4.21.2",
-    "pg": "^8.16.3"
-  },
-  "description": "",
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "engines": {
+    "node": "20.x"
+  }
 }
