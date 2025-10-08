@@ -4,19 +4,122 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Home — Retorno Fácil</title>
+
+  <!-- Favicon -->
   <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
+
+  <!-- Fontes -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/navbar.css" />
+
+  <!-- Estilos da sidebar (novo menu) -->
+  <link rel="stylesheet" href="css/navigation.css" />
+
+  <!-- Estilos específicos da Home -->
   <link rel="stylesheet" href="css/home.css" />
-  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/x-icon">
 </head>
 <body class="home-page">
-  <div id="cabecalho"></div>
-  <script src="js/header.js"></script>
+  <!-- =========================================================
+       SIDEBAR (Navegação lateral)
+       Observação: mantenha este bloco igual em todas as páginas
+       para que a navegação fique consistente.
+  ========================================================== -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <!-- Substitua pelo seu logo se quiser -->
+        <img src="/placeholder.svg?height=40&width=40" alt="Retorno Fácil" class="sidebar-logo-img">
+        <span class="sidebar-logo-text">Retorno Fácil</span>
+      </div>
+      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 12h18M3 6h18M3 18h18"/>
+        </svg>
+      </button>
+    </div>
 
-  <main class="container"> 
+    <nav class="sidebar-nav">
+      <!-- HOME -->
+      <a href="home.html" class="sidebar-nav-item" data-page="home">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+        <span class="sidebar-nav-text">Home</span>
+      </a>
+
+      <!-- CENTRAL -->
+      <a href="central.html" class="sidebar-nav-item" data-page="central">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7"/>
+          <rect x="14" y="3" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/>
+        </svg>
+        <span class="sidebar-nav-text">Central</span>
+      </a>
+
+      <!-- DEVOLUÇÕES (index.html) -->
+      <a href="index.html" class="sidebar-nav-item" data-page="devolucoes">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 14 4 9 9 4"/>
+          <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+        </svg>
+        <span class="sidebar-nav-text">Devoluções</span>
+      </a>
+
+      <!-- DASHBOARDS & RELATÓRIOS -->
+      <a href="dashboards.html" class="sidebar-nav-item" data-page="dashboards">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="20" x2="18" y2="8"/>
+          <line x1="12" y1="20" x2="12" y2="4"/>
+          <line x1="6"  y1="20" x2="6"  y2="14"/>
+        </svg>
+        <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
+      </a>
+
+      <!-- LOGS -->
+      <a href="logs.html" class="sidebar-nav-item" data-page="logs">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        <span class="sidebar-nav-text">Logs</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <!-- Dados fictícios do usuário; troque quando tiver auth -->
+      <div class="sidebar-user">
+        <img src="/placeholder-user.jpg" alt="Usuário" class="sidebar-user-avatar">
+        <div class="sidebar-user-info">
+          <div class="sidebar-user-name">Gustavo</div>
+          <div class="sidebar-user-email">gustavo@email.com</div>
+        </div>
+      </div>
+      <button class="sidebar-logout" aria-label="Sair">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Overlay do mobile -->
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+  <!-- =========================================================
+       CONTEÚDO PRINCIPAL DA HOME
+       (Seu conteúdo original foi mantido)
+  ========================================================== -->
+  <main class="container">
+    <!-- FAIXA / CARDS DE AVISOS -->
     <section class="faixa" aria-label="avisos e onboarding">
       <div class="banner-carousel">
         <div class="card info" id="av_card_1">
@@ -73,6 +176,7 @@
       </div>
     </section>
 
+    <!-- ABAS -->
     <section class="abas">
       <button class="aba ativa" data-tab="visao">
         <svg class="aba-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -91,7 +195,8 @@
         Eventos
       </button>
     </section>
-     
+
+    <!-- PAINEL: VISÃO GERAL -->
     <section id="tab_visao" class="tab painel ativo">
       <div class="grid3">
         <article class="bloco">
@@ -114,7 +219,7 @@
               </div>
               <div class="lista-action">
                 <b id="qtd_rcd" class="lista-value">0</b>
-                <button class="seta">
+                <button class="seta" aria-label="Abrir">
                   <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
                     <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
                   </svg>
@@ -136,7 +241,7 @@
               </div>
               <div class="lista-action">
                 <b id="qtd_semcsv" class="lista-value">0</b>
-                <button class="seta">
+                <button class="seta" aria-label="Abrir">
                   <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
                     <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
                   </svg>
@@ -156,7 +261,7 @@
               </div>
               <div class="lista-action">
                 <b id="qtd_csvpend" class="lista-value">0</b>
-                <button class="seta">
+                <button class="seta" aria-label="Abrir">
                   <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
                     <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
                   </svg>
@@ -188,6 +293,7 @@
       </div>
     </section>
 
+    <!-- PAINEL: EVENTOS -->
     <section id="tab_eventos" class="tab painel" aria-labelledby="Eventos">
       <div class="bloco bloco-wide" id="bloco_eventos">
         <header class="bloco-header">
@@ -208,6 +314,8 @@
     </section>
   </main>
 
+  <!-- Scripts do layout e da Home -->
+  <script src="js/navigation.js"></script>
   <script type="module" src="js/home.js"></script>
 </body>
 </html>

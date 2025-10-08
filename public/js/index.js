@@ -208,7 +208,7 @@ class SistemaDevolucoes {
 
   // ----------- UI / Eventos -----------
   configurarEventListeners() {
-    // abrir modal
+    // abrir modal via clique no botão (se existir)
     document.addEventListener('click', (e) => {
       const btn = e.target.closest && e.target.closest('#botao-nova-devolucao');
       if (btn) {
@@ -217,6 +217,55 @@ class SistemaDevolucoes {
       }
     });
 
+    // abrir modal via evento customizado disparado pela sidebar (fallback do menu)
+    document.addEventListener('nova-devolucao:abrir', () => this.abrirModal());
+
+    // ==== Dropdown "Mais ações" (abre/fecha) ====
+    const ddBtn  = document.getElementById('btn-mais-acoes');
+    const ddMenu = document.getElementById('menu-mais-acoes');
+    if (ddBtn && ddMenu) {
+      const toggle = (open) => {
+        const willOpen = open ?? ddMenu.hasAttribute('hidden');
+        ddMenu.toggleAttribute('hidden', !willOpen);
+        ddBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+      };
+      ddBtn.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+      document.addEventListener('click', () => { if (!ddMenu.hasAttribute('hidden')) toggle(false); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggle(false); });
+    }
+
+    // ==== Sincronizar ML (placeholder de endpoint) ====
+    const btnSync = document.getElementById('btn-sync-ml');
+    if (btnSync) {
+      btnSync.addEventListener('click', async () => {
+        const original = btnSync.textContent;
+        btnSync.disabled = true;
+        btnSync.textContent = 'Sincronizando...';
+        try {
+          // ajuste este endpoint conforme seu backend
+          const r = await fetch('/api/ml/sync?scope=returns', { method: 'POST' });
+          if (!r.ok) throw new Error('Falha ao iniciar sincronização');
+
+          this.mostrarToast('OK', 'Sincronização iniciada. Atualizando lista...', 'sucesso');
+          await this.carregarDevolucoesDoServidor();
+          this.atualizarEstatisticas();
+          this.renderizarDevolucoes();
+        } catch (e) {
+          this.mostrarToast('Erro', e.message || 'Não foi possível sincronizar com o ML.', 'erro');
+        } finally {
+          btnSync.disabled = false;
+          btnSync.textContent = original;
+        }
+      });
+    }
+
+    // ==== Exportar (suporta #btn-exportar e #botao-exportar) ====
+    const btnExportar = document.getElementById('btn-exportar') || document.getElementById('botao-exportar');
+    if (btnExportar) {
+      btnExportar.addEventListener('click', () => this.exportarDados());
+    }
+
+    // ==== Formulário / Modal de criação (se existir no HTML) ====
     const modal = document.getElementById('modal-nova-devolucao');
     const botaoFechar = document.getElementById('botao-fechar-modal');
     const botaoCancelar = document.getElementById('botao-cancelar');
@@ -244,7 +293,7 @@ class SistemaDevolucoes {
         await this.criarNovaDevolucao();
       });
 
-      // número do pedido
+      // número do pedido → tenta descobrir loja
       const inputNumero = document.getElementById('numero-pedido');
       if (inputNumero) {
         const go = () => {
@@ -255,7 +304,7 @@ class SistemaDevolucoes {
         inputNumero.addEventListener('blur', go);
       }
 
-      // número da nota
+      // número da nota → busca por NF
       const inputNota = document.getElementById('numero-nota');
       if (inputNota) {
         const go = () => {
@@ -266,7 +315,7 @@ class SistemaDevolucoes {
         inputNota.addEventListener('blur', go);
       }
 
-      // chave NFe
+      // chave NFe → busca por chave (>= 44 dígitos)
       const inputChave = document.getElementById('chave-nota');
       if (inputChave) {
         inputChave.addEventListener('blur', () => {
@@ -382,6 +431,7 @@ class SistemaDevolucoes {
       // ---------- fim autocomplete ----------
     }
 
+    // Pesquisa
     const campoPesquisa = document.getElementById('campo-pesquisa');
     if (campoPesquisa) {
       campoPesquisa.addEventListener('input', (e) => {
@@ -390,6 +440,7 @@ class SistemaDevolucoes {
       });
     }
 
+    // Filtro status
     const filtroStatus = document.getElementById('filtro-status');
     if (filtroStatus) {
       filtroStatus.addEventListener('change', (e) => {
@@ -398,12 +449,7 @@ class SistemaDevolucoes {
       });
     }
 
-    const botaoExportar = document.getElementById('botao-exportar');
-    if (botaoExportar) {
-      botaoExportar.addEventListener('click', () => this.exportarDados());
-    }
-
-    // abrir detalhes
+    // abrir detalhes a partir da lista
     const lista = document.getElementById('container-devolucoes');
     if (lista) {
       lista.addEventListener('click', (e) => {
@@ -782,7 +828,7 @@ class SistemaDevolucoes {
           descricaoVazia.textContent =
             this.filtros.pesquisa || this.filtros.status !== 'todos'
               ? 'Tente ajustar os filtros de pesquisa'
-              : 'Nenhuma devolução foi registrada ainda';
+              : 'Use a pesquisa/filtros ou sincronize com o ML.';
         }
       }
       return;

@@ -185,7 +185,7 @@ try {
   console.warn('[BOOT] Webhook ML indisponível:', e.message);
 }
 
-// 5) **Webhook do Bling** (notificações dos módulos do Bling)
+// 5) Webhook do Bling (notificações dos módulos do Bling)
 try {
   const registerBlingWebhook = require('./routes/bling-webhook');
   if (typeof registerBlingWebhook === 'function') {
@@ -194,6 +194,17 @@ try {
   }
 } catch (e) {
   console.warn('[BOOT] Webhook Bling indisponível:', e.message);
+}
+
+// 6) Rotas Operacionais (ops.js)
+try {
+  const registerOps = require('./routes/ops');
+  if (typeof registerOps === 'function') {
+    registerOps(app, { addReturnEvent });
+    console.log('[BOOT] Rotas Operacionais registradas');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas Operacionais indisponíveis:', e.message);
 }
 
 /* ------------------------------------------------------------
