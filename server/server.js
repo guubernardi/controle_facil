@@ -407,7 +407,20 @@ app.get('/api/returns/logs', async (req, res) => {
 });
 
 /* Start */
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Servidor rodando em http://localhost:${port}`);
+const port = process.env.PORT || 3000; // Render injeta PORT
+const host = '0.0.0.0';                // ouvir em todas as interfaces
+
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true })); // endpoint simples
+
+const server = app.listen(port, host, () => {
+  console.log(`[BOOT] Server listening on http://${host}:${port}`);
 });
+
+// logs de segurança pra não morrer silencioso
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+
