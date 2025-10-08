@@ -1,44 +1,74 @@
 'use strict';
 
 /**
- * Server HTTP (Express) do Retorno Fácil
- * - CSV do ML foi extraído para ./routes/csv-upload-extended.js
+ * -------------------------------------------------------------
+ *  Retorno Fácil – Servidor HTTP (Express)
+ * -------------------------------------------------------------
+ * Objetivo:
+ *  - Servir a UI estática (pasta /public).
+ *  - Expor APIs de negócio (KPIs, pendências, logs, eventos, etc.).
+ *  - Receber e processar uploads CSV (rota em ./routes/csv-upload-extended.js).
+ *  - (Opcional) Autenticar e conversar com o Mercado Livre (./routes/ml-auth).
+ *
+ * Observações de deploy (Render, etc.):
+ *  - O provedor injeta a variável PORT; aqui ouvimos em 0.0.0.0:PORT.
+ *  - Variáveis sensíveis devem ser definidas no painel do provedor.
+ *  - Em desenvolvimento local usamos .env (dotenv).
+ * -------------------------------------------------------------
  */
 
-require('dotenv').config();
+// Carrega variáveis do .env APENAS em ambientes fora de produção.
+// Em produção (Render), as variáveis vêm do painel.
+try {
+  if (process.env.NODE_ENV !== 'production') {
+    require('dotenv').config();
+    console.log('[BOOT] dotenv carregado (.env)');
+  }
+} catch (_) {
+  console.log('[BOOT] dotenv não carregado (ok em produção)');
+}
 
 const express = require('express');
 const path = require('path');
-const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('./db');
 
-// --- instância do express deve vir ANTES de qualquer app.use / rotas
+// Cria a instância do Express ANTES de usar app.use/rotas.
 const app = express();
 
-/** Middlewares globais */
+/* ============================================================
+ *  MIDDLEWARES GLOBAIS
+ * ============================================================ */
+
+// Aceita JSON no corpo das requisições (até 1 MB).
 app.use(express.json({ limit: '1mb' }));
 
-/** Static */
+// Servir os arquivos estáticos (HTML/CSS/JS) da pasta /public.
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-/** JSON UTF-8 nas rotas /api */
+// Força o Content-Type JSON/UTF-8 nas rotas de /api (organização).
 app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-// Tenta carregar rotas utilitárias, se existirem e exportarem um Router
+/* ============================================================
+ *  ROTAS UTILITÁRIAS (opcionais)
+ *  Se ./routes/utils existir e exportar um Router, montamos.
+ * ============================================================ */
 try {
   const utilsRoutes = require('./routes/utils');
-  if (utilsRoutes && typeof utilsRoutes === 'function' && utilsRoutes.name === 'router') {
-    app.use(utilsRoutes); // ou app.use('/api/utils', utilsRoutes) se fizer sentido
-  }
-} catch (e) {
-  // arquivo não existe ou não exporta router — segue sem quebrar
+  // Se for um Router, montamos na raiz. (Você pode trocar para '/api/utils' se preferir).
+  app.use(utilsRoutes);
+  console.log('[BOOT] Rotas /utils carregadas');
+} catch {
+  // arquivo não existe; segue sem quebrar
 }
 
-/** Aviso se .env faltar */
+/* ============================================================
+ *  CHECK DE VARIÁVEIS IMPORTANTES EM TEMPO DE BOOT
+ *  (apenas um aviso para facilitar diagnóstico em dev)
+ * ============================================================ */
 [
   'BLING_AUTHORIZE_URL',
   'BLING_TOKEN_URL',
@@ -48,24 +78,24 @@ try {
   'BLING_REDIRECT_URI',
   'DATABASE_URL'
 ].forEach(k => {
-  if (!process.env[k]) console.warn(`[WARN] .env faltando ${k}`);
+  if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
-/* Helpers compartilhados */
-function seguroParseJson(s) {
+/* ============================================================
+ *  HELPERS COMPARTILHADOS (parse seguro / idempotência / etc.)
+ * ============================================================ */
+function safeParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
   try { return JSON.parse(String(s)); } catch { return null; }
 }
-const safeParseJson = seguroParseJson;
 
-function pegarChaveIdempotencia(req) {
+function getIdempKey(req) {
   const v = (req.get('Idempotency-Key') || '').trim();
   return v || null;
 }
-const getIdempKey = pegarChaveIdempotencia;
 
-function normalizarCorpoEvento(body = {}) {
+function normalizeEventBody(body = {}) {
   const typeRaw = body.type ?? body.tipo;
   const type = typeof typeRaw === 'string' ? typeRaw.toLowerCase() : undefined;
 
@@ -74,19 +104,20 @@ function normalizarCorpoEvento(body = {}) {
 
   let meta = body.meta ?? body.metadados ?? body.dados ?? null;
   if (typeof meta === 'string') {
-    const parsed = seguroParseJson(meta);
+    const parsed = safeParseJson(meta);
     if (parsed !== null) meta = parsed;
   }
 
   const created_by = body.created_by ?? body.criado_por ?? body.usuario ?? 'system';
   return { type, title, message, meta, created_by };
 }
-const normalizeEventBody = normalizarCorpoEvento;
 
 /**
  * addReturnEvent (idempotente)
+ * - Registra evento de auditoria em return_events.
+ * - Se o idempotency key já existir, retorna o evento previamente criado.
  */
-async function adicionarEventoDevolucao({
+async function addReturnEvent({
   returnId,
   type,
   title = null,
@@ -106,7 +137,7 @@ async function adicionarEventoDevolucao({
       [returnId, type, title, message, metaStr, createdBy, idempKey]
     );
     const ev = rows[0];
-    ev.meta = seguroParseJson(ev.meta);
+    ev.meta = safeParseJson(ev.meta);
     return ev;
   } catch (e) {
     if (String(e?.code) === '23505' && idempKey) {
@@ -121,48 +152,37 @@ async function adicionarEventoDevolucao({
       );
       if (rows[0]) {
         const ev = rows[0];
-        ev.meta = seguroParseJson(ev.meta);
+        ev.meta = safeParseJson(ev.meta);
         return ev;
       }
     }
     throw e;
   }
 }
-const addReturnEvent = adicionarEventoDevolucao;
 
-async function tabelaTemColunas(table, columns) {
-  const { rows } = await query(
-    `SELECT column_name FROM information_schema.columns
-       WHERE table_schema='public' AND table_name=$1`,
-    [table]
-  );
-  const set = new Set(rows.map(r => r.column_name));
-  const out = {};
-  for (const c of columns) out[c] = set.has(c);
-  return out;
-}
-const tableHasColumns = tabelaTemColunas;
+/* ============================================================
+ *  REGISTRO DE ROTAS DA APLICAÇÃO
+ * ============================================================ */
 
-function paraNumero(v, def = 0) {
-  if (v == null || v === '') return def;
-  const n = Number(String(v).replace(/\./g, '').replace(',', '.'));
-  return Number.isFinite(n) ? n : def;
-}
-function str(v) { return v == null ? '' : String(v); }
-
-/* ========= ROTAS CSV (NOVAS) ========= */
+// 1) Upload CSV (coração do fluxo de conciliação pelo Mercado Livre)
 const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-registerCsvUploadExtended(app, { addReturnEvent }); // <-- injeta addReturnEvent
+registerCsvUploadExtended(app, { addReturnEvent });
+console.log('[BOOT] Rotas CSV registradas');
 
-// ML OAuth + client (registra somente se o arquivo existir)
+// 2) OAuth + cliente Mercado Livre (opcional; só carrega se o arquivo existir)
 try {
   const registerMlAuth = require('./routes/ml-auth');
-  if (typeof registerMlAuth === 'function') registerMlAuth(app);
-} catch (e) {
-  // ainda não criado; sem problemas
+  if (typeof registerMlAuth === 'function') {
+    registerMlAuth(app);
+    console.log('[BOOT] Rotas ML (OAuth) registradas');
+  }
+} catch {
+  // ainda não criado; segue
 }
 
-// Events API — listar eventos por return_id (auditoria)
+/* ------------------------------------------------------------
+ *  Auditoria: listar eventos por return_id
+ * ------------------------------------------------------------ */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
     const returnId = parseInt(req.params.id, 10);
@@ -189,7 +209,7 @@ app.get('/api/returns/:id/events', async (req, res) => {
       LIMIT $2 OFFSET $3
     `;
     const { rows } = await query(sql, [returnId, limit, offset]);
-    const items = rows.map(r => ({ ...r, meta: (() => { try { return JSON.parse(r.meta); } catch { return r.meta; } })() }));
+    const items = rows.map(r => ({ ...r, meta: safeParseJson(r.meta) }));
     res.json({ items, limit, offset });
   } catch (err) {
     console.error('GET /api/returns/:id/events error:', err);
@@ -197,7 +217,11 @@ app.get('/api/returns/:id/events', async (req, res) => {
   }
 });
 
-/*   Health / DB  */
+/* ------------------------------------------------------------
+ *  Healthchecks e ping de DB
+ * ------------------------------------------------------------ */
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
@@ -212,7 +236,22 @@ app.get('/api/db/ping', async (_req, res) => {
   }
 });
 
-/*  HOME (KPIs / Pendências / Avisos / Integrações)  */
+/* ------------------------------------------------------------
+ *  Home: KPIs / Pendências / Avisos / Integrações
+ *  (agrupa informações para o dashboard)
+ * ------------------------------------------------------------ */
+async function tableHasColumns(table, columns) {
+  const { rows } = await query(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {};
+  for (const c of columns) out[c] = set.has(c);
+  return out;
+}
+
 app.get('/api/home/kpis', async (req, res) => {
   try {
     const { from, to } = req.query;
@@ -222,7 +261,7 @@ app.get('/api/home/kpis', async (req, res) => {
     if (to)   { params.push(to);   where.push(`created_at <  $${params.length}`); }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    const cols = await tabelaTemColunas('devolucoes', ['conciliado_em']);
+    const cols = await tableHasColumns('devolucoes', ['conciliado_em']);
     const sql = `
       WITH base AS (
         SELECT
@@ -249,7 +288,7 @@ app.get('/api/home/kpis', async (req, res) => {
 
 app.get('/api/home/pending', async (_req, res) => {
   try {
-    const cols = await tabelaTemColunas('devolucoes', ['log_status','cd_inspecionado_em','conciliado_em']);
+    const cols = await tableHasColumns('devolucoes', ['log_status','cd_inspecionado_em','conciliado_em']);
     const whereSemInspecao = [];
     if (cols.log_status) whereSemInspecao.push(`log_status IN ('recebido_cd','em_inspecao')`);
     if (cols.cd_inspecionado_em) whereSemInspecao.push(`cd_inspecionado_em IS NULL`);
@@ -302,7 +341,9 @@ app.get('/api/integrations/health', async (_req, res) => {
   }
 });
 
-/*  Log de custos */
+/* ------------------------------------------------------------
+ *  Log de custos (lista paginada, com filtros e soma total)
+ * ------------------------------------------------------------ */
 app.get('/api/returns/logs', async (req, res) => {
   try {
     const {
@@ -344,12 +385,15 @@ app.get('/api/returns/logs', async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const offset  = (pageNum - 1) * limit;
 
-    const hasCols = await tabelaTemColunas('v_return_cost_log', ['return_id','log_status','total','event_at']);
-    const usarViewComReturnId = hasCols.return_id === true;
+    // Se a view v_return_cost_log existir com as colunas esperadas, usamos; senão, fabricamos uma base compatível.
+    async function viewHasColumns() {
+      const cols = await tableHasColumns('v_return_cost_log', ['return_id','log_status','total','event_at']);
+      return cols.return_id === true;
+    }
 
     let sqlItems, sqlCount, sqlSum, paramsItems, paramsCount;
 
-    if (usarViewComReturnId) {
+    if (await viewHasColumns()) {
       const baseSql = `FROM public.v_return_cost_log ${whereSql}`;
       sqlItems = `SELECT * ${baseSql} ORDER BY ${col} ${dir} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
       sqlCount = `SELECT COUNT(*)::int AS count ${baseSql}`;
@@ -406,17 +450,19 @@ app.get('/api/returns/logs', async (req, res) => {
   }
 });
 
-/* Start */
+/* ============================================================
+ *  START DO SERVIDOR
+ * ============================================================ */
 const port = process.env.PORT || 3000; // Render injeta PORT
 const host = '0.0.0.0';                // ouvir em todas as interfaces
-
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true })); // endpoint simples
 
 const server = app.listen(port, host, () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`);
 });
 
-// logs de segurança pra não morrer silencioso
+/* ============================================================
+ *  CAPTURA DE ERROS NÃO TRATADOS (evita fechar silenciosamente)
+ * ============================================================ */
 process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
 });
@@ -424,3 +470,5 @@ process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
 });
 
+// (Opcional) exporta app para testes automáticos, se desejar
+module.exports = app;
