@@ -8,17 +8,17 @@
  *  - Servir a UI estática (pasta /public).
  *  - Expor APIs de negócio (KPIs, pendências, logs, eventos, etc.).
  *  - Receber e processar uploads CSV (rota em ./routes/csv-upload-extended.js).
- *  - (Opcional) Autenticar e conversar com o Mercado Livre (./routes/ml-auth).
+ *  - Autenticar e conversar com o Mercado Livre (./routes/ml-auth).
+ *  - Sincronização direta com ML (./routes/ml-sync) e webhook (./routes/ml-webhook).
  *
- * Observações de deploy (Render, etc.):
- *  - O provedor injeta a variável PORT; aqui ouvimos em 0.0.0.0:PORT.
+ * Observações de deploy:
+ *  - Em produção (Render/Railway/Vercel) a variável PORT é injetada pelo provedor.
  *  - Variáveis sensíveis devem ser definidas no painel do provedor.
- *  - Em desenvolvimento local usamos .env (dotenv).
+ *  - Em dev local usamos .env (dotenv).
  * -------------------------------------------------------------
  */
 
-// Carrega variáveis do .env APENAS em ambientes fora de produção.
-// Em produção (Render), as variáveis vêm do painel.
+// Carrega variáveis do .env em dev
 try {
   if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config();
@@ -33,41 +33,27 @@ const path = require('path');
 const dayjs = require('dayjs');
 const { query } = require('./db');
 
-// Cria a instância do Express ANTES de usar app.use/rotas.
+// Cria a instância do Express
 const app = express();
 
 /* ============================================================
  *  MIDDLEWARES GLOBAIS
  * ============================================================ */
 
-// Aceita JSON no corpo das requisições (até 1 MB).
+// Aceita JSON no corpo (até 1 MB)
 app.use(express.json({ limit: '1mb' }));
 
-// Servir os arquivos estáticos (HTML/CSS/JS) da pasta /public.
+// Servir /public como estático (HTML/CSS/JS)
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Força o Content-Type JSON/UTF-8 nas rotas de /api (organização).
+// Força Content-Type JSON/UTF-8 nas rotas /api (organização)
 app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
 /* ============================================================
- *  ROTAS UTILITÁRIAS (opcionais)
- *  Se ./routes/utils existir e exportar um Router, montamos.
- * ============================================================ */
-try {
-  const utilsRoutes = require('./routes/utils');
-  // Se for um Router, montamos na raiz. (Você pode trocar para '/api/utils' se preferir).
-  app.use(utilsRoutes);
-  console.log('[BOOT] Rotas /utils carregadas');
-} catch {
-  // arquivo não existe; segue sem quebrar
-}
-
-/* ============================================================
- *  CHECK DE VARIÁVEIS IMPORTANTES EM TEMPO DE BOOT
- *  (apenas um aviso para facilitar diagnóstico em dev)
+ *  CHECK DE VARIÁVEIS IMPORTANTES (apenas aviso em dev)
  * ============================================================ */
 [
   'BLING_AUTHORIZE_URL',
@@ -76,13 +62,16 @@ try {
   'BLING_CLIENT_ID',
   'BLING_CLIENT_SECRET',
   'BLING_REDIRECT_URI',
-  'DATABASE_URL'
+  'DATABASE_URL',
+  'ML_CLIENT_ID',
+  'ML_CLIENT_SECRET',
+  'ML_REDIRECT_URI',
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
 /* ============================================================
- *  HELPERS COMPARTILHADOS (parse seguro / idempotência / etc.)
+ *  HELPERS COMPARTILHADOS
  * ============================================================ */
 function safeParseJson(s) {
   if (s == null) return null;
@@ -90,32 +79,10 @@ function safeParseJson(s) {
   try { return JSON.parse(String(s)); } catch { return null; }
 }
 
-function getIdempKey(req) {
-  const v = (req.get('Idempotency-Key') || '').trim();
-  return v || null;
-}
-
-function normalizeEventBody(body = {}) {
-  const typeRaw = body.type ?? body.tipo;
-  const type = typeof typeRaw === 'string' ? typeRaw.toLowerCase() : undefined;
-
-  const title = body.title ?? body.titulo ?? null;
-  const message = body.message ?? body.mensagem ?? null;
-
-  let meta = body.meta ?? body.metadados ?? body.dados ?? null;
-  if (typeof meta === 'string') {
-    const parsed = safeParseJson(meta);
-    if (parsed !== null) meta = parsed;
-  }
-
-  const created_by = body.created_by ?? body.criado_por ?? body.usuario ?? 'system';
-  return { type, title, message, meta, created_by };
-}
-
 /**
  * addReturnEvent (idempotente)
  * - Registra evento de auditoria em return_events.
- * - Se o idempotency key já existir, retorna o evento previamente criado.
+ * - Se idempotency key já existir, retorna o existente.
  */
 async function addReturnEvent({
   returnId,
@@ -161,23 +128,61 @@ async function addReturnEvent({
 }
 
 /* ============================================================
+ *  ROTAS UTILITÁRIAS (opcionais)
+ *  Se ./routes/utils existir e exportar um Router, montamos.
+ * ============================================================ */
+try {
+  const utilsRoutes = require('./routes/utils');
+  app.use(utilsRoutes);
+  console.log('[BOOT] Rotas /utils carregadas');
+} catch {
+  // arquivo não existe; segue sem quebrar
+}
+
+/* ============================================================
  *  REGISTRO DE ROTAS DA APLICAÇÃO
  * ============================================================ */
 
-// 1) Upload CSV (coração do fluxo de conciliação pelo Mercado Livre)
-const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-registerCsvUploadExtended(app, { addReturnEvent });
-console.log('[BOOT] Rotas CSV registradas');
+// 1) Upload CSV (coração do fluxo de conciliação do ML via arquivo)
+try {
+  const registerCsvUploadExtended = require('./routes/csv-upload-extended');
+  registerCsvUploadExtended(app, { addReturnEvent });
+  console.log('[BOOT] Rotas CSV registradas');
+} catch (e) {
+  console.warn('[BOOT] CSV indisponível:', e.message);
+}
 
-// 2) OAuth + cliente Mercado Livre (opcional; só carrega se o arquivo existir)
+// 2) OAuth do Mercado Livre (login/callback/teste)
 try {
   const registerMlAuth = require('./routes/ml-auth');
   if (typeof registerMlAuth === 'function') {
     registerMlAuth(app);
     console.log('[BOOT] Rotas ML (OAuth) registradas');
   }
-} catch {
-  // ainda não criado; segue
+} catch (e) {
+  console.warn('[BOOT] ML (OAuth) indisponível:', e.message);
+}
+
+// 3) Sincronização direta com ML (import de claims/devoluções)
+try {
+  const registerMlSync = require('./routes/ml-sync');
+  if (typeof registerMlSync === 'function') {
+    registerMlSync(app);
+    console.log('[BOOT] Rotas ML Sync registradas');
+  }
+} catch (e) {
+  console.warn('[BOOT] ML Sync indisponível:', e.message);
+}
+
+// 4) Webhook do Mercado Livre (notificações: claims/returns/etc.)
+try {
+  const registerMlWebhook = require('./routes/ml-webhook');
+  if (typeof registerMlWebhook === 'function') {
+    registerMlWebhook(app);
+    console.log('[BOOT] Webhook ML registrado');
+  }
+} catch (e) {
+  console.warn('[BOOT] Webhook ML indisponível:', e.message);
 }
 
 /* ------------------------------------------------------------
@@ -238,7 +243,7 @@ app.get('/api/db/ping', async (_req, res) => {
 
 /* ------------------------------------------------------------
  *  Home: KPIs / Pendências / Avisos / Integrações
- *  (agrupa informações para o dashboard)
+ *  (para o dashboard)
  * ------------------------------------------------------------ */
 async function tableHasColumns(table, columns) {
   const { rows } = await query(
@@ -385,7 +390,6 @@ app.get('/api/returns/logs', async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const offset  = (pageNum - 1) * limit;
 
-    // Se a view v_return_cost_log existir com as colunas esperadas, usamos; senão, fabricamos uma base compatível.
     async function viewHasColumns() {
       const cols = await tableHasColumns('v_return_cost_log', ['return_id','log_status','total','event_at']);
       return cols.return_id === true;
@@ -461,7 +465,7 @@ const server = app.listen(port, host, () => {
 });
 
 /* ============================================================
- *  CAPTURA DE ERROS NÃO TRATADOS (evita fechar silenciosamente)
+ *  CAPTURA DE ERROS NÃO TRATADOS
  * ============================================================ */
 process.on('unhandledRejection', (err) => {
   console.error('[unhandledRejection]', err);
@@ -470,5 +474,5 @@ process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
 });
 
-// (Opcional) exporta app para testes automáticos, se desejar
+// Exporta app para testes automáticos, se desejar
 module.exports = app;
