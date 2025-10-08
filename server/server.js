@@ -185,6 +185,17 @@ try {
   console.warn('[BOOT] Webhook ML indisponível:', e.message);
 }
 
+// 5) **Webhook do Bling** (notificações dos módulos do Bling)
+try {
+  const registerBlingWebhook = require('./routes/bling-webhook');
+  if (typeof registerBlingWebhook === 'function') {
+    registerBlingWebhook(app);
+    console.log('[BOOT] Webhook Bling registrado');
+  }
+} catch (e) {
+  console.warn('[BOOT] Webhook Bling indisponível:', e.message);
+}
+
 /* ------------------------------------------------------------
  *  Auditoria: listar eventos por return_id
  * ------------------------------------------------------------ */
