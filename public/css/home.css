@@ -161,7 +161,7 @@ body {
 }
 
 .tag.-warn {
-  background: rgba(255, 255, 255, 0.2);
+  background: #ff9800;
   color: white;
 }
 

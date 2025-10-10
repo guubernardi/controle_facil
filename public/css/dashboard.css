@@ -733,3 +733,59 @@ body.dashboard-page {
   color: var(--muted-foreground);
   font-size: 0.875rem;
 }
+
+
+.sidebar-logo-text a {
+  text-decoration: none;
+}
+
+/* ====== Hotfix: logo gigante no Dashboard ====== */
+
+/* Garantir camadas corretas no header do dashboard */
+.dashboard-header {
+  position: relative;
+  overflow: hidden;       /* evita vazar para fora */
+  z-index: 1;
+}
+
+/* Marca d'água contida no header (ajuste o tamanho se quiser) */
+.dashboard-header::after {
+  content: "";
+  position: absolute;
+  right: -80px;           /* desloca para a borda */
+  bottom: -80px;
+  width: 520px;           /* tamanho controlado */
+  height: 520px;
+  background: url("assets/img/logo_rf.png") no-repeat center / contain;
+  opacity: 0.06;          /* bem suave */
+  pointer-events: none;   /* não captura cliques */
+  z-index: 0;             /* fica atrás do conteúdo do header */
+}
+
+/* Conteúdo do header sempre acima da marca d'água */
+.dashboard-header-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Se existir alguma marca d'água global via ::before/::after, neutraliza no dashboard */
+.dashboard-page::before,
+.dashboard-page::after {
+  content: none !important;
+}
+
+/* Garantir empilhamento do layout com a sidebar */
+.sidebar { z-index: 1000; }
+.sidebar-overlay { z-index: 900; }
+.dashboard-container { position: relative; z-index: 1; }
+
+/* Tamanho do logo da sidebar (evita expandir acidentalmente) */
+.sidebar .brand-logo {
+  width: 40px !important;
+  height: 40px !important;
+  object-fit: cover;
+}
+
+a {
+  text-decoration: none;
+}

@@ -10,6 +10,7 @@ let chartDay = null;
 let chartMes = null;
 let chart6Mes = null;
 let chartStatus = null;
+let currentFetch = null; // AbortController
 
 /* ------------------------------
    Utils
@@ -17,7 +18,6 @@ let chartStatus = null;
 function escapeHtml(s = '') {
   return String(s).replace(/[&<>'"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[c]));
 }
-
 function getCssVar(name, fallback) {
   try {
     const v = getComputedStyle(document.documentElement).getPropertyValue(name);
@@ -26,9 +26,16 @@ function getCssVar(name, fallback) {
     return fallback;
   }
 }
-
 function currencyBR(v) {
   return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+function updateLogLink(from, to) {
+  const a = document.getElementById('link-log');
+  if (!a) return;
+  const qs = new URLSearchParams();
+  if (from) qs.set('from', from);
+  if (to)   qs.set('to', to);
+  a.href = `/logs.html${qs.toString() ? '?' + qs.toString() : ''}`;
 }
 
 /* ------------------------------
@@ -40,7 +47,6 @@ const REGRAS_HINT =
 /* ------------------------------
    Mapeamento de rótulos de status (front)
 --------------------------------*/
-// deixa o texto explícito pro usuário, sem mudar as chaves que vêm da API
 const STATUS_LABELS = {
   pendente: 'Abertas',
   aprovado: 'Autorizadas p/ postagem',
@@ -54,15 +60,10 @@ const STATUS_LABELS = {
 function withAlphaHSL(hslColor, a = 1) {
   const c = String(hslColor || '').trim();
   if (!c) return `rgba(0,0,0,${a})`;
-  if (/^hsla\(/i.test(c)) {
-    return c.replace(/hsla\(([^,]+,[^,]+,[^,]+),\s*[^)]+\)/i, (_, core) => `hsla(${core}, ${a})`);
-  }
-  if (/^hsl\(/i.test(c)) {
-    return c.replace(/hsl\(([^)]+)\)/i, (_, core) => `hsla(${core}, ${a})`);
-  }
-  return c; // hex/rgb já válidos
+  if (/^hsla\(/i.test(c)) return c.replace(/hsla\(([^,]+,[^,]+,[^,]+),\s*[^)]+\)/i, (_, core) => `hsla(${core}, ${a})`);
+  if (/^hsl\(/i.test(c))  return c.replace(/hsl\(([^)]+)\)/i, (_, core) => `hsla(${core}, ${a})`);
+  return c;
 }
-
 function makeGradient(ctx, area, baseHsl) {
   if (!area) return withAlphaHSL(baseHsl, 0.85);
   const g = ctx.createLinearGradient(0, area.top, 0, area.bottom);
@@ -84,26 +85,16 @@ function baseBarOptions() {
     animation: { duration: 700, easing: 'easeOutCubic' },
     layout: { padding: { top: 8, right: 8, bottom: 0, left: 0 } },
     scales: {
-      x: {
-        grid: { display: false },
-        ticks: { color: textColor, maxRotation: 0, autoSkip: true }
-      },
+      x: { grid: { display: false }, ticks: { color: textColor, maxRotation: 0, autoSkip: true } },
       y: {
         grid: { color: gridColor },
         border: { display: false },
-        ticks: {
-          color: textColor,
-          callback: v => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0 })
-        }
+        ticks: { color: textColor, callback: v => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0 }) }
       }
     },
     plugins: {
       legend: { display: false },
-      tooltip: {
-        intersect: false,
-        mode: 'index',
-        callbacks: { label: (ctx) => currencyBR(ctx.parsed.y) }
-      }
+      tooltip: { intersect: false, mode: 'index', callbacks: { label: (ctx) => currencyBR(ctx.parsed.y) } }
     }
   };
 }
@@ -122,7 +113,7 @@ function initCharts() {
   const el6      = document.getElementById('chart-prejuizo-6mes');
   const elStatus = document.getElementById('chart-status');
 
-  // Últimos 30 dias (barras)
+  // Últimos 30 dias
   if (elDay) {
     const ctx = elDay.getContext('2d');
     chartDay = new Chart(ctx, {
@@ -151,8 +142,7 @@ function initCharts() {
           ...baseBarOptions().plugins,
           title: { display: true, text: 'Prejuízo (regra aplicada)', padding: { top: 4, bottom: 8 } },
           subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
-          tooltip: {
-            ...baseBarOptions().plugins.tooltip,
+          tooltip: { ...baseBarOptions().plugins.tooltip,
             callbacks: { label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}` }
           }
         }
@@ -160,7 +150,7 @@ function initCharts() {
     });
   }
 
-  // Mês atual (barras por dia)
+  // Mês atual
   if (elMes) {
     const ctx = elMes.getContext('2d');
     chartMes = new Chart(ctx, {
@@ -197,8 +187,7 @@ function initCharts() {
           ...baseBarOptions().plugins,
           title: { display: true, text: 'Prejuízo do mês (regra aplicada)', padding: { top: 4, bottom: 8 } },
           subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
-          tooltip: {
-            ...baseBarOptions().plugins.tooltip,
+          tooltip: { ...baseBarOptions().plugins.tooltip,
             callbacks: { label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}` }
           }
         }
@@ -206,7 +195,7 @@ function initCharts() {
     });
   }
 
-  // Últimos 6 meses (barras)
+  // Últimos 6 meses
   if (el6) {
     const ctx = el6.getContext('2d');
     chart6Mes = new Chart(ctx, {
@@ -235,8 +224,7 @@ function initCharts() {
           ...baseBarOptions().plugins,
           title: { display: true, text: 'Prejuízo (últimos 6 meses)', padding: { top: 4, bottom: 8 } },
           subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
-          tooltip: {
-            ...baseBarOptions().plugins.tooltip,
+          tooltip: { ...baseBarOptions().plugins.tooltip,
             callbacks: { label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}` }
           }
         }
@@ -244,7 +232,7 @@ function initCharts() {
     });
   }
 
-  // Pizza por Status (com rótulos claros)
+  // Pizza por Status
   if (elStatus) {
     const ctx = elStatus.getContext('2d');
     chartStatus = new Chart(ctx, {
@@ -255,7 +243,6 @@ function initCharts() {
           data: [],
           borderColor: mutedBorder,
           borderWidth: 1,
-          // as cores serão definidas dinamicamente em updateCharts para casar com a ordem dos rótulos
           backgroundColor: []
         }]
       },
@@ -267,12 +254,7 @@ function initCharts() {
           legend: { position: 'bottom', labels: { usePointStyle: true } },
           title:   { display: true, text: 'Distribuição por status' },
           subtitle:{ display: true, text: 'Ajuda a entender a fase das devoluções.', padding: { top: 0, bottom: 6 } },
-          tooltip: {
-            callbacks: {
-              // tooltip usa os rótulos já convertidos
-              label: (ctx) => `${ctx.label}: ${Number(ctx.parsed || 0).toLocaleString('pt-BR')}`
-            }
-          }
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${Number(ctx.parsed || 0).toLocaleString('pt-BR')}` } }
         }
       }
     });
@@ -293,7 +275,7 @@ function updateCharts(data) {
     chartDay.update();
   }
 
-  // mês (agrupado)
+  // mês (usa série diária do período aplicado)
   if (chartMes) {
     const series = data.daily || [];
     const grouped = {};
@@ -317,10 +299,10 @@ function updateCharts(data) {
     chart6Mes.update();
   }
 
-  // pizza por status (ordem fixa + rótulo claro)
+  // pizza por status
   if (chartStatus) {
     const statusObj = data.status || {};
-    const order = ['pendente', 'aprovado', 'rejeitado']; // outros vão para "Outros"
+    const order = ['pendente', 'aprovado', 'rejeitado'];
     const values = [];
     const labels = [];
     const bg = [];
@@ -329,10 +311,8 @@ function updateCharts(data) {
     const primary     = getCssVar('--primary', '#0b5fff');     // Autorizadas p/ postagem
     const destructive = getCssVar('--destructive', '#e11d48'); // Rejeitadas
     const gray        = '#6b7280';
-
     const colorMap = { pendente: accent, aprovado: primary, rejeitado: destructive, outros: gray };
 
-    // adiciona conhecidos na ordem
     order.forEach(k => {
       if (statusObj[k] != null) {
         labels.push(STATUS_LABELS[k] || k);
@@ -341,7 +321,6 @@ function updateCharts(data) {
       }
     });
 
-    // soma quaisquer outros status em "outros"
     const otherSum = Object.entries(statusObj)
       .filter(([k]) => !order.includes(k))
       .reduce((acc, [,v]) => acc + Number(v || 0), 0);
@@ -427,22 +406,21 @@ function preencherRanking(items) {
         ${prejuFmt}
       </div>
     `;
-
     el.appendChild(item);
   });
 }
 
 /* ------------------------------
-   Resumo do período (labels claros)
+   Resumo do período
 --------------------------------*/
-function preencherResumo(totals) {
+function preencherResumo(totals = {}) {
   const el = document.getElementById('resumo-periodo');
   if (!el) return;
   el.innerHTML = `
-    <div class="resumo-item"><span class="label">Devoluções:</span><span class="valor">${totals.total || 0}</span></div>
-    <div class="resumo-item"><span class="label">Abertas:</span><span class="valor">${totals.pendentes || 0}</span></div>
-    <div class="resumo-item"><span class="label">Autorizadas p/ postagem:</span><span class="valor">${totals.aprovadas || 0}</span></div>
-    <div class="resumo-item"><span class="label">Rejeitadas:</span><span class="valor">${totals.rejeitadas || 0}</span></div>
+    <div class="resumo-item"><span class="label">Devoluções:</span><span class="valor">${totals.total ?? 0}</span></div>
+    <div class="resumo-item"><span class="label">Abertas:</span><span class="valor">${totals.pendentes ?? 0}</span></div>
+    <div class="resumo-item"><span class="label">Autorizadas p/ postagem:</span><span class="valor">${totals.aprovadas ?? 0}</span></div>
+    <div class="resumo-item"><span class="label">Rejeitadas:</span><span class="valor">${totals.rejeitadas ?? 0}</span></div>
     <div class="resumo-item">
       <span class="label">Prejuízo total:</span>
       <span class="valor" style="color:var(--destructive)" title="${REGRAS_HINT}">${currencyBR(totals.prejuizo_total || 0)}</span>
@@ -453,28 +431,36 @@ function preencherResumo(totals) {
    Carregamento / API
 --------------------------------*/
 async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) {
+  // aborta requisição anterior (evita race conditions)
+  try { currentFetch?.abort(); } catch {}
+  currentFetch = new AbortController();
+
   const params = new URLSearchParams();
   if (from) params.set('from', from);
-  if (to) params.set('to', to);
+  if (to)   params.set('to', to);
   params.set('limitTop', String(limitTop));
 
   let data = null;
   try {
-    const r = await fetch(`/api/dashboard?${params.toString()}`);
+    const r = await fetch(`/api/dashboard?${params.toString()}`, { signal: currentFetch.signal });
     if (!r.ok) throw new Error('Falha ao carregar dashboard');
     data = await r.json();
   } catch (e) {
-    console.warn('Falha ao buscar /api/dashboard, usando mock local.', e);
-    data = mockDashboardData();
+    if (e.name !== 'AbortError') {
+      console.warn('Falha ao buscar /api/dashboard, usando mock local.', e);
+      data = mockDashboardData();
+    } else {
+      return; // requisição abortada, não continua
+    }
   }
 
   if (!data || Object.keys(data).length === 0) data = mockDashboardData();
 
   // KPIs (mantém as mesmas chaves que a API envia)
-  document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = data.totals.total || 0);
-  document.getElementById('dash-pend')  && (document.getElementById('dash-pend').textContent  = data.totals.pendentes || 0);
-  document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = data.totals.aprovadas || 0);
-  document.getElementById('dash-rej')   && (document.getElementById('dash-rej').textContent   = data.totals.rejeitadas || 0);
+  document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = data.totals?.total ?? 0);
+  document.getElementById('dash-pend')  && (document.getElementById('dash-pend').textContent  = data.totals?.pendentes ?? 0);
+  document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = data.totals?.aprovadas ?? 0);
+  document.getElementById('dash-rej')   && (document.getElementById('dash-rej').textContent   = data.totals?.rejeitadas ?? 0);
 
   preencherRanking(data.top_items || []);
   preencherResumo(data.totals || {});
@@ -526,34 +512,44 @@ document.addEventListener('DOMContentLoaded', () => {
   if (inpFrom) inpFrom.value = from;
   if (inpTo)   inpTo.value = to;
 
-  // Alterna gráficos (mostra só um por vez)
+  updateLogLink(inpFrom?.value || null, inpTo?.value || null);
+
+  // Alterna gráficos (mostra só um por vez) + acessibilidade
+  const toggleButtons = [
+    ['btn-graf-dia','chart-prejuizo-dia'],
+    ['btn-graf-mes','chart-prejuizo-mes'],
+    ['btn-graf-6mes','chart-prejuizo-6mes'],
+    ['btn-graf-status','chart-status']
+  ];
   const showOnly = (id) => {
     ['chart-prejuizo-dia', 'chart-prejuizo-mes', 'chart-prejuizo-6mes', 'chart-status']
-      .forEach(k => {
-        const el = document.getElementById(k);
-        if (el) el.style.display = (k === id ? 'block' : 'none');
-      });
-    [['btn-graf-dia','chart-prejuizo-dia'],['btn-graf-mes','chart-prejuizo-mes'],['btn-graf-6mes','chart-prejuizo-6mes'],['btn-graf-status','chart-status']]
-      .forEach(([btnId, chartId]) => {
-        const b = document.getElementById(btnId);
-        if (b) b.classList.toggle('active', id === chartId);
-      });
+      .forEach(k => { const el = document.getElementById(k); if (el) el.style.display = (k === id ? 'block' : 'none'); });
+    toggleButtons.forEach(([btnId, chartId]) => {
+      const b = document.getElementById(btnId);
+      if (b) {
+        const active = id === chartId;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-pressed', String(active));
+      }
+    });
   };
-
   document.getElementById('btn-graf-dia')?.addEventListener('click', () => showOnly('chart-prejuizo-dia'));
   document.getElementById('btn-graf-mes')?.addEventListener('click', () => showOnly('chart-prejuizo-mes'));
   document.getElementById('btn-graf-6mes')?.addEventListener('click', () => showOnly('chart-prejuizo-6mes'));
   document.getElementById('btn-graf-status')?.addEventListener('click', () => showOnly('chart-status'));
-
-  // exibe "Últimos 30 dias" por padrão
-  showOnly('chart-prejuizo-dia');
+  showOnly('chart-prejuizo-dia'); // padrão
 
   // carregar dados iniciais
   carregarDashboard({ from, to }).catch(console.error);
 
-  document.getElementById('btn-aplicar')?.addEventListener('click', () => {
+  // aplicar filtros
+  const aplicar = () => {
     const f = document.getElementById('filtro-from')?.value || null;
     const t = document.getElementById('filtro-to')?.value || null;
+    updateLogLink(f, t);
     carregarDashboard({ from: f, to: t }).catch(console.error);
-  });
+  };
+  document.getElementById('btn-aplicar')?.addEventListener('click', aplicar);
+  inpFrom?.addEventListener('keydown', (e) => { if (e.key === 'Enter') aplicar(); });
+  inpTo?.addEventListener('keydown',   (e) => { if (e.key === 'Enter') aplicar(); });
 });

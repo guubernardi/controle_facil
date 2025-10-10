@@ -6,71 +6,144 @@
   <title>Log de Custos - Retorno Fácil</title>
   <meta name="description" content="Auditoria de custos de devoluções com regras aplicadas e trilha de responsabilidade." />
   <meta name="author" content="Retorno Fácil" />
+
+  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/logs.css">
+
+  <!-- CSS -->
   <link rel="stylesheet" href="css/navigation.css">
-  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="icon">
+  <link rel="stylesheet" href="css/logs.css">
+
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/png">
 </head>
 <body class="logs-page">
-  <script src="js/navigation.js"></script>
-  
-  <main class="container-principal"> 
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
+    <!-- topo -->
+    <div class="sidebar-header">
+      <a href="home.html" class="sidebar-logo" aria-label="Retorno Fácil">
+        <span class="sidebar-logo-text">Retorno Fácil</span>
+      </a>
+      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu" title="Menu">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h18v2H3z"/></svg>
+      </button>
+    </div>
+
+    <!-- navegação -->
+    <nav class="sidebar-nav">
+      <a class="sidebar-nav-item" data-page="home" href="home.html">
+        <span class="sidebar-nav-icon">
+          <!-- Home -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M3 10.5 12 3l9 7.5"/>
+            <path d="M5 10v10h14V10"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Início</span>
+      </a>
+
+        <a class="sidebar-nav-item" data-page="central" href="central.html">
+          <span class="sidebar-nav-icon">
+            <!-- Central (grid 2x2) -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+            </svg>
+          </span>
+          <span class="sidebar-nav-text">Central</span>
+        </a>
+
+        <a class="sidebar-nav-item" data-page="devolucoes" href="index.html">
+          <span class="sidebar-nav-icon">
+            <!-- Devoluções (seta de retorno) -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <polyline points="9 14 4 9 9 4"/>
+              <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+            </svg>
+          </span>
+          <span class="sidebar-nav-text">Devoluções</span>
+        </a>
+
+        <a class="sidebar-nav-item" data-page="dashboard" href="dashboard.html">
+          <span class="sidebar-nav-icon">
+            <!-- Dashboard (gráfico de barras) -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <line x1="18" y1="20" x2="18" y2="10"/>
+              <line x1="12" y1="20" x2="12" y2="4"/>
+              <line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+          </span>
+          <span class="sidebar-nav-text">Dashboard</span>
+        </a>
+        
+        <a class="sidebar-nav-item" data-page="logs" href="logs.html">
+          <span class="sidebar-nav-icon">
+            <!-- Log de Custos (documento) -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </span>
+          <span class="sidebar-nav-text">Log de Custos</span>
+        </a>
+        <!-- Configurações -->
+        <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
+          <span class="sidebar-nav-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
+            </svg>
+          </span>
+          <span class="sidebar-nav-text">Configurações</span>
+        </a>
+      </nav>
+
+    <!-- rodapé -->
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="sidebar-user-info">
+          <div class="sidebar-user-name">Gustavo</div>
+          <div class="sidebar-user-email">gustavo@email.com</div>
+        </div>
+      </div>
+      <button class="sidebar-logout" title="Sair" aria-label="Sair">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <path d="M16 17l5-5-5-5"/>
+          <path d="M21 12H9"/>
+        </svg>
+      </button>
+    </div>
+  </aside>
+  <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
+
+  <!-- CONTEÚDO -->
+  <main class="container-principal">
     <header class="cabecalho-pagina animate-slide-down">
       <div class="info-cabecalho">
+        <a href="index.html" class="botao-voltar" aria-label="Voltar para página inicial">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
+          </svg>
+          Voltar
+        </a>
         <h1 class="titulo-pagina">Log de Custos</h1>
         <p class="subtitulo-pagina">Auditoria de custos com regras aplicadas automaticamente</p>
       </div>
-
-      <div class="acoes-topo">
-        <button id="btnImportarCsv" class="botao botao-primario">
-          <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
-          </svg>
-          Importar CSV
-        </button>
-        <input id="inputCsv" type="file" accept=".csv,text/csv" hidden>
-
-        <a class="botao botao-secundario" href="/assets/modelo_pos_venda.csv" download>
-          <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"/>
-          </svg>
-          Modelo CSV
-        </a>
-      </div>
     </header>
 
-    <section class="resumo-totais animate-fade-in" aria-live="polite" style="animation-delay: 0.1s">
-      <div class="item-resumo">
-        <div class="icone-resumo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3M19,5V19H5V5H19Z"/>
-          </svg>
-        </div>
-        <div>
-          <span class="rotulo-resumo">Total de registros</span>
-          <span class="valor-resumo" id="total-registros">0</span>
-        </div>
-      </div>
-      <div class="item-resumo destaque-valor">
-        <div class="icone-resumo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M7,15H9C9,16.08 10.37,17 12,17C13.63,17 15,16.08 15,15C15,13.9 13.96,13.5 11.76,12.97C9.64,12.44 7,11.78 7,9C7,7.21 8.47,5.69 10.5,5.18V3H13.5V5.18C15.53,5.69 17,7.21 17,9H15C15,7.92 13.63,7 12,7C10.37,7 9,7.92 9,9C9,10.1 10.04,10.5 12.24,11.03C14.36,11.56 17,12.22 17,15C17,16.79 15.53,18.31 13.5,18.82V21H10.5V18.82C8.47,18.31 7,16.79 7,15Z"/>
-          </svg>
-        </div>
-        <div>
-          <span class="rotulo-resumo">Soma do período</span>
-          <span class="valor-resumo destaque" id="soma-periodo">R$ 0,00</span>
-        </div>
-      </div>
-    </section>
- 
-    <section class="cartao-filtros animate-fade-in" aria-labelledby="filtros-title" style="animation-delay: 0.2s">
+    <section class="cartao-filtros animate-fade-in" aria-labelledby="filtros-title" style="animation-delay:.2s">
       <div class="cabecalho-filtros">
         <button class="toggle-filtros" id="toggle-filtros" aria-expanded="true" aria-controls="filtros-conteudo">
           <svg class="icone-toggle" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M6,13H18V11H6M3,6V8H21V6M10,18H14V16H10V18Z"/>
+            <path d="M6,13H9C9,16.08 10.37,17 12,17C13.63,17 15,16.08 15,15C15,13.9 13.96,13.5 11.76,12.97C9.64,12.44 7,11.78 7,9C7,7.21 8.47,5.69 10.5,5.18V3H13.5V5.18C15.53,5.69 17,7.21 17,9H15C15,7.92 13.63,7 12,7C10.37,7 9,7.92 9,9C9,10.1 10.04,10.5 12.24,11.03C14.36,11.56 17,12.22 17,15C17,16.79 15.53,18.31 13.5,18.82V21H10.5V18.82C8.47,18.31 7,16.79 7,15Z"/>
           </svg>
           <h2 id="filtros-title" class="titulo-secao">Filtros</h2>
           <svg class="icone-chevron" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -81,9 +154,8 @@
           <span class="contador-badge">Todos os registros</span>
         </div>
       </div>
-      
+
       <div class="filtros-conteudo" id="filtros-conteudo">
-         Simplified filter layout with better grouping 
         <div class="grade-filtros">
           <div class="grupo-filtro-linha">
             <div class="grupo-filtro">
@@ -168,7 +240,7 @@
             </button>
             <button id="botao-limpar" class="botao botao-secundario">
               <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
+                <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,6.41Z"/>
               </svg>
               Limpar
             </button>
@@ -178,7 +250,7 @@
               </svg>
               Exportar
             </button>
-            
+
             <label class="chk-inline">
               <input type="checkbox" id="chkDryRun">
               <span class="checkbox-custom"></span>
@@ -199,7 +271,7 @@
       </div>
     </section>
 
-    <section class="cartao-tabela animate-fade-in" style="animation-delay: 0.3s">
+    <section class="cartao-tabela animate-fade-in" style="animation-delay:.3s">
       <div class="cabecalho-tabela">
         <h3 class="titulo-tabela">Registros</h3>
       </div>
@@ -264,7 +336,7 @@
       </div>
     </section>
 
-    <nav class="controles-paginacao animate-fade-in" aria-live="polite" style="animation-delay: 0.4s">
+    <nav class="controles-paginacao animate-fade-in" aria-live="polite" style="animation-delay:.4s">
       <button id="botao-anterior" class="botao botao-paginacao" disabled>
         <svg class="icone-botao" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M15.41,16.58L10.83,12L15.41,7.41L14,6L8,12L14,18L15.41,16.58Z"/>
@@ -290,6 +362,8 @@
     </div>
   </main>
 
-  <script src="js/logs.js"></script>
+  <!-- Scripts -->
+  <script src="js/navigation.js" defer></script>
+  <script src="js/logs.js" defer></script>
 </body>
 </html>

@@ -4,21 +4,8 @@
  * -------------------------------------------------------------
  *  Retorno Fácil – Servidor HTTP (Express)
  * -------------------------------------------------------------
- * Objetivo:
- *  - Servir a UI estática (pasta /public).
- *  - Expor APIs de negócio (KPIs, pendências, logs, eventos, etc.).
- *  - Receber e processar uploads CSV (rota em ./routes/csv-upload-extended.js).
- *  - Autenticar e conversar com o Mercado Livre (./routes/ml-auth).
- *  - Sincronização direta com ML (./routes/ml-sync) e webhook (./routes/ml-webhook).
- *
- * Observações de deploy:
- *  - Em produção (Render/Railway/Vercel) a variável PORT é injetada pelo provedor.
- *  - Variáveis sensíveis devem ser definidas no painel do provedor.
- *  - Em dev local usamos .env (dotenv).
- * -------------------------------------------------------------
  */
 
-// Carrega variáveis do .env em dev
 try {
   if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config();
@@ -30,31 +17,34 @@ try {
 
 const express = require('express');
 const path = require('path');
-const dayjs = require('dayjs');
 const { query } = require('./db');
 
-// Cria a instância do Express
 const app = express();
 
-/* ============================================================
- *  MIDDLEWARES GLOBAIS
- * ============================================================ */
-
-// Aceita JSON no corpo (até 1 MB)
+/* ===========================
+ *  MIDDLEWARES
+ * =========================== */
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Servir /public como estático (HTML/CSS/JS)
+// Alias de compatibilidade: se alguém referenciar o antigo sidebar.js,
+// redirecionamos para o arquivo correto navigation.js para evitar 404/MIME text/html.
+app.get('/js/sidebar.js', (_req, res) => {
+  res.redirect(302, '/js/navigation.js');
+});
+
+// estáticos
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Força Content-Type JSON/UTF-8 nas rotas /api (organização)
+// respostas JSON por padrão nas rotas /api
 app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-/* ============================================================
- *  CHECK DE VARIÁVEIS IMPORTANTES (apenas aviso em dev)
- * ============================================================ */
+/* ===========================
+ *  CHECK DE VARIÁVEIS (aviso)
+ * =========================== */
 [
   'BLING_AUTHORIZE_URL',
   'BLING_TOKEN_URL',
@@ -70,37 +60,28 @@ app.use('/api', (req, res, next) => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
-/* ============================================================
- *  HELPERS COMPARTILHADOS
- * ============================================================ */
+/* ===========================
+ *  HELPERS
+ * =========================== */
 function safeParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
   try { return JSON.parse(String(s)); } catch { return null; }
 }
 
-/**
- * addReturnEvent (idempotente)
- * - Registra evento de auditoria em return_events.
- * - Se idempotency key já existir, retorna o existente.
- */
 async function addReturnEvent({
-  returnId,
-  type,
-  title = null,
-  message = null,
-  meta = null,
-  createdBy = 'system',
-  idempKey = null
+  returnId, type, title = null, message = null, meta = null,
+  createdBy = 'system', idempKey = null
 }) {
   const metaStr = meta != null ? JSON.stringify(meta) : null;
   try {
     const { rows } = await query(
-      `
-      INSERT INTO return_events (return_id, type, title, message, meta, created_by, created_at, idemp_key)
-      VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
-      RETURNING id, return_id AS "returnId", type, title, message, meta, created_by AS "createdBy", created_at AS "createdAt", idemp_key AS "idempotencyKey"
-      `,
+      `INSERT INTO return_events
+         (return_id, type, title, message, meta, created_by, created_at, idemp_key)
+       VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
+       RETURNING id, return_id AS "returnId", type, title, message, meta,
+                 created_by AS "createdBy", created_at AS "createdAt",
+                 idemp_key AS "idempotencyKey"`,
       [returnId, type, title, message, metaStr, createdBy, idempKey]
     );
     const ev = rows[0];
@@ -109,12 +90,12 @@ async function addReturnEvent({
   } catch (e) {
     if (String(e?.code) === '23505' && idempKey) {
       const { rows } = await query(
-        `
-        SELECT id, return_id AS "returnId", type, title, message, meta, created_by AS "createdBy", created_at AS "createdAt", idemp_key AS "idempotencyKey"
-          FROM return_events
-         WHERE idemp_key = $1
-         LIMIT 1
-        `,
+        `SELECT id, return_id AS "returnId", type, title, message, meta,
+                created_by AS "createdBy", created_at AS "createdAt",
+                idemp_key AS "idempotencyKey"
+           FROM return_events
+          WHERE idemp_key = $1
+          LIMIT 1`,
         [idempKey]
       );
       if (rows[0]) {
@@ -127,146 +108,6 @@ async function addReturnEvent({
   }
 }
 
-/* ============================================================
- *  ROTAS UTILITÁRIAS (opcionais)
- *  Se ./routes/utils existir e exportar um Router, montamos.
- * ============================================================ */
-try {
-  const utilsRoutes = require('./routes/utils');
-  app.use(utilsRoutes);
-  console.log('[BOOT] Rotas /utils carregadas');
-} catch {
-  // arquivo não existe; segue sem quebrar
-}
-
-/* ============================================================
- *  REGISTRO DE ROTAS DA APLICAÇÃO
- * ============================================================ */
-
-// 1) Upload CSV (coração do fluxo de conciliação do ML via arquivo)
-try {
-  const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-  registerCsvUploadExtended(app, { addReturnEvent });
-  console.log('[BOOT] Rotas CSV registradas');
-} catch (e) {
-  console.warn('[BOOT] CSV indisponível:', e.message);
-}
-
-// 2) OAuth do Mercado Livre (login/callback/teste)
-try {
-  const registerMlAuth = require('./routes/ml-auth');
-  if (typeof registerMlAuth === 'function') {
-    registerMlAuth(app);
-    console.log('[BOOT] Rotas ML (OAuth) registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] ML (OAuth) indisponível:', e.message);
-}
-
-// 3) Sincronização direta com ML (import de claims/devoluções)
-try {
-  const registerMlSync = require('./routes/ml-sync');
-  if (typeof registerMlSync === 'function') {
-    registerMlSync(app);
-    console.log('[BOOT] Rotas ML Sync registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] ML Sync indisponível:', e.message);
-}
-
-// 4) Webhook do Mercado Livre (notificações: claims/returns/etc.)
-try {
-  const registerMlWebhook = require('./routes/ml-webhook');
-  if (typeof registerMlWebhook === 'function') {
-    registerMlWebhook(app);
-    console.log('[BOOT] Webhook ML registrado');
-  }
-} catch (e) {
-  console.warn('[BOOT] Webhook ML indisponível:', e.message);
-}
-
-// 5) Webhook do Bling (notificações dos módulos do Bling)
-try {
-  const registerBlingWebhook = require('./routes/bling-webhook');
-  if (typeof registerBlingWebhook === 'function') {
-    registerBlingWebhook(app);
-    console.log('[BOOT] Webhook Bling registrado');
-  }
-} catch (e) {
-  console.warn('[BOOT] Webhook Bling indisponível:', e.message);
-}
-
-// 6) Rotas Operacionais (ops.js)
-try {
-  const registerOps = require('./routes/ops');
-  if (typeof registerOps === 'function') {
-    registerOps(app, { addReturnEvent });
-    console.log('[BOOT] Rotas Operacionais registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas Operacionais indisponíveis:', e.message);
-}
-
-/* ------------------------------------------------------------
- *  Auditoria: listar eventos por return_id
- * ------------------------------------------------------------ */
-app.get('/api/returns/:id/events', async (req, res) => {
-  try {
-    const returnId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(returnId)) {
-      return res.status(400).json({ error: 'return_id inválido' });
-    }
-
-    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
-    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
-
-    const sql = `
-      SELECT
-        id,
-        return_id AS "returnId",
-        type,
-        title,
-        message,
-        meta,
-        created_by AS "createdBy",
-        created_at AS "createdAt"
-      FROM return_events
-      WHERE return_id = $1
-      ORDER BY created_at ASC, id ASC
-      LIMIT $2 OFFSET $3
-    `;
-    const { rows } = await query(sql, [returnId, limit, offset]);
-    const items = rows.map(r => ({ ...r, meta: safeParseJson(r.meta) }));
-    res.json({ items, limit, offset });
-  } catch (err) {
-    console.error('GET /api/returns/:id/events error:', err);
-    res.status(500).json({ error: 'Falha ao listar eventos' });
-  }
-});
-
-/* ------------------------------------------------------------
- *  Healthchecks e ping de DB
- * ------------------------------------------------------------ */
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
-
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
-});
-
-app.get('/api/db/ping', async (_req, res) => {
-  try {
-    const r = await query('select now() as now');
-    res.json({ ok: true, now: r.rows[0].now });
-  } catch (e) {
-    console.error('DB PING ERRO:', e);
-    res.status(500).json({ ok: false, error: String(e) });
-  }
-});
-
-/* ------------------------------------------------------------
- *  Home: KPIs / Pendências / Avisos / Integrações
- *  (para o dashboard)
- * ------------------------------------------------------------ */
 async function tableHasColumns(table, columns) {
   const { rows } = await query(
     `SELECT column_name FROM information_schema.columns
@@ -279,102 +120,110 @@ async function tableHasColumns(table, columns) {
   return out;
 }
 
-app.get('/api/home/kpis', async (req, res) => {
+/* ===========================
+ *  ROTAS Opcionais
+ * =========================== */
+try {
+  const utilsRoutes = require('./routes/utils');
+  app.use(utilsRoutes);
+  console.log('[BOOT] Rotas /utils carregadas');
+} catch {}
+
+/* ===========================
+ *  REGISTRO DE ROTAS
+ * =========================== */
+
+// 1) Upload CSV
+try {
+  const registerCsvUploadExtended = require('./routes/csv-upload-extended');
+  registerCsvUploadExtended(app, { addReturnEvent });
+  console.log('[BOOT] Rotas CSV registradas');
+} catch (e) {
+  console.warn('[BOOT] CSV indisponível:', e.message);
+}
+
+// 2) OAuth ML
+try {
+  const registerMlAuth = require('./routes/ml-auth');
+  if (typeof registerMlAuth === 'function') registerMlAuth(app);
+  console.log('[BOOT] Rotas ML (OAuth) registradas');
+} catch (e) {
+  console.warn('[BOOT] ML (OAuth) indisponível:', e.message);
+}
+
+// 3) Sync ML
+try {
+  const registerMlSync = require('./routes/ml-sync');
+  if (typeof registerMlSync === 'function') registerMlSync(app);
+  console.log('[BOOT] Rotas ML Sync registradas');
+} catch (e) {
+  console.warn('[BOOT] Rotas ML Sync indisponível:', e.message);
+}
+
+// 4) Webhook ML
+try {
+  const registerMlWebhook = require('./routes/ml-webhook');
+  if (typeof registerMlWebhook === 'function') registerMlWebhook(app);
+  console.log('[BOOT] Webhook ML registrado');
+} catch (e) {
+  console.warn('[BOOT] Webhook ML indisponível:', e.message);
+}
+
+// 5) Webhook Bling
+try {
+  const registerBlingWebhook = require('./routes/bling-webhook');
+  if (typeof registerBlingWebhook === 'function') registerBlingWebhook(app);
+  console.log('[BOOT] Webhook Bling registrado');
+} catch (e) {
+  console.warn('[BOOT] Webhook Bling indisponível:', e.message);
+}
+
+// 6) Rotas Operacionais (ops.js)
+try {
+  const registerOps = require('./routes/ops');
+  if (typeof registerOps === 'function') registerOps(app, { addReturnEvent });
+  console.log('[BOOT] Rotas Operacionais registradas');
+} catch (e) {
+  console.warn('[BOOT] Rotas Operacionais indisponíveis:', e.message);
+}
+
+/* ------------------------------------------------------------
+ *  Auditoria: eventos por return_id
+ * ------------------------------------------------------------ */
+app.get('/api/returns/:id/events', async (req, res) => {
   try {
-    const { from, to } = req.query;
-    const where = [];
-    const params = [];
-    if (from) { params.push(from); where.push(`created_at >= $${params.length}`); }
-    if (to)   { params.push(to);   where.push(`created_at <  $${params.length}`); }
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) {
+      return res.status(400).json({ error: 'return_id inválido' });
+    }
+    const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
+    const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
 
-    const cols = await tableHasColumns('devolucoes', ['conciliado_em']);
-    const sql = `
-      WITH base AS (
-        SELECT
-          LOWER(COALESCE(status,'')) AS st,
-          ${cols.conciliado_em ? 'conciliado_em' : 'NULL::timestamp'} AS conciliado_em
-        FROM devolucoes
-        ${whereSql}
-      )
-      SELECT
-        COUNT(*)::int                                                        AS total,
-        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int              AS pendentes,
-        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int             AS aprovadas,
-        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitadas,
-        SUM(CASE WHEN conciliado_em IS NULL THEN 1 ELSE 0 END)::int         AS a_conciliar
-      FROM base
-    `;
-    const r = await query(sql, params);
-    res.json(r.rows[0] || { total:0, pendentes:0, aprovadas:0, rejeitadas:0, a_conciliar:0 });
-  } catch (e) {
-    console.error('GET /api/home/kpis erro:', e);
-    res.status(500).json({ error: 'Falha ao calcular KPIs.' });
-  }
-});
-
-app.get('/api/home/pending', async (_req, res) => {
-  try {
-    const cols = await tableHasColumns('devolucoes', ['log_status','cd_inspecionado_em','conciliado_em']);
-    const whereSemInspecao = [];
-    if (cols.log_status) whereSemInspecao.push(`log_status IN ('recebido_cd','em_inspecao')`);
-    if (cols.cd_inspecionado_em) whereSemInspecao.push(`cd_inspecionado_em IS NULL`);
-    const sql1 = `
-      SELECT id, id_venda, loja_nome, sku
-      FROM devolucoes
-      ${whereSemInspecao.length ? 'WHERE ' + whereSemInspecao.join(' AND ') : 'WHERE 1=0'}
-      ORDER BY id DESC LIMIT 20
-    `;
-    const sql2 = `
-      SELECT id, id_venda, loja_nome, sku
-      FROM devolucoes
-      ${cols.conciliado_em ? 'WHERE conciliado_em IS NULL' : ''}
-      ORDER BY id DESC LIMIT 20
-    `;
-    const [r1, r2] = await Promise.all([ query(sql1), query(sql2) ]);
-    res.json({
-      recebidos_sem_inspecao: r1.rows || [],
-      sem_conciliacao_csv: (cols.conciliado_em ? r2.rows : []) || [],
-      csv_pendente: []
-    });
-  } catch (e) {
-    console.error('GET /api/home/pending erro:', e);
-    res.status(500).json({ error: 'Falha ao listar pendências.' });
-  }
-});
-
-app.get('/api/home/announcements', (_req, res) => {
-  res.json({
-    items: [
-      'Conciliação por CSV do Mercado Livre disponível.',
-      'Integração direta com ML em breve (fase beta).'
-    ]
-  });
-});
-
-app.get('/api/integrations/health', async (_req, res) => {
-  try {
-    const q = await query(`select count(*)::int as n from bling_accounts`);
-    const blingOk = (q.rows[0]?.n || 0) > 0;
-    res.json({
-      bling: { ok: blingOk, mode: 'oauth' },
-      mercado_livre: { ok: false, mode: 'csv' }
-    });
-  } catch (e) {
-    res.json({
-      bling: { ok: false, error: 'indisponível' },
-      mercado_livre: { ok: false, mode: 'csv' }
-    });
+    const { rows } = await query(
+      `SELECT id, return_id AS "returnId", type, title, message, meta,
+              created_by AS "createdBy", created_at AS "createdAt"
+         FROM return_events
+        WHERE return_id = $1
+        ORDER BY created_at ASC, id ASC
+        LIMIT $2 OFFSET $3`,
+      [returnId, limit, offset]
+    );
+    const items = rows.map(r => ({ ...r, meta: safeParseJson(r.meta) }));
+    res.json({ items, limit, offset });
+  } catch (err) {
+    console.error('GET /api/returns/:id/events error:', err);
+    res.status(500).json({ error: 'Falha ao listar eventos' });
   }
 });
 
 /* ------------------------------------------------------------
- *  Log de custos (lista paginada, com filtros e soma total)
+ *  Log de custos (com suporte a ?return_id=)
  * ------------------------------------------------------------ */
 app.get('/api/returns/logs', async (req, res) => {
   try {
     const {
       from, to, status, log_status, responsavel, loja, q,
+      return_id,
       page = '1', pageSize = '50',
       orderBy = 'event_at', orderDir = 'desc'
     } = req.query;
@@ -388,6 +237,7 @@ app.get('/api/returns/logs', async (req, res) => {
     if (log_status)  { params.push(String(log_status).toLowerCase());  where.push(`LOWER(log_status) = $${params.length}`); }
     if (responsavel) { params.push(String(responsavel).toLowerCase()); where.push(`LOWER(responsavel_custo) = $${params.length}`); }
     if (loja)        { params.push(`%${loja}%`);                       where.push(`loja_nome ILIKE $${params.length}`); }
+    if (return_id)   { params.push(parseInt(return_id,10));            where.push(`return_id = $${params.length}`); }
     if (q) {
       const like = `%${q}%`;
       params.push(like, like, like, like);
@@ -412,14 +262,11 @@ app.get('/api/returns/logs', async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const offset  = (pageNum - 1) * limit;
 
-    async function viewHasColumns() {
-      const cols = await tableHasColumns('v_return_cost_log', ['return_id','log_status','total','event_at']);
-      return cols.return_id === true;
-    }
+    const hasViewCols = await tableHasColumns('v_return_cost_log', ['return_id','event_at','total']);
 
     let sqlItems, sqlCount, sqlSum, paramsItems, paramsCount;
 
-    if (await viewHasColumns()) {
+    if (hasViewCols.return_id) {
       const baseSql = `FROM public.v_return_cost_log ${whereSql}`;
       sqlItems = `SELECT * ${baseSql} ORDER BY ${col} ${dir} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
       sqlCount = `SELECT COUNT(*)::int AS count ${baseSql}`;
@@ -468,7 +315,9 @@ app.get('/api/returns/logs', async (req, res) => {
     res.json({
       items: itemsQ.rows,
       total: countQ.rows[0]?.count || 0,
-      sum_total: sumQ.rows[0]?.sum || 0
+      sum_total: sumQ.rows[0]?.sum || 0,
+      page: pageNum,
+      pageSize: limit
     });
   } catch (e) {
     console.error('GET /api/returns/logs erro:', e);
@@ -476,25 +325,360 @@ app.get('/api/returns/logs', async (req, res) => {
   }
 });
 
-/* ============================================================
- *  START DO SERVIDOR
- * ============================================================ */
-const port = process.env.PORT || 3000; // Render injeta PORT
-const host = '0.0.0.0';                // ouvir em todas as interfaces
+/* ------------------------------------------------------------
+ *  DASHBOARD (dados consolidados)
+ *  /api/dashboard?from=YYYY-MM-DD&to=YYYY-MM-DD&limitTop=5
+ * ------------------------------------------------------------ */
+app.get('/api/dashboard', async (req, res) => {
+  // helper mock (usado se der erro no banco)
+  const mock = () => {
+    const today = new Date();
+    const daily = Array.from({ length: 30 }).map((_, i) => {
+      const d = new Date(today.getTime() - (29 - i) * 86400000);
+      return { date: d.toISOString().slice(0, 10), prejuizo: Math.round(Math.random() * 2000) };
+    });
+    const monthly = Array.from({ length: 6 }).map((_, i) => {
+      const dt = new Date(today.getFullYear(), today.getMonth() - 5 + i, 1);
+      return { month: dt.toLocaleString('pt-BR', { month: 'short', year: 'numeric' }), prejuizo: Math.round(Math.random() * 8000) };
+    });
+    const status = { pendente: 12, aprovado: 34, rejeitado: 7 };
+    const top_items = Array.from({ length: Number(req.query.limitTop || 5) }).map((_, i) => ({
+      sku: 'SKU-' + (1000 + i),
+      devolucoes: Math.floor(Math.random() * 20) + 1,
+      prejuizo: Math.round(Math.random() * 1500)
+    }));
+    const totals = {
+      total: 120,
+      pendentes: 12,
+      aprovadas: 80,
+      rejeitadas: 28,
+      prejuizo_total: monthly.reduce((s, m) => s + Number(m.prejuizo || 0), 0)
+    };
+    return { daily, monthly, status, top_items, totals };
+  };
+
+  try {
+    const { from, to, limitTop = '5' } = req.query;
+    const lim = Math.max(1, Math.min(parseInt(limitTop, 10) || 5, 20));
+
+    // datas padrão: últimos 30 dias
+    const now = new Date();
+    const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString().slice(0, 10);
+    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29).toISOString().slice(0, 10);
+
+    const pFrom = from || defaultFrom;
+    const pTo   = to   || defaultTo;
+
+    // Monta base + custo efetivo (mesma regra visual do front)
+    const cols = await tableHasColumns('devolucoes', ['tipo_reclamacao','reclamacao','log_status','valor_produto','valor_frete','status','created_at','sku']);
+
+    if (!cols.created_at) {
+      // tabela não existe
+      return res.json(mock());
+    }
+
+    const params = [pFrom, pTo];
+
+    // DAILY
+    const qDaily = await query(
+      `
+      WITH base AS (
+        SELECT
+          created_at::date AS day,
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT day,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
+        FROM base
+      )
+      SELECT day::text AS date, COALESCE(SUM(custo),0)::numeric AS prejuizo
+      FROM calc
+      GROUP BY 1
+      ORDER BY 1
+      `,
+      params
+    );
+
+    // MONTHLY
+    const qMonthly = await query(
+      `
+      WITH base AS (
+        SELECT
+          date_trunc('month', created_at)::date AS m,
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT m,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
+        FROM base
+      )
+      SELECT to_char(m, 'Mon YYYY') AS month, COALESCE(SUM(custo),0)::numeric AS prejuizo
+      FROM calc
+      GROUP BY 1
+      ORDER BY MIN(m)
+      `,
+      params
+    );
+
+    // STATUS
+    const qStatus = await query(
+      `
+      WITH base AS (
+        SELECT LOWER(COALESCE(status,'')) AS st
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      )
+      SELECT
+        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int  AS pendente,
+        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int AS aprovado,
+        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitado
+      FROM base
+      `,
+      params
+    );
+
+    // TOTALS (contagens + prejuízo total)
+    const qTotals = await query(
+      `
+      WITH base AS (
+        SELECT
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo,
+          st
+        FROM base
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM calc)                                               AS total,
+        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%pend%')                        AS pendentes,
+        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%aprov%')                       AS aprovadas,
+        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%rej%' OR st LIKE '%neg%')      AS rejeitadas,
+        (SELECT COALESCE(SUM(custo),0)::numeric FROM calc)                              AS prejuizo_total
+      `,
+      params
+    );
+
+    // TOP ITEMS (por SKU)
+    const qTop = await query(
+      `
+      WITH base AS (
+        SELECT
+          sku,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo,
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          created_at
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT
+          sku,
+          motivo,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
+        FROM base
+      ),
+      agg AS (
+        SELECT
+          sku,
+          COUNT(*)::int AS devolucoes,
+          COALESCE(SUM(custo),0)::numeric AS prejuizo
+        FROM calc
+        GROUP BY sku
+      ),
+      motivo_rank AS (
+        SELECT
+          sku, motivo,
+          ROW_NUMBER() OVER (PARTITION BY sku ORDER BY COUNT(*) DESC) AS rn
+        FROM calc
+        GROUP BY sku, motivo
+      )
+      SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
+      FROM agg a
+      LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
+      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      ORDER BY a.devolucoes DESC, a.prejuizo DESC
+      LIMIT $3
+      `,
+      [...params, lim]
+    );
+
+    const data = {
+      daily: qDaily.rows,
+      monthly: qMonthly.rows,
+      status: qStatus.rows[0] || { pendente: 0, aprovado: 0, rejeitado: 0 },
+      top_items: qTop.rows,
+      totals: qTotals.rows[0] || { total: 0, pendentes: 0, aprovadas: 0, rejeitadas: 0, prejuizo_total: 0 }
+    };
+
+    return res.json(data);
+  } catch (e) {
+    console.error('GET /api/dashboard erro:', e);
+    return res.json(mock());
+  }
+});
+
+/* ------------------------------------------------------------
+ *  Healthchecks
+ * ------------------------------------------------------------ */
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.get('/api/db/ping', async (_req, res) => {
+  try {
+    const r = await query('select now() as now');
+    res.json({ ok: true, now: r.rows[0].now });
+  } catch (e) {
+    console.error('DB PING ERRO:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+/* ------------------------------------------------------------
+ *  KPIs / Pendências / Integrações (Home)
+ * ------------------------------------------------------------ */
+app.get('/api/home/kpis', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const where = [];
+    const params = [];
+    if (from) { params.push(from); where.push(`created_at >= $${params.length}`); }
+    if (to)   { params.push(to);   where.push(`created_at <  $${params.length}`); }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const cols = await tableHasColumns('devolucoes', ['conciliado_em']);
+    const sql = `
+      WITH base AS (
+        SELECT
+          LOWER(COALESCE(status,'')) AS st,
+          ${cols.conciliado_em ? 'conciliado_em' : 'NULL::timestamp'} AS conciliado_em
+        FROM devolucoes
+        ${whereSql}
+      )
+      SELECT
+        COUNT(*)::int                                                        AS total,
+        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int              AS pendentes,
+        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int             AS aprovadas,
+        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitadas,
+        SUM(CASE WHEN conciliado_em IS NULL THEN 1 ELSE 0 END)::int         AS a_conciliar
+      FROM base`;
+    const r = await query(sql, params);
+    res.json(r.rows[0] || { total:0, pendentes:0, aprovadas:0, rejeitadas:0, a_conciliar:0 });
+  } catch (e) {
+    console.error('GET /api/home/kpis erro:', e);
+    res.status(500).json({ error: 'Falha ao calcular KPIs.' });
+  }
+});
+
+app.get('/api/home/pending', async (_req, res) => {
+  try {
+    const cols = await tableHasColumns('devolucoes', ['log_status','cd_inspecionado_em','conciliado_em']);
+    const whereSemInspecao = [];
+    if (cols.log_status) whereSemInspecao.push(`log_status IN ('recebido_cd','em_inspecao')`);
+    if (cols.cd_inspecionado_em) whereSemInspecao.push(`cd_inspecionado_em IS NULL`);
+    const sql1 = `
+      SELECT id, id_venda, loja_nome, sku
+      FROM devolucoes
+      ${whereSemInspecao.length ? 'WHERE ' + whereSemInspecao.join(' AND ') : 'WHERE 1=0'}
+      ORDER BY id DESC LIMIT 20`;
+    const sql2 = `
+      SELECT id, id_venda, loja_nome, sku
+      FROM devolucoes
+      ${cols.conciliado_em ? 'WHERE conciliado_em IS NULL' : ''}
+      ORDER BY id DESC LIMIT 20`;
+    const [r1, r2] = await Promise.all([ query(sql1), query(sql2) ]);
+    res.json({
+      recebidos_sem_inspecao: r1.rows || [],
+      sem_conciliacao_csv: (cols.conciliado_em ? r2.rows : []) || [],
+      csv_pendente: []
+    });
+  } catch (e) {
+    console.error('GET /api/home/pending erro:', e);
+    res.status(500).json({ error: 'Falha ao listar pendências.' });
+  }
+});
+
+app.get('/api/home/announcements', (_req, res) => {
+  res.json({
+    items: [
+      'Conciliação por CSV do Mercado Livre disponível.',
+      'Integração direta com ML em breve (fase beta).'
+    ]
+  });
+});
+
+app.get('/api/integrations/health', async (_req, res) => {
+  try {
+    const q = await query(`select count(*)::int as n from bling_accounts`);
+    const blingOk = (q.rows[0]?.n || 0) > 0;
+    res.json({
+      bling: { ok: blingOk, mode: 'oauth' },
+      mercado_livre: { ok: false, mode: 'csv' }
+    });
+  } catch {
+    res.json({
+      bling: { ok: false, error: 'indisponível' },
+      mercado_livre: { ok: false, mode: 'csv' }
+    });
+  }
+});
+
+/* ===========================
+ *  START
+ * =========================== */
+const port = process.env.PORT || 3000;
+const host = '0.0.0.0';
 
 const server = app.listen(port, host, () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`);
 });
 
-/* ============================================================
- *  CAPTURA DE ERROS NÃO TRATADOS
- * ============================================================ */
-process.on('unhandledRejection', (err) => {
-  console.error('[unhandledRejection]', err);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err);
-});
+/* ===========================
+ *  ERROS NÃO TRATADOS
+ * =========================== */
+process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
+process.on('uncaughtException',  err => console.error('[uncaughtException]', err));
 
-// Exporta app para testes automáticos, se desejar
 module.exports = app;

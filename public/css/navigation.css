@@ -323,3 +323,54 @@ body.has-sidebar.sidebar-collapsed {
   transform: translateY(0);
   box-shadow: 0 2px 4px rgba(33, 150, 243, 0.2);
 }
+
+/* Botão flutuante do mobile */
+.sidebar-fab {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 1200;             /* acima do conteúdo */
+  width: 42px;
+  height: 42px;
+  display: none;             /* só mostra no mobile */
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--sidebar-border);
+  color: var(--sidebar-text);
+  box-shadow: 0 4px 14px rgba(0,0,0,.08);
+  transition: transform .15s ease, background .15s ease;
+}
+.sidebar-fab:hover { background: #f3f4f6; transform: translateY(-1px); }
+
+/* Exibir no mobile */
+@media (max-width: 768px) {
+  .sidebar-fab { display: inline-flex; }
+}
+
+/* Quando a sidebar mobile estiver aberta, empurra o botão para a direita
+   para ele ficar na MESMA posição visual relativa ao conteúdo */
+body.sidebar-mobile-open .sidebar-fab {
+  left: calc(var(--sidebar-width) + 16px);
+}
+
+/* Tamanho e traço iguais em todos os ícones do menu */
+.sidebar-nav-icon svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  display: block;
+}
+
+/* Espaçamento e alinhamento consistentes */
+.sidebar-nav-item {
+  gap: 12px;            /* texto não gruda no ícone */
+  line-height: 1;       /* evita “pulo” de baseline */
+}
+
+a {
+  text-decoration: none;
+}
