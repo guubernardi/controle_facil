@@ -1,0 +1,855 @@
+/* Reset básico */
+*{margin:0;padding:0;box-sizing:border-box}
+
+/* Tokens simples (compatíveis com o resto do app) */
+:root{
+  --primary: #0056D2;
+  --primary-dark: #0042A6;
+  --fg: #0f172a;
+  --muted: #f8fafc;
+  --muted-2: #eef2f7;
+  --border: #E5E7EB;;
+  --border-strong: #bfdbfe;
+  --card: #ffffff;
+}
+
+body {
+    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial,sans-serif;
+    color:var(--fg);
+    background:var(--card);
+    line-height:1.5
+}
+
+.container {
+    max-width:1200px;
+    margin:0 auto;
+    padding:0 24px
+}
+
+/* Breadcrumb / topo */
+.cabecalho {
+    background:var(--muted);
+    border-bottom:1px solid var(--border);
+    padding:16px 0
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size:14px
+}
+
+.breadcrumb-link {
+    color:var(--primary); 
+    text-decoration:none
+}
+
+.breadcrumb-link:hover {
+    color:var(--primary-dark)
+}
+
+.breadcrumb-separador {
+    color:#9ca3af
+}
+
+.breadcrumb-atual {
+    color:#6b7280;
+    font-weight:600
+}
+
+/* Banner com busca */
+.banner {
+    background:linear-gradient(to bottom,#e3f2fd,#bbdefb);
+    padding:28px 0;
+    border-bottom:1px solid var(--border-strong)
+}
+
+.banner .container {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:24px
+}
+
+.banner-titulo {
+    font-size:22px;
+    font-weight:700
+}
+
+.container-pesquisa {
+    position:relative;
+    width:100%;
+    max-width:420px
+}
+
+.input-pesquisa {
+  width:100%;
+  padding:10px 44px 10px 14px;
+  border:1px solid #d1d5db;
+  border-radius:10px;
+  background:var(--card);
+  outline:0;
+  transition:.2s
+}
+
+.input-pesquisa:focus {
+  border-color:var(--primary);
+  box-shadow:0 0 0 3px rgba(33,150,243,.15)
+}
+
+.botao-pesquisa {
+  position: absolute;
+  right: 8px;
+  top:50%;
+  transform:translateY(-50%);
+  border:0;
+  background:transparent;
+  color:var(--primary);
+  cursor:pointer
+}
+
+.botao-pesquisa:hover {
+    opacity:.85;
+    color:var(--primary-dark)
+}
+
+#add {
+  padding: 11px;
+}
+
+.conteudo-principal {
+  padding:24px 0 48px
+}
+
+.nav-voltar {
+  margin:16px 0 24px
+}
+
+.link-voltar {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  color:#9ca3af;
+  text-decoration:none;
+  font-size:14px
+}
+
+.link-voltar:hover {
+  color:#6b7280;
+  transform:translateX(-2px)
+}
+
+/* Grid principal (sidebar interna + conteúdo) */
+.grade-conteudo {
+  display:grid;
+  grid-template-columns:320px 1fr;gap:28px
+}
+
+.barra-lateral {
+  background:transparent
+}
+
+/* Menu interno */
+.menu{display:flex;flex-direction:column;gap:8px}
+
+.item-menu {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:14px 16px;
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:10px;
+  cursor:pointer;
+  transition:.2s;
+  text-align:left
+}
+
+.item-menu:hover {
+  background:var(--muted)
+}
+
+.item-menu.ativo {
+  background:#eaf3ff;
+  border-color:var(--primary);
+  box-shadow:0 0 0 3px rgba(33,150,243,.12) inset
+}
+
+.icone-menu {
+  display:grid;
+  place-items:center;
+  width:32px;
+  height:32px;
+  border-radius:50%;
+  background:#f3f4f6;
+  color:#6b7280;
+  flex-shrink:0
+}
+
+.item-menu.ativo .icone-menu {
+  background:var(--primary);
+  color:#fff
+}
+
+.rotulo-menu {
+  font-size:15px;
+  font-weight:600;
+  color:#334155
+}
+
+.item-menu.ativo .rotulo-menu {
+  color:var(--fg)
+}
+
+/* Conteúdo da seção */
+.area-conteudo {
+  background:var(--card);
+  padding:24px;
+  border:1px solid var(--border);
+  border-radius:12px
+}
+
+/* Accordions */
+.secao-config {
+  margin-bottom:28px
+}
+
+.titulo-secao {
+  font-size:12px;
+  color:#94a3b8;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  margin-bottom:12px
+}
+
+.item-colapsavel {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:12px 14px;
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:8px;
+  cursor:pointer;
+  transition:.2s;
+  width:100%;
+  text-align:left;
+  font-size:15px;
+  color:#334155;
+  margin-bottom:8px
+}
+
+.item-colapsavel:hover {
+  background:var(--muted)
+}
+
+.item-colapsavel [aria-expanded="true"] {
+  border-color:var(--primary)
+}
+
+.chevron {
+  color:#9ca3af;
+  transition:transform .2s,
+  color .2s;
+  flex-shrink:0
+}
+
+.item-colapsavel[aria-expanded="true"] .chevron {
+  transform:rotate(90deg);
+  color:var(--primary)
+}
+
+.conteudo-colapsavel {
+  max-height:0;
+  overflow:hidden;
+  transition:max-height .28s ease,padding .28s ease;
+  margin:0 0 8px;
+  padding:0 10px;
+  border-left:3px solid transparent
+}
+
+.conteudo-colapsavel.aberto {
+  max-height:520px;
+  padding:12px 10px;
+  border-left-color:#e5efff
+}
+
+.conteudo-colapsavel[hidden] {
+  display:block;
+  max-height:0;
+  padding:0;
+  border-left-color:transparent
+}
+
+.texto-placeholder {
+  color:#475569;
+  font-size:14px
+}
+
+/* Listinhas */
+.start-list {
+  margin:6px 0 0;
+  padding:0 0 0 18px
+}
+
+.start-list li {
+  margin:6px 0
+}
+
+/* ---------- panes/visibilidade ---------- */
+.config-pane { 
+  display:none; 
+}
+
+.config-pane.active { 
+  display:block; 
+}
+
+.titulo-secao-main { 
+  font-size:18px; 
+  font-weight:700; 
+  margin-bottom:16px; 
+}
+
+/* ---------- formulários ---------- */
+.form-grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px,1fr));
+  gap:14px 18px;
+}
+
+.form-row { 
+  display:flex; 
+  flex-direction:column; 
+  gap:6px; 
+}
+
+.form-row label { 
+  font-weight:600; 
+  font-size:12px; 
+  color:#6b7280; 
+}
+
+.form-row input, .form-row select {
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:10px 12px;
+  font-size:14px; 
+  background:var(--card);
+}
+
+.actions-line { 
+  margin-top:8px; 
+  display:flex; 
+  gap:8px; 
+}
+
+/* ---------- botões & util ---------- */
+.btn { 
+  padding:.7rem 1.1rem; 
+  border-radius:10px; 
+  border:1px solid transparent; 
+  cursor:pointer; font-weight:700; 
+}
+
+.btn--primary { 
+  background:var(--primary); 
+  color:#fff; 
+}
+
+.btn--primary:hover {
+  filter:brightness(1.05); 
+}
+
+.btn--ghost { 
+  background:#fff; 
+  border-color:var(--border); 
+  color:#374151; 
+}
+
+.card-bloco { 
+  border:1px solid var(--border); 
+  border-radius:10px; 
+  padding:14px; 
+  background:#fff; 
+}
+
+.inline-form { 
+  display:flex; 
+  gap:8px; 
+  flex-wrap:wrap; 
+  margin-bottom:10px; }
+
+.inline-form input, .inline-form select { 
+  padding:10px 12px; 
+  border:1px solid var(--border); 
+  border-radius:8px; 
+}
+
+/* tabela simples */
+.tabela { 
+  width:100%; 
+  border-collapse:collapse; 
+}
+
+.tabela th, .tabela td { 
+  padding:10px 8px; 
+  border-bottom:1px solid #eef2f7; 
+  text-align:left; 
+}
+
+.tabela td:last-child { 
+  width:1%; 
+  white-space:nowrap; 
+}
+
+/* switch */
+.switch { 
+  display:flex; 
+  align-items:center; 
+  gap:8px; 
+  padding:10px 12px; 
+  border:1px solid var(--border); 
+  border-radius:8px; 
+  background:#fff; 
+}
+
+.switch input { 
+  width:18px; 
+  height:18px; 
+}
+
+.help { 
+  color:#6b7280; 
+  font-size:12px; 
+  margin-top:6px; 
+}
+
+/* toast */
+.toast { 
+  position:fixed; 
+  right:16px; 
+  bottom:16px; 
+  background:#111827; 
+  color:#fff; 
+  padding:10px 14px; 
+  border-radius:10px; 
+  opacity:0; 
+  transform:translateY(12px); 
+  transition:.25s; 
+  pointer-events:none; 
+}
+
+.toast.show { 
+  opacity:1; 
+  transform:translateY(0); 
+}
+
+/* ===========================
+   Abas (panes)
+=========================== */
+.config-pane { 
+  display: none; 
+}
+
+.config-pane.active { 
+  display: block; 
+}
+
+.titulo-secao-main {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+/* ===========================
+   Formulários padrão
+=========================== */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.form-row { 
+  display: flex; 
+  flex-direction: column; 
+  gap: 6px; 
+}
+
+.form-row label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.form-row input,
+.form-row select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--card);
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.form-row input:focus,
+.form-row select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(33,150,243,.12);
+}
+
+.actions-line { 
+  display: flex; 
+  gap: 8px; 
+  margin-top: 8px; 
+}
+
+/* ===========================
+   Botões (mínimo necessário p/ settings)
+=========================== */
+.btn {
+  display: inline-flex; 
+  align-items: center; 
+  justify-content: center;
+  gap: .5rem; 
+  padding: .7rem 1.1rem;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--card); 
+  color: var(--fg);
+  font-weight: 600; 
+  cursor: pointer; 
+  text-decoration: none;
+  transition: transform .15s, box-shadow .2s, background .2s, border-color .2s;
+}
+
+.btn:hover { 
+  background: var(--muted); 
+  border-color: #d1d5db; 
+}
+
+.btn:active { 
+  transform: scale(.98); 
+}
+
+.btn--primary {
+  background: var(--primary); 
+  color: #fff; 
+  border-color: var(--primary);
+}
+
+.btn--primary:hover { 
+   color: white;
+   background: #0056D2;
+}
+
+.btn--ghost {
+  background: transparent; 
+  color: #4b5563; 
+  border-color: var(--border);
+}
+
+.btn--ghost:hover { 
+  background: var(--muted); 
+  color: var(--fg); 
+}
+
+/* ===========================
+   Tabela & formulário inline (Usuários)
+=========================== */
+.card-bloco {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 16px;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: 1.2fr 1.2fr .9fr auto;
+  gap: 8px; align-items: center; margin-bottom: 12px;
+}
+
+.tabela { 
+  width: 100%; 
+  border-collapse: collapse; 
+  border: 1px solid var(--border); 
+}
+
+.tabela thead th {
+  text-align: left; 
+  font-weight: 600; 
+  color: #4b5563;
+  background: var(--muted); 
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.tabela td { 
+  padding: 10px 12px; 
+  border-top: 1px solid var(--border); 
+}
+
+/* ===========================
+   Switches simples (Regras)
+=========================== */
+.switch {
+  display: flex; 
+  align-items: center; 
+  gap: 10px;
+  padding: 12px 14px; 
+  border: 1px solid var(--border);
+  border-radius: 8px; 
+  background: var(--muted);
+}
+
+.switch input { 
+  accent-color: var(--primary); 
+}
+
+.help { 
+  font-size: 13px; 
+  color: #6b7280; 
+}
+
+/* ===========================
+   Integrações (cards)
+=========================== */
+.integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.integration-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  display: flex; flex-direction: column;
+}
+
+.integration-head {
+  display: flex; 
+  align-items: center; 
+  gap: 12px;
+  padding: 16px; 
+  border-bottom: 1px solid var(--border);
+}
+
+.integration-logo {
+  width: 40px; 
+  height: 40px; 
+  border-radius: 10px;
+  background: var(--primary-50);
+  display: inline-flex; 
+  align-items: center; 
+  justify-content: center;
+  font-size: 22px;
+}
+
+.badge {
+  margin-left: auto;
+  background: var(--primary-50);
+  color: var(--primary-dark);
+  border: 1px solid var(--border-strong);
+  padding: 4px 8px; border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+}
+
+.integration-actions {
+  display: flex; 
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+badge badge--erp > span {
+    position: relative;
+    left: 10px;
+}
+
+/* ====== Fix alinhamento Integrações ====== */
+
+/* grade: colunas iguais e itens esticados */
+.integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+  align-items: stretch;           /* <— estica os cartões na linha */
+}
+
+/* cartão ocupa 100% da altura da célula */
+.integration-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 170px;              /* altura base para manter padrão */
+}
+
+/* header bem alinhado */
+.integration-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 8px;
+}
+
+/* logo com caixa fixa (impede “pular” de altura) */
+.integration-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  overflow: hidden;
+  flex: 0 0 56px;
+}
+
+.integration-logo img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* título + descrição ocupam o meio; badge vai para a direita */
+.integration-head > div { 
+  flex: 1; 
+}
+
+.integration-head h3 { 
+  margin: 0 0 4px; 
+}
+
+.integration-head small {
+  display: block;
+  color: #6b7280;
+  line-height: 1.3;
+  min-height: 36px;               /* <— equaliza a altura do bloco de texto */
+}
+
+/* badges por categoria (mantém em 1 linha) */
+.badge { 
+  white-space: nowrap; 
+}
+
+.badge--erp   { 
+  background: var(--primary-50); 
+  color: var(--primary-dark); 
+}
+
+.badge--ecom  { 
+  background: #fff7ed; 
+  color: #c2410c; 
+  border-color: #fed7aa; 
+}
+
+.badge--dev   { 
+  background: #eef2ff; 
+  color: #4338ca; 
+  border-color: #c7d2fe; 
+}
+
+/* ações colam no rodapé do cartão (alinha os botões entre colunas) */
+.integration-actions {
+  margin-top: auto;               /* <— empurra para baixo */
+  padding: 12px 16px 16px;
+  display: flex;
+  gap: 10px;
+}
+
+/* estado “desabilitado/em breve” (opcional) */
+.integration-card.is-disabled {
+  opacity: .65;
+  filter: grayscale(.08);
+}
+
+.integration-card.is-disabled .btn { 
+  cursor: not-allowed; 
+}
+
+/* === Alinhamento das colunas de Usuários & Permissões === */
+/* ajuste os % se quiser outra proporção, mas some 100% */
+:root{
+  --users-col-name:   32%;
+  --users-col-email:  36%;
+  --users-col-role:   18%;
+  --users-col-actions:14%;
+}
+
+/* tabela com largura fixa por coluna */
+.tabela{
+  table-layout: fixed;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.tabela thead th,
+.tabela tbody td {
+  padding: 12px 16px;
+  text-align: left;
+}
+
+/* formulário de inclusão com as mesmas larguras da tabela */
+.inline-form{
+  display: grid;
+  grid-template-columns: var(--users-col-name) var(--users-col-email) var(--users-col-role) var(--users-col-actions);
+  gap: 12px;
+  align-items: center;
+  padding: 8px 16px 16px; /* mesmo “respiro” da tabela */
+}
+
+/* inputs e selects: foco azul (não preto) */
+.inline-form input,
+.inline-form select,
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  outline: none;                 
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.inline-form input:focus,
+.inline-form select:focus,
+.form-grid input:focus,
+.form-grid select:focus,
+.form-grid textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(33,150,243,.15);
+}
+
+/* botão “Adicionar” ocupa a coluna de Ações */
+.inline-form .btn{
+  justify-self: start; /
+}
+
+/* Botão compacto — só quem usar essa classe fica menor */
+.btn--sm{
+  height: 36px;           /* padrão ~44px -> 36px */
+  padding: 0 12px;        /* um pouco menos de padding */
+  font-size: 14px;        /* texto um pouco menor */
+  border-radius: 10px;    /* mantém estética arredondada */
+  line-height: 1;         /* evita crescer por herança */
+}
+
+.btn--sm{ --btn-h:36px; --btn-px:12px; --btn-fs:14px; height:var(--btn-h); padding:0 var(--btn-px); font-size:var(--btn-fs); }
+
+/* ===========================
+   Responsivo
+=========================== */
+@media (max-width: 920px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .inline-form { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 1024px){
+  .banner .container{flex-direction:column;align-items:stretch}
+  .grade-conteudo{grid-template-columns:1fr;gap:16px}
+}

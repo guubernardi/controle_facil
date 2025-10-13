@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Configurações - Retorno Fácil</title>
+
+  <!-- fontes e estilos globais do app -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="../css/navigation.css" />
+  <link rel="stylesheet" href="../css/config.css" />
+  <link rel="shortcut icon" href="../assets/img/logo_rf.png" type="image/png">
+</head>
+<body class="settings-page">
+
+  <!-- Sidebar principal do app -->
+  <script src="../js/navigation.js"></script>
+  <nav>
+    <a class="sidebar-nav-item" data-page="home" href="../home.html">
+      <span class="sidebar-nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M3 10.5 12 3l9 7.5"/><path d="M5 10v10h14V10"/>
+        </svg>
+      </span>
+      <span class="sidebar-nav-text">Home</span>
+    </a>
+
+    <a class="sidebar-nav-item" data-page="central" href="../central.html">
+      <span class="sidebar-nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
+        </svg>
+      </span>
+      <span class="sidebar-nav-text">Central</span>
+    </a>
+
+    <a class="sidebar-nav-item" data-page="devolucoes" href="../index.html">
+      <span class="sidebar-nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+        </svg>
+      </span>
+      <span class="sidebar-nav-text">Devoluções</span>
+    </a>
+
+    <a class="sidebar-nav-item" data-page="dashboard" href="../dashboard.html">
+      <span class="sidebar-nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </span>
+      <span class="sidebar-nav-text">Dashboard</span>
+    </a>
+
+    <a class="sidebar-nav-item" data-page="logs" href="../logs.html">
+      <span class="sidebar-nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+      </span>
+      <span class="sidebar-nav-text">Log de Custos</span>
+    </a>
+
+    <a class="sidebar-nav-item active" data-page="settings" href="./config.html">
+      <span class="sidebar-nav-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.07a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 4.2 19.4l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.07a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 19.8 5.02l-.06.06a1.65 1.65 0 0 0-.33 1.82V7c0 .64.39 1.22 1 1.51.24.12.49.19.76.19H21a2 2 0 1 1 0 4h-.07c-.64 0-1.22.39-1.51 1Z"/>
+        </svg>
+      </span>
+      <span class="sidebar-nav-text">Configurações</span>
+    </a>
+  </nav>
+
+  <!-- Conteúdo -->
+  <main class="conteudo-principal">
+    <header class="cabecalho">
+      <div class="container">
+        <nav class="breadcrumb">
+          <a href="../home.html" class="breadcrumb-link">Home</a>
+          <span class="breadcrumb-separador">›</span>
+          <span class="breadcrumb-atual">Configurações</span>
+        </nav>
+      </div>
+    </header>
+
+    <section class="banner">
+      <div class="container">
+        <h1 class="banner-titulo">Central de Configurações</h1>
+        <div class="container-pesquisa">
+          <input type="text" class="input-pesquisa" placeholder="Pesquise aqui..." id="inputPesquisa">
+          <button class="botao-pesquisa" aria-label="Pesquisar">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM18 18l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="container">
+      <div class="nav-voltar">
+        <a href="../home.html" class="link-voltar">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M12.5 15l-5-5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Preferências / Empresa
+        </a>
+      </div>
+
+      <div class="grade-conteudo">
+        <!-- MENU INTERNO (abas) -->
+        <aside class="barra-lateral">
+          <nav class="menu">
+            <a href="#empresa" class="item-menu ativo" data-target="empresa">
+              <span class="icone-menu">🏢</span>
+              <span class="rotulo-menu">Empresa</span>
+            </a>
+            <a href="#usuarios" class="item-menu" data-target="usuarios">
+              <span class="icone-menu">👥</span>
+              <span class="rotulo-menu">Usuários & Permissões</span>
+            </a>
+            <a href="#regras" class="item-menu" data-target="regras">
+              <span class="icone-menu">⚙️</span>
+              <span class="rotulo-menu">Regras de Custos</span>
+            </a>
+            <a href="#integracoes" class="item-menu" data-target="integracoes">
+              <span class="icone-menu">🔌</span>
+              <span class="rotulo-menu">Integrações</span>
+            </a>
+          </nav>
+        </aside>
+
+        <!-- CONTEÚDO DAS ABAS -->
+        <section class="area-conteudo">
+
+          <!-- EMPRESA -->
+          <section id="empresa" class="config-pane active" aria-labelledby="tab-empresa">
+            <h2 class="titulo-secao-main">Configurações da empresa</h2>
+
+            <form id="form-empresa" class="form-grid" autocomplete="off">
+              <div class="form-row">
+                <label>Razão social</label>
+                <input name="razao_social" type="text" placeholder="Minha Empresa Ltda">
+              </div>
+              <div class="form-row">
+                <label>Nome fantasia</label>
+                <input name="nome_fantasia" type="text" placeholder="Retorno Fácil">
+              </div>
+              <div class="form-row">
+                <label>CNPJ</label>
+                <input name="cnpj" type="text" inputmode="numeric" placeholder="00.000.000/0000-00">
+              </div>
+              <div class="form-row">
+                <label>E-mail</label>
+                <input name="email" type="email" placeholder="contato@empresa.com.br">
+              </div>
+              <div class="form-row">
+                <label>Telefone</label>
+                <input name="telefone" type="text" placeholder="(11) 99999-0000">
+              </div>
+              <div class="form-row" style="grid-column:1/-1">
+                <label>Endereço</label>
+                <input name="endereco" type="text" placeholder="Rua, número, bairro, cidade/UF, CEP">
+              </div>
+
+              <div class="actions-line">
+                <button class="btn btn--primary" type="submit">Salvar</button>
+                <button class="btn btn--ghost" type="button" id="empresa-recarregar">Recarregar</button>
+              </div>
+            </form>
+          </section>
+
+          <!-- USUÁRIOS -->
+          <section id="usuarios" class="config-pane" aria-labelledby="tab-usuarios">
+            <h2 class="titulo-secao-main">Usuários & Permissões</h2>
+
+            <div class="card-bloco">
+              <form id="form-add-user" class="inline-form" autocomplete="off">
+                <input name="nome"  placeholder="Nome" required aria-label="Nome">
+                <input name="email" type="email" placeholder="email@exemplo.com" required aria-label="E-mail">
+                <select name="papel" aria-label="Papel do usuário">
+                  <option value="admin">Admin</option>
+                  <option value="gestor">Gestor</option>
+                  <option value="operador">Operador</option>
+                </select>
+                <button class="btn btn--primary" id="add" type="submit">Adicionar</button>
+              </form>
+
+              <table class="tabela" aria-label="Lista de usuários">
+                <colgroup>
+                  <col style="width: var(--users-col-name)">
+                  <col style="width: var(--users-col-email)">
+                  <col style="width: var(--users-col-role)">
+                  <col style="width: var(--users-col-actions)">
+                </colgroup>
+                <thead>
+                  <tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ações</th></tr>
+                </thead>
+                <tbody id="usuarios-list"></tbody>
+              </table>
+
+              <div class="actions-line">
+                <button class="btn btn--primary" id="usuarios-salvar">Salvar alterações</button>
+                <button class="btn btn--ghost" id="usuarios-recarregar">Recarregar</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- REGRAS -->
+          <section id="regras" class="config-pane" aria-labelledby="tab-regras">
+            <h2 class="titulo-secao-main">Regras de Custos</h2>
+
+            <form id="form-regras" class="form-grid">
+              <h3 class="sub" style="grid-column:1/-1">Cálculo do custo</h3>
+
+              <label class="switch" style="grid-column:1/-1">
+                <input type="checkbox" name="rule_rejeitado_zero" checked>
+                <span>Quando <b>Status = Rejeitada</b> ➜ custo = <b>R$ 0,00</b></span>
+              </label>
+
+              <label class="switch" style="grid-column:1/-1">
+                <input type="checkbox" name="rule_motivo_cliente_zero" checked>
+                <span>Quando <b>Motivo do cliente</b> ➜ custo = <b>R$ 0,00</b></span>
+              </label>
+
+              <label class="switch" style="grid-column:1/-1">
+                <input type="checkbox" name="rule_cd_somente_frete" checked>
+                <span>Quando <b>Recebido no CD / Em inspeção</b> ➜ custo = <b>somente frete</b></span>
+              </label>
+
+              <p class="help" style="grid-column:1/-1">Regra padrão: <b>Produto + Frete</b>.</p>
+
+              <h3 class="sub" style="grid-column:1/-1; margin-top:16px">Rótulos mostrados ao usuário</h3>
+
+              <div class="form-row">
+                <label>“Aprovada”</label>
+                <input name="label_aprovada" value="Aprovada">
+              </div>
+              <div class="form-row">
+                <label>“Rejeitada”</label>
+                <input name="label_rejeitada" value="Rejeitada">
+              </div>
+              <div class="form-row">
+                <label>“Recebido no CD”</label>
+                <input name="label_recebido_cd" value="Recebido no CD">
+              </div>
+              <div class="form-row">
+                <label>“Em inspeção”</label>
+                <input name="label_em_inspecao" value="Em inspeção">
+              </div>
+
+              <div class="actions-line" style="grid-column:1/-1">
+                <button class="btn btn--primary" type="submit">Salvar</button>
+                <button class="btn btn--ghost" type="button" id="regras-recarregar">Recarregar</button>
+              </div>
+            </form>
+          </section>
+
+          <!-- INTEGRAÇÕES -->
+          <section id="integracoes" class="config-pane" aria-labelledby="tab-integracoes">
+            <h2 class="titulo-secao-main">Integrações</h2>
+
+            <!-- ERPs -->
+            <div class="integrations-section">
+              <h3 class="integrations-title">ERPs</h3>
+              <div class="integrations-grid">
+                <article class="integration-card">
+                  <header class="integration-head">
+                    <div class="integration-logo">
+                      <img src="../assets/img/logo_bling.png" alt="Logo Bling ERP" width="60" height="50" />
+                    </div>
+                    <div>
+                      <h3>Bling (ERP)</h3>
+                      <small>Sincronize pedidos, clientes e notas.</small>
+                    </div>
+                    <span class="badge badge--erp">ERP</span>
+                  </header>
+                  <div class="integration-actions">
+                    <a class="btn btn--primary" href="/integrations/bling/connect">Conectar</a>
+                    <a class="btn btn--ghost" href="/docs/bling" target="_blank" rel="noopener">Ver guia</a>
+                  </div>
+                </article>
+
+                <article class="integration-card is-disabled" aria-disabled="true">
+                  <header class="integration-head">
+                    <div class="integration-logo">🧩</div>
+                    <div>
+                      <h3>Tiny ERP</h3>
+                      <small>Em breve</small>
+                    </div>
+                    <span class="badge badge--erp">ERP</span>
+                  </header>
+                  <div class="integration-actions">
+                    <button class="btn" disabled>Conectar</button>
+                    <button class="btn btn--ghost" disabled>Ver guia</button>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <!-- E-commerces -->
+            <div class="integrations-section">
+              <h3 class="integrations-title">E-commerces</h3>
+              <div class="integrations-grid">
+
+                <!-- Mercado Livre -->
+                <article class="integration-card" data-integration="ml">
+                  <header class="integration-head">
+                    <div class="integration-logo">
+                      <img src="../assets/img/logo_mercadolivre.png" alt="Logo Mercado Livre" width="40" height="40" />
+                    </div>
+                    <div>
+                      <h3>Mercado Livre</h3>
+                      <small class="integration-status" id="ml-status">Não conectado</small>
+                    </div>
+                    <span class="badge badge--ecom">E-commerce</span>
+                  </header>
+                  <div class="integration-actions">
+                    <a class="btn btn--primary" href="/auth/ml/login" id="ml-connect">Conectar</a>
+                    <button class="btn btn--ghost" id="ml-disconnect" hidden>Desconectar</button>
+                    <a class="btn btn--ghost" href="/docs/api" target="_blank" rel="noopener">Ver guia</a>
+                  </div>
+                </article>
+
+                <!-- Em Breve Marketplaces -->
+                <article class="integration-card is-disabled" aria-disabled="true">
+                  <header class="integration-head">
+                    <div class="integration-logo">🛒</div>
+                    <div>
+                      <h3>Shopee</h3>
+                      <small>Em breve</small>
+                    </div>
+                    <span class="badge badge--ecom">E-commerce</span>
+                  </header>
+                  <div class="integration-actions">
+                    <button class="btn" disabled>Conectar</button>
+                    <button class="btn btn--ghost" disabled>Ver guia</button>
+                  </div>
+                </article>
+              </div>
+            </div>
+
+            <!-- Dev & APIs -->
+            <div class="integrations-section">
+              <h3 class="integrations-title">Dev & APIs</h3>
+              <div class="integrations-grid">
+                <article class="integration-card">
+                  <header class="integration-head">
+                    <div class="integration-logo">🔔</div>
+                    <div>
+                      <h3>Webhooks</h3>
+                      <small>Receba eventos em tempo real no seu sistema.</small>
+                    </div>
+                    <span class="badge badge--dev">DEV</span>
+                  </header>
+                  <div class="integration-actions">
+                    <a class="btn btn--primary" href="/settings/webhooks.html">Configurar</a>
+                    <a class="btn btn--ghost" href="/docs/webhooks" target="_blank" rel="noopener">Ver guia</a>
+                  </div>
+                </article>
+
+                <article class="integration-card">
+                  <header class="integration-head">
+                    <div class="integration-logo">🔑</div>
+                    <div>
+                      <h3>API Tokens</h3>
+                      <small>Gere tokens para integrar via API.</small>
+                    </div>
+                    <span class="badge badge--dev">API</span>
+                  </header>
+                  <div class="integration-actions">
+                    <a class="btn btn--primary" href="/settings/api-tokens.html">Gerenciar tokens</a>
+                    <a class="btn btn--ghost" href="/docs/api" target="_blank" rel="noopener">Ver guia</a>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="../js/config.js"></script>
+</body>
+</html>

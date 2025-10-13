@@ -9,8 +9,8 @@
   --card: hsl(0, 0%, 100%);
   --card-foreground: hsl(222, 84%, 4.9%);
 
-  /* Azul profissional */
-  --primary: hsl(214, 88%, 45%);
+  /* Azul institucional (ajustado p/ @usecontrolefacil) */
+  --primary: hsl(214, 100%, 41%);
   --primary-foreground: hsl(210, 40%, 98%);
 
   /* Verde para aprovações */
@@ -30,7 +30,7 @@
 
   --border: hsl(214, 31.8%, 91.4%);
   --input: hsl(214, 31.8%, 91.4%);
-  --ring: hsl(214, 88%, 45%);
+  --ring: hsl(214, 100%, 41%);
 
   --radius: 0.5rem;
 
@@ -42,6 +42,7 @@
 
   --transition: all 0.2s ease;
 }
+
 
 /* ===========================
    Reset & Base

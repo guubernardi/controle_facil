@@ -3,8 +3,6 @@
 /* ============================
             Dashboard 
    ============================ */
-
-/* Paleta de cores (mantendo azul como solicitado) */
 :root {
   /* Cores Principais */
   --background: hsl(0, 0%, 100%);

@@ -65,8 +65,24 @@
     if (sep) sep.hidden = false;
   };
 
+  // ===== Regras (vindas da aba "Regras de Custos") =====
+  function getRuleFlags() {
+    try {
+      const s = JSON.parse(localStorage.getItem('rf_settings') || '{}');
+      const r = s.rules || {};
+      return {
+        rejeitadoZero:      r.rejeitadoZero      ?? true,
+        motivoClienteZero:  r.motivoClienteZero  ?? true,
+        cdSomenteFrete:     r.cdSomenteFrete     ?? true,
+      };
+    } catch {
+      return { rejeitadoZero: true, motivoClienteZero: true, cdSomenteFrete: true };
+    }
+  }
+
   // ===== Regras de cálculo =====
   function calcTotalByRules(d) {
+<<<<<<< Updated upstream
     const st   = String(d.status || '').toLowerCase();
     const mot  = String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
     const lgs  = String(d.log_status || '').toLowerCase();
@@ -77,6 +93,20 @@
     if (mot.includes('cliente')) return 0;
     if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
     return vp + vf;
+=======
+    const { rejeitadoZero, motivoClienteZero, cdSomenteFrete } = getRuleFlags();
+
+    const st  = String(d.status || "").toLowerCase();
+    const mot = String(d.tipo_reclamacao || d.reclamacao || "").toLowerCase();
+    const lgs = String(d.log_status || "").toLowerCase();
+    const vp  = toNumber(d.valor_produto || 0);
+    const vf  = toNumber(d.valor_frete  || 0);
+
+    if (rejeitadoZero && (st.includes("rej") || st.includes("neg"))) return 0; // devolução negada
+    if (motivoClienteZero && mot.includes("cliente")) return 0;                // motivo do cliente
+    if (cdSomenteFrete && (lgs === "recebido_cd" || lgs === "em_inspecao" || lgs === "inspecionado")) return vf; // só frete
+    return vp + vf; // padrão
+>>>>>>> Stashed changes
   }
 
   // ===== Estado =====
