@@ -17,30 +17,32 @@ try {
 
 const express = require('express');
 const path = require('path');
+const axios = require('axios'); // (mantido caso use em outras rotas)
+const dayjs = require('dayjs'); // (mantido caso use em outras rotas)
 const { query } = require('./db');
 
 const app = express();
 
-/* ===========================
- *  MIDDLEWARES
- * =========================== */
+/** Middlewares globais */
 app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
 
-// Alias de compatibilidade: se alguém referenciar o antigo sidebar.js,
-// redirecionamos para o arquivo correto navigation.js para evitar 404/MIME text/html.
-app.get('/js/sidebar.js', (_req, res) => {
-  res.redirect(302, '/js/navigation.js');
-});
-
-// estáticos
+/** Static */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// respostas JSON por padrão nas rotas /api
+/** JSON UTF-8 nas rotas /api */
 app.use('/api', (req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
+
+/** Rotas utilitárias */
+try {
+  const utilsRoutes = require('./routes/utils');
+  app.use(utilsRoutes);
+  console.log('[BOOT] Rotas /utils carregadas');
+} catch (e) {
+  console.warn('[BOOT] Falha ao carregar rotas /utils:', e?.message || e);
+}
 
 /* ===========================
  *  CHECK DE VARIÁVEIS (aviso)
@@ -60,15 +62,29 @@ app.use('/api', (req, res, next) => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
-/* ===========================
- *  HELPERS
- * =========================== */
-function safeParseJson(s) {
+/* Helpers compartilhados */
+function seguroParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
   try { return JSON.parse(String(s)); } catch { return null; }
 }
+const safeParseJson = seguroParseJson;
 
+async function tableHasColumns(table, columns) {
+  const { rows } = await query(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {};
+  for (const c of columns) out[c] = set.has(c);
+  return out;
+}
+
+/**
+ * addReturnEvent (idempotente)
+ */
 async function addReturnEvent({
   returnId, type, title = null, message = null, meta = null,
   createdBy = 'system', idempKey = null
@@ -108,87 +124,43 @@ async function addReturnEvent({
   }
 }
 
-async function tableHasColumns(table, columns) {
-  const { rows } = await query(
-    `SELECT column_name FROM information_schema.columns
-       WHERE table_schema='public' AND table_name=$1`,
-    [table]
-  );
-  const set = new Set(rows.map(r => r.column_name));
-  const out = {};
-  for (const c of columns) out[c] = set.has(c);
-  return out;
-}
-
-/* ===========================
- *  ROTAS Opcionais
- * =========================== */
-try {
-  const utilsRoutes = require('./routes/utils');
-  app.use(utilsRoutes);
-  console.log('[BOOT] Rotas /utils carregadas');
-} catch {}
-
-/* ===========================
- *  REGISTRO DE ROTAS
- * =========================== */
-
-// 1) Upload CSV
+/* ========= ROTAS CSV (NOVAS) ========= */
 try {
   const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-  registerCsvUploadExtended(app, { addReturnEvent });
-  console.log('[BOOT] Rotas CSV registradas');
+  registerCsvUploadExtended(app, { addReturnEvent }); // injeta addReturnEvent
+  console.log('[BOOT] Rotas CSV carregadas');
 } catch (e) {
-  console.warn('[BOOT] CSV indisponível:', e.message);
+  console.warn('[BOOT] Falha ao carregar rotas CSV:', e?.message || e);
 }
 
-// 2) OAuth ML
+/* ========= (Opcional) OAuth Mercado Livre ========= */
 try {
   const registerMlAuth = require('./routes/ml-auth');
-  if (typeof registerMlAuth === 'function') registerMlAuth(app);
-  console.log('[BOOT] Rotas ML (OAuth) registradas');
+  if (typeof registerMlAuth === 'function') {
+    registerMlAuth(app);
+    console.log('[BOOT] Rotas ML OAuth carregadas');
+  }
 } catch (e) {
-  console.warn('[BOOT] ML (OAuth) indisponível:', e.message);
-}
-
-// 3) Sync ML
-try {
-  const registerMlSync = require('./routes/ml-sync');
-  if (typeof registerMlSync === 'function') registerMlSync(app);
-  console.log('[BOOT] Rotas ML Sync registradas');
-} catch (e) {
-  console.warn('[BOOT] Rotas ML Sync indisponível:', e.message);
-}
-
-// 4) Webhook ML
-try {
-  const registerMlWebhook = require('./routes/ml-webhook');
-  if (typeof registerMlWebhook === 'function') registerMlWebhook(app);
-  console.log('[BOOT] Webhook ML registrado');
-} catch (e) {
-  console.warn('[BOOT] Webhook ML indisponível:', e.message);
-}
-
-// 5) Webhook Bling
-try {
-  const registerBlingWebhook = require('./routes/bling-webhook');
-  if (typeof registerBlingWebhook === 'function') registerBlingWebhook(app);
-  console.log('[BOOT] Webhook Bling registrado');
-} catch (e) {
-  console.warn('[BOOT] Webhook Bling indisponível:', e.message);
-}
-
-// 6) Rotas Operacionais (ops.js)
-try {
-  const registerOps = require('./routes/ops');
-  if (typeof registerOps === 'function') registerOps(app, { addReturnEvent });
-  console.log('[BOOT] Rotas Operacionais registradas');
-} catch (e) {
-  console.warn('[BOOT] Rotas Operacionais indisponíveis:', e.message);
+  console.warn('[BOOT] Rotas ML OAuth não carregadas (opcional):', e?.message || e);
 }
 
 /* ------------------------------------------------------------
- *  Auditoria: eventos por return_id
+ *  Healthchecks
+ * ------------------------------------------------------------ */
+app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.get('/api/db/ping', async (_req, res) => {
+  try {
+    const r = await query('select now() as now');
+    res.json({ ok: true, now: r.rows[0].now });
+  } catch (e) {
+    console.error('DB PING ERRO:', e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+/* ------------------------------------------------------------
+ *  Events API — listar eventos por return_id (auditoria)
  * ------------------------------------------------------------ */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
@@ -196,18 +168,26 @@ app.get('/api/returns/:id/events', async (req, res) => {
     if (!Number.isInteger(returnId)) {
       return res.status(400).json({ error: 'return_id inválido' });
     }
+
     const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
     const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
 
-    const { rows } = await query(
-      `SELECT id, return_id AS "returnId", type, title, message, meta,
-              created_by AS "createdBy", created_at AS "createdAt"
-         FROM return_events
-        WHERE return_id = $1
-        ORDER BY created_at ASC, id ASC
-        LIMIT $2 OFFSET $3`,
-      [returnId, limit, offset]
-    );
+    const sql = `
+      SELECT
+        id,
+        return_id AS "returnId",
+        type,
+        title,
+        message,
+        meta,
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+      FROM return_events
+      WHERE return_id = $1
+      ORDER BY created_at ASC, id ASC
+      LIMIT $2 OFFSET $3
+    `;
+    const { rows } = await query(sql, [returnId, limit, offset]);
     const items = rows.map(r => ({ ...r, meta: safeParseJson(r.meta) }));
     res.json({ items, limit, offset });
   } catch (err) {
@@ -231,13 +211,13 @@ app.get('/api/returns/logs', async (req, res) => {
     const params = [];
     const where = [];
 
-    if (from) { params.push(from); where.push(`event_at >= $${params.length}`); }
-    if (to)   { params.push(to);   where.push(`event_at <  $${params.length}`); }
-    if (status)      { params.push(String(status).toLowerCase());      where.push(`LOWER(status) = $${params.length}`); }
-    if (log_status)  { params.push(String(log_status).toLowerCase());  where.push(`LOWER(log_status) = $${params.length}`); }
-    if (responsavel) { params.push(String(responsavel).toLowerCase()); where.push(`LOWER(responsavel_custo) = $${params.length}`); }
-    if (loja)        { params.push(`%${loja}%`);                       where.push(`loja_nome ILIKE $${params.length}`); }
-    if (return_id)   { params.push(parseInt(return_id,10));            where.push(`return_id = $${params.length}`); }
+    if (from)       { params.push(from);                   where.push(`event_at >= $${params.length}`); }
+    if (to)         { params.push(to);                     where.push(`event_at <  $${params.length}`); }
+    if (status)     { params.push(String(status).toLowerCase());     where.push(`LOWER(status) = $${params.length}`); }
+    if (log_status) { params.push(String(log_status).toLowerCase()); where.push(`LOWER(log_status) = $${params.length}`); }
+    if (responsavel){ params.push(String(responsavel).toLowerCase());where.push(`LOWER(responsavel_custo) = $${params.length}`); }
+    if (loja)       { params.push(`%${loja}%`);                        where.push(`loja_nome ILIKE $${params.length}`); }
+    if (return_id)  { params.push(parseInt(return_id,10));             where.push(`return_id = $${params.length}`); }
     if (q) {
       const like = `%${q}%`;
       params.push(like, like, like, like);
@@ -543,7 +523,7 @@ app.get('/api/dashboard', async (req, res) => {
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
-      [...params, lim]
+      [pFrom, pTo, lim]
     );
 
     const data = {
@@ -558,21 +538,6 @@ app.get('/api/dashboard', async (req, res) => {
   } catch (e) {
     console.error('GET /api/dashboard erro:', e);
     return res.json(mock());
-  }
-});
-
-/* ------------------------------------------------------------
- *  Healthchecks
- * ------------------------------------------------------------ */
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
-app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
-app.get('/api/db/ping', async (_req, res) => {
-  try {
-    const r = await query('select now() as now');
-    res.json({ ok: true, now: r.rows[0].now });
-  } catch (e) {
-    console.error('DB PING ERRO:', e);
-    res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
@@ -622,12 +587,14 @@ app.get('/api/home/pending', async (_req, res) => {
       SELECT id, id_venda, loja_nome, sku
       FROM devolucoes
       ${whereSemInspecao.length ? 'WHERE ' + whereSemInspecao.join(' AND ') : 'WHERE 1=0'}
-      ORDER BY id DESC LIMIT 20`;
+      ORDER BY id DESC LIMIT 20
+    `;
     const sql2 = `
       SELECT id, id_venda, loja_nome, sku
       FROM devolucoes
       ${cols.conciliado_em ? 'WHERE conciliado_em IS NULL' : ''}
-      ORDER BY id DESC LIMIT 20`;
+      ORDER BY id DESC LIMIT 20
+    `;
     const [r1, r2] = await Promise.all([ query(sql1), query(sql2) ]);
     res.json({
       recebidos_sem_inspecao: r1.rows || [],

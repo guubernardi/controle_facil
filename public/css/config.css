@@ -1,0 +1,123 @@
+/* ----- Ajustes de cartões de Integrações ----- */
+.integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.integration-card {
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e6e8ec);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.integration-card.is-disabled {
+  opacity: .6;
+  pointer-events: none;
+}
+
+.integration-head {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.integration-logo {
+  width: 56px; height: 56px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: var(--muted, #f6f7fb);
+  overflow: hidden;
+}
+
+.integration-head h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.integration-head small {
+  display: block;
+  color: var(--muted-foreground, #6b7280);
+  margin-top: 2px;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3b82f6;
+  white-space: nowrap;
+}
+
+.badge--erp { background:#ecfdf5; color:#059669; }
+.badge--ecom { background:#fff7ed; color:#ea580c; }
+.badge--dev { background:#f5f3ff; color:#7c3aed; }
+
+.integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Botões no tamanho menor (padrão do resto do app) */
+.integration-actions .btn {
+  min-width: auto;         /* sem largura fixa */
+  padding: 8px 12px;       /* compacto */
+  font-size: .875rem;      /* 14px */
+  line-height: 1.2;
+}
+
+.integration-actions .btn.btn--primary {
+  padding: 8px 14px;       /* levemente maior no primário */
+}
+
+/* Opção manual se quiser forçar ainda menor em algum lugar */
+.btn--compact {
+  padding: 6px 10px !important;
+  font-size: .85rem !important;
+}
+
+/* Layout geral da página (caso ainda não esteja no arquivo) */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.form-grid .form-row { display:flex; flex-direction:column; gap:6px; }
+.form-grid label { font-weight:600; font-size:.9rem; color:#111827; }
+.form-grid input, .form-grid select {
+  background:#fff; border:1px solid #e5e7eb; border-radius:10px;
+  padding:10px 12px; font:inherit;
+}
+
+.actions-line {
+  display:flex; gap:10px; align-items:center; margin-top:12px;
+}
+
+.switch { display:flex; align-items:center; gap:10px; }
+.switch input { transform: translateY(1px); }
+
+.tabela { width:100%; border-collapse:collapse; }
+.tabela th, .tabela td { padding:10px 12px; border-top:1px solid #f0f2f5; text-align:left; }
+.tabela thead th { background:#f8fafc; font-weight:600; }
+
+/* menu interno (abas) */
+.menu .item-menu {
+  display:flex; align-items:center; gap:12px;
+  padding:14px 16px; border:1px solid var(--border, #e6e8ec);
+  background:var(--card, #fff); border-radius:10px; cursor:pointer;
+  transition:.2s; text-decoration:none; color:inherit;
+}
+.menu .item-menu + .item-menu { margin-top:10px; }
+.menu .item-menu:hover { background:var(--muted, #f6f7fb); }
+.menu .item-menu.ativo { border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.15) inset; }
+
+/* panes */
+.config-pane { display:none; }
+.config-pane.active { display:block; }
