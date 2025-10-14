@@ -8,29 +8,31 @@
 }
 
 :root {
-  /* Cores principais - Azul e branco original */
-  --primary: #2196f3;
-  --primary-hover: #1976d2;
-  --primary-light: #e3f2fd;
+  /* ===== Paleta @usecontrolefacil ===== */
+  --primary: #0056D2;           /* Azul principal (CTA, links) */
+  --primary-hover: #0042A6;     /* Hover do primário */
+  --primary-light: #E6F0FF;     /* Superfícies e badges soft */
   --primary-foreground: #ffffff;
 
-  --secondary: #42a5f5;
-  --secondary-hover: #1e88e5;
-  --secondary-light: #bbdefb;
+  --secondary: #4DA3FF;         /* Azul de apoio (gradientes, acentos) */
+  --secondary-hover: #1E7CFF;
+  --secondary-light: #CFE2FF;
 
-  --success: #4caf50;
+  /* Feedback */
+  --success: #22c55e;
   --success-light: #e8f5e9;
-  --warning: #ff9800;
+  --warning: #f59e0b;
   --warning-light: #fff3e0;
-  --danger: #f44336;
+  --danger: #ef4444;
   --danger-light: #ffebee;
 
-  --background: #f5f7fa;
-  --foreground: #2c3e50;
-  --card: #ffffff;
-  --border: #e0e6ed;
-  --muted: #f8f9fb;
-  --muted-foreground: #7f8c9a;
+  /* Neutros e superfícies */
+  --background: #F8FAFC;        /* página */
+  --foreground: #1E293B;        /* texto principal */
+  --card: #FFFFFF;              /* cartões */
+  --border: #E5E7EB;            /* bordas suaves */
+  --muted: #F1F5F9;             /* áreas neutras/hover leve */
+  --muted-foreground: #475569;  /* texto secundário */
 
   --radius: 8px;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -65,8 +67,8 @@ body {
 }
 
 .card.info {
-  /* Gradiente azul ao invés de verde */
-  background: linear-gradient(135deg, #2196f3 0%, #42a5f5 100%);
+  /* Gradiente azul atualizado para a paleta */
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
   border: none;
   border-radius: var(--radius);
   padding: 24px;
@@ -97,12 +99,13 @@ body {
   flex-shrink: 0;
 }
 
+/* Tons de acento ajustados para a paleta (warning translúcido) */
 .card-1.accent {
-  background: rgba(255, 152, 0, 0.2);
+  background: rgba(245, 158, 11, 0.2); /* --warning com alpha */
 }
 
 .card-1.warning {
-  background: rgba(255, 193, 7, 0.2);
+  background: rgba(245, 158, 11, 0.15); /* variação suave */
 }
 
 .card-icon {
@@ -160,14 +163,15 @@ body {
   text-transform: uppercase;
 }
 
+/* Tags alinhadas à paleta */
 .tag.-warn {
-  background: #ff9800;
+  background: rgba(255, 255, 255, 0.2);
   color: white;
 }
 
 .tag.-ok {
-  background: rgba(255, 255, 255, 0.3);
-  color: white;
+  background: var(--primary-light);
+  color: var(--primary);
 }
 
 /* Tab navigation with icons and better styling */

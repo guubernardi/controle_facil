@@ -1,24 +1,35 @@
 /* ===== CENTRAL PAGE STYLES ===== */
 
 :root {
-  --primary: #2196f3;
-  --primary-dark: #1976d2;
-  --primary-light: #e3f2fd;
+  /* Brand azul @usecontrolefacil */
+  --primary:       #0056D2; /* Azul principal (CTA, links, destaques) */
+  --primary-dark:  #0042A6; /* Hover/active do primário */
+  --primary-light: #E6F0FF; /* Superfícies “soft”, badges e hovers leves */
+
+  /* Feedback  */
   --success: #22c55e;
   --warning: #f59e0b;
-  --danger: #ef4444;
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-  --bg-page: #f8fafc;
-  --bg-card: #ffffff;
-  --border: #e2e8f0;
+  --danger:  #ef4444;
+
+  /* Tipografia */
+  --text-primary:   #1E293B; /* cinza-azulado profundo (legibilidade alta) */
+  --text-secondary: #475569; /* subtítulos/descrições */
+  --text-muted:     #94a3b8; /* meta infos, placeholders */
+
+  /* Superfícies e bordas */
+  --bg-page: #F8FAFC; /* página */
+  --bg-card: #FFFFFF; /* cartões */
+  --border:  #E5E7EB; /* bordas suaves */
+
+  /* Sombras e raios */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+
   --radius: 12px;
   --radius-sm: 8px;
 }
+
 
 * {
   margin: 0;

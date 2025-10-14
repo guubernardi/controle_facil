@@ -17,9 +17,10 @@ try {
 
 const express = require('express');
 const path = require('path');
-const axios = require('axios'); // (mantido caso use em outras rotas)
-const dayjs = require('dayjs'); // (mantido caso use em outras rotas)
+const axios = require('axios'); 
+const dayjs = require('dayjs'); 
 const { query } = require('./db');
+const events = require('./events');
 
 const app = express();
 
@@ -28,6 +29,9 @@ app.use(express.json({ limit: '1mb' }));
 
 /** Static */
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// rota SSE
+app.get('/events', events.sse);
 
 /** JSON UTF-8 nas rotas /api */
 app.use('/api', (req, res, next) => {
@@ -124,7 +128,7 @@ async function addReturnEvent({
   }
 }
 
-/* ========= ROTAS CSV (NOVAS) ========= */
+/* ========= ROTAS CSV ========= */
 try {
   const registerCsvUploadExtended = require('./routes/csv-upload-extended');
   registerCsvUploadExtended(app, { addReturnEvent }); // injeta addReturnEvent
@@ -133,7 +137,7 @@ try {
   console.warn('[BOOT] Falha ao carregar rotas CSV:', e?.message || e);
 }
 
-/* ========= (Opcional) OAuth Mercado Livre ========= */
+/* ========= OAuth Mercado Livre ========= */
 try {
   const registerMlAuth = require('./routes/ml-auth');
   if (typeof registerMlAuth === 'function') {

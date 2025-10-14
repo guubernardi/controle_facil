@@ -1,46 +1,28 @@
 /*
  * Retorno Fácil — index.js (Feed Geral de Devoluções)
- *
- * Objetivo desta versão:
- *  - A página index.html vira um FEED unificado de devoluções das plataformas.
- *  - Traz status operacionais (ex.: disputa/cliente, disputa/plataforma, em envio, recebido no CD, etc.).
- *  - Mostra cards. Ao clicar em um card, redireciona para a página de LOG daquela devolução
- *    (ex.: logs.html?return_id=123), onde ficam as regras de custo, recebimento, notas, timeline, etc.
- *
- * Observações:
- *  - Mantém filtros (tabs + input de pesquisa) e KPIs animados.
- *  - Mantém skeleton e toasts.
- *  - Remove o fluxo de cadastro/"nova devolução" aqui (se o botão existir no HTML, deixamos sem ação ou
- *    opcionalmente redirecionamos para a Central).
+ * Atualizações:
+ *  - Botão "Sincronizar ML" usa GET /api/ml/claims/import (últimos 14 dias).
+ *  - Escuta SSE /events e mostra toast quando abrir/atualizar uma reclamação.
  */
 
 /* eslint-disable no-console */
 class DevolucoesFeed {
   constructor() {
-    /** Estrutura interna dos itens carregados */
-    /** @type {Array<{ id:number, id_venda:string|null, cliente_nome:string|null, loja_nome:string|null,
-     *   sku:string|null, status:string|null, log_status:string|null, created_at:string,
-     *   valor_produto:number|null, valor_frete:number|null }>} */
     this.items = [];
+    this.filtros = { pesquisa: '', status: 'todos' };
 
-    this.filtros = { pesquisa: '', status: 'todos' }; // status = grupo canônico (todos|pendente|aprovado|rejeitado|finalizado)
-
-    // Mapa de agrupamento de status (canônicos)
     this.STATUS_GRUPOS = {
       aprovado: new Set(['aprovado', 'autorizado', 'autorizada']),
       rejeitado: new Set(['rejeitado', 'rejeitada', 'negado', 'negada']),
-      finalizado: new Set(['concluido', 'concluida', 'finalizado', 'finalizada', 'fechado', 'fechada', 'encerrado', 'encerrada']),
+      finalizado: new Set(['concluido','concluida','finalizado','finalizada','fechado','fechada','encerrado','encerrada']),
       pendente: new Set([
         'pendente','em_analise','em-analise','analise','em_inspecao','em-inspecao','inspecao',
         'aguardando_postagem','aguardando-logistica','aguardando_logistica','recebido_cd','aberto','novo',
-        // fluxos "ampliados" que queremos tratar visualmente
         'em_envio','em-transito','em_transito','disputa_cliente','disputa_plataforma','em_disputa'
       ])
     };
 
-    // Página de destino quando clica em um card
     this.logsPage = 'logs.html';
-
     this.inicializar();
   }
 
@@ -50,11 +32,10 @@ class DevolucoesFeed {
     this.atualizarKpis();
     this.renderizar();
     this.syncTabsUI();
+    this.escutarEventos(); // << NOVO: SSE
   }
 
-  // -------------------------
-  // Infra
-  // -------------------------
+  // ---------------- Infra ----------------
   async getJSON(url, opts) {
     const r = await fetch(url, opts);
     const j = await r.json().catch(() => ({}));
@@ -69,13 +50,10 @@ class DevolucoesFeed {
     if (list) list.style.display = show ? 'none' : 'flex';
   }
 
-  // -------------------------
-  // Carregamento
-  // -------------------------
+  // --------------- Carregamento ---------------
   async carregar() {
     this.toggleSkeleton(true);
     try {
-      // Usamos a rota de busca operacional que já suporta filtros e paginação.
       const q = new URLSearchParams({ page: '1', pageSize: '100', orderBy: 'created_at', orderDir: 'desc' });
       const data = await this.getJSON(`/api/returns/search?${q.toString()}`);
       const rows = Array.isArray(data?.items) ? data.items : [];
@@ -101,11 +79,8 @@ class DevolucoesFeed {
     }
   }
 
-  // -------------------------
-  // UI / Eventos
-  // -------------------------
+  // --------------- UI / Eventos ---------------
   configurarUI() {
-    // Pesquisa texto
     const campo = document.getElementById('campo-pesquisa');
     if (campo) {
       campo.addEventListener('input', (e) => {
@@ -114,7 +89,6 @@ class DevolucoesFeed {
       });
     }
 
-    // Tabs (clique + teclado)
     const tabs = document.querySelector('.tabs-filtro');
     const selectFallback = document.getElementById('filtro-status');
 
@@ -155,32 +129,34 @@ class DevolucoesFeed {
       });
     }
 
-    // Botão Exportar (opcional no HTML)
+    // Exportar CSV
     const btnExport = document.getElementById('btn-exportar') || document.getElementById('botao-exportar');
     if (btnExport) btnExport.addEventListener('click', () => this.exportar());
 
-    // Botão Sync ML (opcional)
+    // Sync ML — GET /api/ml/claims/import (últimos 14 dias)
     const btnSync = document.getElementById('btn-sync-ml');
     if (btnSync) {
       btnSync.addEventListener('click', async () => {
         const original = btnSync.textContent;
         btnSync.disabled = true; btnSync.textContent = 'Sincronizando…';
         try {
-          const r = await fetch('/api/ml/sync?scope=returns', { method: 'POST' });
-          if (!r.ok) throw new Error('Falha ao iniciar sincronização');
-          this.toast('OK', 'Sincronização iniciada. Atualizando lista…', 'sucesso');
-          await this.carregar();
-          this.atualizarKpis();
-          this.renderizar();
+          const today = new Date();
+          const to   = today.toISOString().slice(0,10);
+          const from = new Date(today.getTime() - 14*24*60*60*1000).toISOString().slice(0,10);
+          const url  = `/api/ml/claims/import?from=${from}&to=${to}&dry=0`;
+
+          await this.getJSON(url, { method: 'GET' });
+          this.toast('OK', 'Sincronização concluída. Atualizando lista…', 'sucesso');
+          await this.carregar(); this.atualizarKpis(); this.renderizar();
         } catch (err) {
-          this.toast('Erro', err.message || 'Não foi possível sincronizar com o ML.', 'erro');
+          this.toast('Erro', err?.message || 'Não foi possível sincronizar com o Mercado Livre.', 'erro');
         } finally {
           btnSync.disabled = false; btnSync.textContent = original;
         }
       });
     }
 
-    // Clique nos cards -> redireciona p/ logs
+    // Clique no card -> logs
     const container = document.getElementById('container-devolucoes');
     if (container) {
       container.addEventListener('click', (e) => {
@@ -195,9 +171,32 @@ class DevolucoesFeed {
     }
   }
 
-  // -------------------------
-  // Render
-  // -------------------------
+  // --------------- SSE (tempo real) ---------------
+  escutarEventos() {
+    try {
+      if (!('EventSource' in window)) return;
+      const es = new EventSource('/events');
+
+      es.addEventListener('ml_claim_opened', async (e) => {
+        const data = JSON.parse(e.data || '{}');
+        const pedido = data.order_id || '-';
+        const quem = data.buyer ? ` — ${data.buyer}` : '';
+        this.toast('Nova reclamação', `Pedido ${pedido}${quem}`, 'erro');
+        await this.carregar();
+        this.atualizarKpis();
+        this.renderizar();
+      });
+
+      es.onerror = () => {
+        // deixa o EventSource reconectar sozinho; só loga
+        console.debug('SSE desconectado, tentando reconectar…');
+      };
+    } catch (e) {
+      console.warn('SSE indisponível:', e?.message);
+    }
+  }
+
+  // --------------- Render ---------------
   renderizar() {
     const container = document.getElementById('container-devolucoes');
     const vazio = document.getElementById('mensagem-vazia');
@@ -227,7 +226,6 @@ class DevolucoesFeed {
     container.style.display = 'flex';
     if (vazio) vazio.style.display = 'none';
     container.innerHTML = '';
-
     filtrados.forEach((d, idx) => container.appendChild(this.card(d, idx)));
   }
 
@@ -283,12 +281,10 @@ class DevolucoesFeed {
         </div>
       </div>
     `;
-
     return el;
   }
 
   blocoLogistica(d) {
-    // Deriva "etapas" a partir de status/log_status. ETA heurística simples quando em trânsito.
     const s = String(d.status || '').toLowerCase();
     const l = String(d.log_status || '').toLowerCase();
 
@@ -305,12 +301,10 @@ class DevolucoesFeed {
       etapa = 'Rejeitada';
     }
 
-    // ETA estimada (heurística): criado + 7 dias quando em envio
     let eta = '';
     if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) {
       const d0 = new Date(d.created_at);
-      const etaDate = new Date(d0.getTime() + 7 * 24 * 3600 * 1000);
-      eta = etaDate.toLocaleDateString('pt-BR');
+      eta = new Date(d0.getTime() + 7 * 24 * 3600 * 1000).toLocaleDateString('pt-BR');
     }
 
     return `
@@ -333,13 +327,8 @@ class DevolucoesFeed {
       'em inspeção': '<div class="badge badge-info">Em inspeção</div>',
     };
 
-    // Heurísticas suplementares
-    if (/(disputa|claim)/.test(s) || /(disputa)/.test(l)) {
-      return '<div class="badge badge-info">Em disputa</div>';
-    }
-    if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) {
-      return '<div class="badge badge-info">Em envio</div>';
-    }
+    if (/(disputa|claim)/.test(s) || /(disputa)/.test(l)) return '<div class="badge badge-info">Em disputa</div>';
+    if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) return '<div class="badge badge-info">Em envio</div>';
 
     const map = {
       pendente : '<div class="badge badge-pendente">Pendente</div>',
@@ -351,9 +340,7 @@ class DevolucoesFeed {
     return especiais[l] || especiais[s] || map[grp] || `<div class="badge">${this.esc(d.status || '—')}</div>`;
   }
 
-  // -------------------------
-  // KPIs / helpers
-  // -------------------------
+  // --------------- KPIs / helpers ---------------
   atualizarKpis() {
     const total = this.items.length;
     const pend = this.items.filter((d) => this.grupoStatus(d.status) === 'pendente').length;
@@ -393,18 +380,13 @@ class DevolucoesFeed {
       'Valor produto': d.valor_produto ?? '',
       'Valor frete': d.valor_frete ?? ''
     }));
-
     const csv = this.toCSV(rows);
     this.downloadCSV(csv, 'devolucoes.csv');
     this.toast('Exportado', 'Arquivo CSV gerado.', 'sucesso');
   }
 
-  // -------------------------
-  // Utilitários
-  // -------------------------
-  dataBr(s) {
-    try { return new Date(s).toLocaleDateString('pt-BR'); } catch { return '—'; }
-  }
+  // --------------- Util ---------------
+  dataBr(s) { try { return new Date(s).toLocaleDateString('pt-BR'); } catch { return '—'; } }
   setTxt(id, val) { const el = document.getElementById(id); if (el) el.textContent = String(val); }
   esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
 
