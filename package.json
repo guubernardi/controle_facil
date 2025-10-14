@@ -1,10 +1,11 @@
 {
-  "name": "devolucoes-buscou",
+  "name": "devolucoes-app",
   "version": "0.1.0",
-  "main": "server/server.js",
   "type": "commonjs",
+  "main": "server/server.js",
   "scripts": {
-    "dev": "node server/server.js"
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js"
   },
   "dependencies": {
     "axios": "^1.12.2",
@@ -13,11 +14,10 @@
     "express": "^4.21.2",
     "pg": "^8.16.3"
   },
-  "description": "",
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
     "nodemon": "^3.1.10"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
