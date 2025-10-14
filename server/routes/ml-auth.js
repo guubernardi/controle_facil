@@ -6,10 +6,7 @@ const dayjs = require('dayjs');
 const cookieParser = require('cookie-parser');
 
 // Funções do cliente ML (suporta multi-contas)
-const {
-  saveAccount, loadAccount, getAuthedAxios,
-  listAccounts, setActive, removeAccount, getActiveUserId
-} = require('../mlClient');
+const ml = require('../mlClient');
 
 const ML_AUTH_URL  = process.env.ML_AUTH_URL  || 'https://auth.mercadolivre.com.br/authorization';
 const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
@@ -24,7 +21,7 @@ module.exports = function registerMlAuth(app) {
   app.use(express.json());
 
   // -----------------------------
-  // helpers para a página bonitinha
+  // helpers para a página 
   // -----------------------------
   function escapeHtml(s = '') {
     return String(s).replace(/[&<>"']/g, c => ({
@@ -36,7 +33,7 @@ module.exports = function registerMlAuth(app) {
     ok,
     title,
     message,          // HTML curto
-    detailsHTML = '', // HTML opcional (debug)
+    detailsHTML = '', // HTML (debug)
     redirectTo = '/settings/config.html#integracoes',
     autoDelayMs = ok ? 2500 : 5000
   }) {
