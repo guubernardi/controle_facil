@@ -27,6 +27,13 @@ const app = express();
 /** Middlewares globais */
 app.use(express.json({ limit: '1mb' }));
 
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
+    return res.status(400).json({ ok:false, error:'invalid_json' });
+  }
+  next(err);
+});
+
 /** Static */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
