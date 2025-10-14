@@ -70,6 +70,32 @@ body {
   padding: 2rem 1.5rem;
 }
 
+/* Botão Voltar: layout e tamanho do ícone */
+.botao-voltar{
+  display:inline-flex;
+  align-items:center;
+  gap:.5rem;
+  padding:.35rem .6rem;
+  border-radius:8px;
+  text-decoration:none;
+  color: var(--muted-foreground);
+  border:1px solid var(--border);
+  background: var(--card);
+}
+
+.botao-voltar:hover{
+  background: var(--muted);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+/* Garante que o SVG não estoure */
+.botao-voltar svg{
+  width:18px !important;
+  height:18px !important;
+  flex:0 0 18px;
+}
+
 /* ===========================
    Header
 =========================== */
