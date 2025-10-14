@@ -24,7 +24,7 @@ module.exports = function registerMlWebhook(app){
         try {
           const claimId = String(payload.resource).replace(/.*\//,'').trim();
           if (claimId) {
-            const { http } = await getAuthedAxios(); // exige conta conectada
+            const { http } = await getAuthedAxios(payload.user_id); // exige conta conectada
             const { data: det } = await http.get(`/post-purchase/v1/claims/${claimId}`);
 
             const order_id = String(det?.resource_id || det?.order_id || det?.pack_id || '').trim();

@@ -5,7 +5,11 @@ const axios = require('axios');
 const dayjs = require('dayjs');
 const cookieParser = require('cookie-parser');
 
-const { saveAccount, loadAccount, getAuthedAxios } = require('../mlClient');
+// Funções do cliente ML (suporta multi-contas)
+const {
+  saveAccount, loadAccount, getAuthedAxios,
+  listAccounts, setActive, removeAccount, getActiveUserId
+} = require('../mlClient');
 
 const ML_AUTH_URL  = process.env.ML_AUTH_URL  || 'https://auth.mercadolivre.com.br/authorization';
 const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
@@ -14,7 +18,7 @@ const ML_BASE      = process.env.ML_BASE_URL  || 'https://api.mercadolibre.com';
 module.exports = function registerMlAuth(app) {
   const CLIENT_ID     = process.env.ML_CLIENT_ID;
   const CLIENT_SECRET = process.env.ML_CLIENT_SECRET;
-  const STATIC_REDIRECT_URI  = process.env.ML_REDIRECT_URI; // se não houver, calculamos no /login
+  const STATIC_REDIRECT_URI = process.env.ML_REDIRECT_URI; // se não houver, calculamos no /login
 
   app.use(cookieParser());
   app.use(express.json());
@@ -31,7 +35,7 @@ module.exports = function registerMlAuth(app) {
   function renderAuthResult({
     ok,
     title,
-    message,        // HTML curto
+    message,          // HTML curto
     detailsHTML = '', // HTML opcional (debug)
     redirectTo = '/settings/config.html#integracoes',
     autoDelayMs = ok ? 2500 : 5000
@@ -287,16 +291,65 @@ module.exports = function registerMlAuth(app) {
     }
   });
 
-  // ========= Desconectar =========
-  app.post('/api/ml/disconnect', async (_req, res) => {
-    await saveAccount({});
-    res.json({ ok: true });
+  // ========= Multi-contas: listar / definir ativa / remover =========
+  app.get('/api/ml/accounts', async (_req, res) => {
+    try {
+      const items = await listAccounts();
+      const active = await getActiveUserId();
+      return res.json({
+        items: items.map(a => ({
+          user_id: a.user_id,
+          nickname: a.nickname,
+          expires_at: a.expires_at
+        })),
+        active_user_id: active || null
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  app.post('/api/ml/active', async (req, res) => {
+    try {
+      const { user_id } = req.body || {};
+      if (!user_id) return res.status(400).json({ ok: false, error: 'user_id vazio' });
+      const acc = await setActive(user_id);
+      res.json({ ok: true, active_user_id: String(acc.user_id) });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // Remover uma conta específica (alias útil para UI)
+  app.delete('/api/ml/accounts/:user_id', async (req, res) => {
+    try {
+      await removeAccount(req.params.user_id);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // ========= Desconectar (limpa ativa ou remove uma específica) =========
+  app.post('/api/ml/disconnect', async (req, res) => {
+    try {
+      const { user_id } = req.body || {};
+      if (user_id) {
+        await removeAccount(user_id);
+      } else {
+        await saveAccount({}); // modo single: limpa arquivo
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
   });
 
   // ========= Teste: quem sou eu =========
-  app.get('/api/ml/me', async (_req, res) => {
+  app.get('/api/ml/me', async (req, res) => {
     try {
-      const { http, account } = await getAuthedAxios();
+      const userId = req.query.user_id ? String(req.query.user_id) : undefined; // opcional
+      const { http, account } = await getAuthedAxios(userId);
       const me = await http.get('/users/me');
       res.json({ ok: true, account: { user_id: account.user_id, nickname: account.nickname }, me: me.data });
     } catch (e) {
