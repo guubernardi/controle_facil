@@ -374,3 +374,83 @@ body.sidebar-mobile-open .sidebar-fab {
 a {
   text-decoration: none;
 }
+
+/* Sidebar padrão – escopado para páginas de settings */
+.settings-page > nav{
+  position: fixed;
+  inset: 0 auto 0 0;          /* top:0; right:auto; bottom:0; left:0 */
+  width: 260px;
+  background: #fff;
+  border-right: 1px solid var(--border, #e5e7eb);
+  padding: 16px 12px;
+  overflow-y: auto;
+  z-index: 20;
+}
+
+/* Espaço para o conteúdo ao lado do menu */
+.settings-page .conteudo-principal{
+  margin-left: 260px;
+}
+
+/* Itens do menu */
+.settings-page .sidebar-nav-item{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: #374151;
+  text-decoration: none;
+  transition: background .2s, color .2s, transform .15s;
+  white-space: nowrap;
+}
+.settings-page .sidebar-nav-item:hover{ background: #f8fafc; }
+.settings-page .sidebar-nav-item:active{ transform: translateY(1px); }
+
+/* Ícone + texto */
+.settings-page .sidebar-nav-icon{
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  background: #f3f4f6;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+.settings-page .sidebar-nav-icon svg{ width: 18px; height: 18px; }
+
+.settings-page .sidebar-nav-text{
+  font: 600 14px/1 Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+/* Ativo */
+.settings-page .sidebar-nav-item.active{
+  color: #0f172a;
+}
+.settings-page .sidebar-nav-item.active .sidebar-nav-icon{
+  background: var(--primary, #2196f3);
+  color: #fff;
+}
+
+
+/* Responsivo: sidebar vira topo */
+@media (max-width: 1024px){
+  .settings-page > nav{
+    position: sticky;
+    top: 0;
+    width: 100%;
+    display: flex;
+    gap: 6px;
+    padding: 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border, #e5e7eb);
+    overflow-x: auto;
+  }
+  .settings-page .sidebar-nav-item{
+    padding: 8px 10px;
+  }
+  .settings-page .conteudo-principal{
+    margin-left: 0;
+  }
+  .settings-page nav::after{ display: none; }
+}

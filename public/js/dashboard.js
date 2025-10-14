@@ -3,14 +3,12 @@
   - inicializa 4 charts (dia, mês, 6 meses, status)
   - busca /api/dashboard?from=...&to=...&limitTop=...
   - atualiza resumos e ranking
-  - rótulos claros: "Abertas" e "Autorizadas p/ postagem"
 */
 
 let chartDay = null;
 let chartMes = null;
 let chart6Mes = null;
 let chartStatus = null;
-let currentFetch = null; // AbortController
 
 /* ------------------------------
    Utils
@@ -18,6 +16,7 @@ let currentFetch = null; // AbortController
 function escapeHtml(s = '') {
   return String(s).replace(/[&<>'"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[c]));
 }
+
 function getCssVar(name, fallback) {
   try {
     const v = getComputedStyle(document.documentElement).getPropertyValue(name);
@@ -26,44 +25,34 @@ function getCssVar(name, fallback) {
     return fallback;
   }
 }
+
 function currencyBR(v) {
   return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
-function updateLogLink(from, to) {
-  const a = document.getElementById('link-log');
-  if (!a) return;
-  const qs = new URLSearchParams();
-  if (from) qs.set('from', from);
-  if (to)   qs.set('to', to);
-  a.href = `/logs.html${qs.toString() ? '?' + qs.toString() : ''}`;
-}
 
 /* ------------------------------
-   Texto explicativo (tooltips)
+   Texto explicativo (exibido em títulos/tooltip)
 --------------------------------*/
 const REGRAS_HINT =
   'Regras: Rejeitado = R$ 0,00 · Motivos do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete.';
 
 /* ------------------------------
-   Mapeamento de rótulos de status (front)
---------------------------------*/
-const STATUS_LABELS = {
-  pendente: 'Abertas',
-  aprovado: 'Autorizadas p/ postagem',
-  rejeitado: 'Rejeitadas',
-  outros: 'Outros',
-};
-
-/* ------------------------------
    Cores/gradiente seguros
 --------------------------------*/
+// Converte "hsl(...)" ou "hsla(...)" para HSLA com alpha desejado
 function withAlphaHSL(hslColor, a = 1) {
   const c = String(hslColor || '').trim();
   if (!c) return `rgba(0,0,0,${a})`;
-  if (/^hsla\(/i.test(c)) return c.replace(/hsla\(([^,]+,[^,]+,[^,]+),\s*[^)]+\)/i, (_, core) => `hsla(${core}, ${a})`);
-  if (/^hsl\(/i.test(c))  return c.replace(/hsl\(([^)]+)\)/i, (_, core) => `hsla(${core}, ${a})`);
-  return c;
+  if (/^hsla\(/i.test(c)) {
+    return c.replace(/hsla\(([^,]+,[^,]+,[^,]+),\s*[^)]+\)/i, (_, core) => `hsla(${core}, ${a})`);
+  }
+  if (/^hsl\(/i.test(c)) {
+    return c.replace(/hsl\(([^)]+)\)/i, (_, core) => `hsla(${core}, ${a})`);
+  }
+  return c; // hex/rgb já válidos
 }
+
+// Gradiente vertical: usa chartArea quando disponível; cai em cor sólida no primeiro layout
 function makeGradient(ctx, area, baseHsl) {
   if (!area) return withAlphaHSL(baseHsl, 0.85);
   const g = ctx.createLinearGradient(0, area.top, 0, area.bottom);
@@ -85,16 +74,26 @@ function baseBarOptions() {
     animation: { duration: 700, easing: 'easeOutCubic' },
     layout: { padding: { top: 8, right: 8, bottom: 0, left: 0 } },
     scales: {
-      x: { grid: { display: false }, ticks: { color: textColor, maxRotation: 0, autoSkip: true } },
+      x: {
+        grid: { display: false },
+        ticks: { color: textColor, maxRotation: 0, autoSkip: true }
+      },
       y: {
         grid: { color: gridColor },
         border: { display: false },
-        ticks: { color: textColor, callback: v => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0 }) }
+        ticks: {
+          color: textColor,
+          callback: v => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0 })
+        }
       }
     },
     plugins: {
       legend: { display: false },
-      tooltip: { intersect: false, mode: 'index', callbacks: { label: (ctx) => currencyBR(ctx.parsed.y) } }
+      tooltip: {
+        intersect: false,
+        mode: 'index',
+        callbacks: { label: (ctx) => currencyBR(ctx.parsed.y) }
+      }
     }
   };
 }
@@ -103,9 +102,9 @@ function baseBarOptions() {
    Inicialização dos gráficos
 --------------------------------*/
 function initCharts() {
-  const accent      = getCssVar('--accent', '#ff7a00');       // ABERTAS
-  const destructive = getCssVar('--destructive', '#e11d48');  // REJEITADAS
-  const primary     = getCssVar('--primary', '#0b5fff');      // AUTORIZADAS
+  const accent      = getCssVar('--accent', '#ff7a00');
+  const destructive = getCssVar('--destructive', '#e11d48');
+  const primary     = getCssVar('--primary', '#0b5fff');
   const mutedBorder = getCssVar('--border', '#E5E7EB');
 
   const elDay    = document.getElementById('chart-prejuizo-dia');
@@ -113,27 +112,32 @@ function initCharts() {
   const el6      = document.getElementById('chart-prejuizo-6mes');
   const elStatus = document.getElementById('chart-status');
 
-  // Últimos 30 dias
+  // Dia (últimos 30 dias)
   if (elDay) {
     const ctx = elDay.getContext('2d');
     chartDay = new Chart(ctx, {
       type: 'bar',
-      data: { labels: [], datasets: [{
-        label: 'Prejuízo (R$)',
-        data: [],
-        backgroundColor: (c) => makeGradient(c.chart.ctx, c.chart.chartArea, destructive),
-        borderColor: withAlphaHSL(destructive, 1),
-        borderWidth: 1,
-        borderSkipped: false,
-        borderRadius: 8,
-        maxBarThickness: 36
-      }]},
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Prejuízo (R$)',
+          data: [],
+          backgroundColor: (c) => makeGradient(c.chart.ctx, c.chart.chartArea, destructive),
+          borderColor: withAlphaHSL(destructive, 1),
+          borderWidth: 1,
+          borderSkipped: false,
+          borderRadius: 8,
+          maxBarThickness: 36
+        }]
+      },
       options: {
         ...baseBarOptions(),
         scales: {
           ...baseBarOptions().scales,
-          y: { ...baseBarOptions().scales.y,
-            ticks: { ...baseBarOptions().scales.y.ticks,
+          y: {
+            ...baseBarOptions().scales.y,
+            ticks: {
+              ...baseBarOptions().scales.y.ticks,
               callback: (v) => currencyBR(v).replace('R$', '').trim()
             }
           }
@@ -142,43 +146,53 @@ function initCharts() {
           ...baseBarOptions().plugins,
           title: { display: true, text: 'Prejuízo (regra aplicada)', padding: { top: 4, bottom: 8 } },
           subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
-          tooltip: { ...baseBarOptions().plugins.tooltip,
-            callbacks: { label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}` }
+          tooltip: {
+            ...baseBarOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}`
+            }
           }
         }
       }
     });
   }
 
-  // Mês atual
+  // Mês (por dia)
   if (elMes) {
     const ctx = elMes.getContext('2d');
     chartMes = new Chart(ctx, {
       type: 'bar',
-      data: { labels: [], datasets: [{
-        label: 'Prejuízo (R$)',
-        data: [],
-        backgroundColor: (c) => makeGradient(c.chart.ctx, c.chart.chartArea, destructive),
-        borderColor: withAlphaHSL(destructive, 1),
-        borderWidth: 1,
-        borderSkipped: false,
-        borderRadius: 8,
-        maxBarThickness: 40
-      }]},
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Prejuízo (R$)',
+          data: [],
+          backgroundColor: (c) => makeGradient(c.chart.ctx, c.chart.chartArea, destructive),
+          borderColor: withAlphaHSL(destructive, 1),
+          borderWidth: 1,
+          borderSkipped: false,
+          borderRadius: 8,
+          maxBarThickness: 40
+        }]
+      },
       options: {
         ...baseBarOptions(),
         scales: {
           ...baseBarOptions().scales,
-          x: { ...baseBarOptions().scales.x,
-            ticks: { ...baseBarOptions().scales.x.ticks,
+          x: {
+            ...baseBarOptions().scales.x,
+            ticks: {
+              ...baseBarOptions().scales.x.ticks,
               callback: function (val) {
                 const label = this.getLabelForValue(val) || '';
                 return label.length > 12 ? label.slice(0, 12) + '…' : label;
               }
             }
           },
-          y: { ...baseBarOptions().scales.y,
-            ticks: { ...baseBarOptions().scales.y.ticks,
+          y: {
+            ...baseBarOptions().scales.y,
+            ticks: {
+              ...baseBarOptions().scales.y.ticks,
               callback: (v) => currencyBR(v).replace('R$', '').trim()
             }
           }
@@ -187,8 +201,11 @@ function initCharts() {
           ...baseBarOptions().plugins,
           title: { display: true, text: 'Prejuízo do mês (regra aplicada)', padding: { top: 4, bottom: 8 } },
           subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
-          tooltip: { ...baseBarOptions().plugins.tooltip,
-            callbacks: { label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}` }
+          tooltip: {
+            ...baseBarOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}`
+            }
           }
         }
       }
@@ -200,22 +217,27 @@ function initCharts() {
     const ctx = el6.getContext('2d');
     chart6Mes = new Chart(ctx, {
       type: 'bar',
-      data: { labels: [], datasets: [{
-        label: 'Prejuízo (R$)',
-        data: [],
-        backgroundColor: (c) => makeGradient(c.chart.ctx, c.chart.chartArea, destructive),
-        borderColor: withAlphaHSL(destructive, 1),
-        borderWidth: 1,
-        borderSkipped: false,
-        borderRadius: 10,
-        maxBarThickness: 46
-      }]},
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Prejuízo (R$)',
+          data: [],
+          backgroundColor: (c) => makeGradient(c.chart.ctx, c.chart.chartArea, destructive),
+          borderColor: withAlphaHSL(destructive, 1),
+          borderWidth: 1,
+          borderSkipped: false,
+          borderRadius: 10,
+          maxBarThickness: 46
+        }]
+      },
       options: {
         ...baseBarOptions(),
         scales: {
           ...baseBarOptions().scales,
-          y: { ...baseBarOptions().scales.y,
-            ticks: { ...baseBarOptions().scales.y.ticks,
+          y: {
+            ...baseBarOptions().scales.y,
+            ticks: {
+              ...baseBarOptions().scales.y.ticks,
               callback: (v) => currencyBR(v).replace('R$', '').trim()
             }
           }
@@ -224,15 +246,18 @@ function initCharts() {
           ...baseBarOptions().plugins,
           title: { display: true, text: 'Prejuízo (últimos 6 meses)', padding: { top: 4, bottom: 8 } },
           subtitle: { display: true, text: REGRAS_HINT, padding: { bottom: 8 } },
-          tooltip: { ...baseBarOptions().plugins.tooltip,
-            callbacks: { label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}` }
+          tooltip: {
+            ...baseBarOptions().plugins.tooltip,
+            callbacks: {
+              label: (ctx) => `Custo efetivo: ${currencyBR(ctx.parsed.y)}`
+            }
           }
         }
       }
     });
   }
 
-  // Pizza por Status
+  // Status (pizza)
   if (elStatus) {
     const ctx = elStatus.getContext('2d');
     chartStatus = new Chart(ctx, {
@@ -243,7 +268,12 @@ function initCharts() {
           data: [],
           borderColor: mutedBorder,
           borderWidth: 1,
-          backgroundColor: []
+          backgroundColor: [
+            primary,     // aprovado / total
+            accent,      // pendente
+            destructive, // rejeitado
+            '#6b7280'    // outros
+          ]
         }]
       },
       options: {
@@ -254,7 +284,11 @@ function initCharts() {
           legend: { position: 'bottom', labels: { usePointStyle: true } },
           title:   { display: true, text: 'Distribuição por status' },
           subtitle:{ display: true, text: 'Ajuda a entender a fase das devoluções.', padding: { top: 0, bottom: 6 } },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${Number(ctx.parsed || 0).toLocaleString('pt-BR')}` } }
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.label}: ${Number(ctx.parsed || 0).toLocaleString('pt-BR')}`
+            }
+          }
         }
       }
     });
@@ -265,7 +299,7 @@ function initCharts() {
    Atualiza os gráficos com dados
 --------------------------------*/
 function updateCharts(data) {
-  // 30 dias
+  // day (últimos 30 dias)
   if (chartDay) {
     const pontos = (data.daily || []).slice(-30);
     const labels = pontos.map(d => d.date || d.day || d.label || '');
@@ -275,7 +309,7 @@ function updateCharts(data) {
     chartDay.update();
   }
 
-  // mês (usa série diária do período aplicado)
+  // mês (agrupa por dia)
   if (chartMes) {
     const series = data.daily || [];
     const grouped = {};
@@ -289,7 +323,7 @@ function updateCharts(data) {
     chartMes.update();
   }
 
-  // 6 meses
+  // últimos 6 meses
   if (chart6Mes) {
     const months = data.monthly || [];
     const labels = months.map(m => m.month || m.label || `${m.year}-${m.month}`);
@@ -299,41 +333,12 @@ function updateCharts(data) {
     chart6Mes.update();
   }
 
-  // pizza por status
+  // status pie
   if (chartStatus) {
     const statusObj = data.status || {};
-    const order = ['pendente', 'aprovado', 'rejeitado'];
-    const values = [];
-    const labels = [];
-    const bg = [];
-
-    const accent      = getCssVar('--accent', '#ff7a00');      // Abertas
-    const primary     = getCssVar('--primary', '#0b5fff');     // Autorizadas p/ postagem
-    const destructive = getCssVar('--destructive', '#e11d48'); // Rejeitadas
-    const gray        = '#6b7280';
-    const colorMap = { pendente: accent, aprovado: primary, rejeitado: destructive, outros: gray };
-
-    order.forEach(k => {
-      if (statusObj[k] != null) {
-        labels.push(STATUS_LABELS[k] || k);
-        values.push(Number(statusObj[k] || 0));
-        bg.push(colorMap[k]);
-      }
-    });
-
-    const otherSum = Object.entries(statusObj)
-      .filter(([k]) => !order.includes(k))
-      .reduce((acc, [,v]) => acc + Number(v || 0), 0);
-
-    if (otherSum > 0) {
-      labels.push(STATUS_LABELS.outros);
-      values.push(otherSum);
-      bg.push(colorMap.outros);
-    }
-
-    chartStatus.data.labels = labels;
-    chartStatus.data.datasets[0].data = values;
-    chartStatus.data.datasets[0].backgroundColor = bg;
+    const entries = Object.entries(statusObj);
+    chartStatus.data.labels = entries.map(e => e[0]);
+    chartStatus.data.datasets[0].data = entries.map(e => Number(e[1] || 0));
     chartStatus.update();
   }
 }
@@ -406,6 +411,7 @@ function preencherRanking(items) {
         ${prejuFmt}
       </div>
     `;
+
     el.appendChild(item);
   });
 }
@@ -413,14 +419,14 @@ function preencherRanking(items) {
 /* ------------------------------
    Resumo do período
 --------------------------------*/
-function preencherResumo(totals = {}) {
+function preencherResumo(totals) {
   const el = document.getElementById('resumo-periodo');
   if (!el) return;
   el.innerHTML = `
-    <div class="resumo-item"><span class="label">Devoluções:</span><span class="valor">${totals.total ?? 0}</span></div>
-    <div class="resumo-item"><span class="label">Abertas:</span><span class="valor">${totals.pendentes ?? 0}</span></div>
-    <div class="resumo-item"><span class="label">Autorizadas p/ postagem:</span><span class="valor">${totals.aprovadas ?? 0}</span></div>
-    <div class="resumo-item"><span class="label">Rejeitadas:</span><span class="valor">${totals.rejeitadas ?? 0}</span></div>
+    <div class="resumo-item"><span class="label">Devoluções:</span><span class="valor">${totals.total || 0}</span></div>
+    <div class="resumo-item"><span class="label">Pendentes:</span><span class="valor">${totals.pendentes || 0}</span></div>
+    <div class="resumo-item"><span class="label">Aprovadas:</span><span class="valor">${totals.aprovadas || 0}</span></div>
+    <div class="resumo-item"><span class="label">Rejeitadas:</span><span class="valor">${totals.rejeitadas || 0}</span></div>
     <div class="resumo-item">
       <span class="label">Prejuízo total:</span>
       <span class="valor" style="color:var(--destructive)" title="${REGRAS_HINT}">${currencyBR(totals.prejuizo_total || 0)}</span>
@@ -431,36 +437,32 @@ function preencherResumo(totals = {}) {
    Carregamento / API
 --------------------------------*/
 async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) {
-  // aborta requisição anterior (evita race conditions)
-  try { currentFetch?.abort(); } catch {}
-  currentFetch = new AbortController();
-
   const params = new URLSearchParams();
   if (from) params.set('from', from);
-  if (to)   params.set('to', to);
+  if (to) params.set('to', to);
   params.set('limitTop', String(limitTop));
 
   let data = null;
   try {
-    const r = await fetch(`/api/dashboard?${params.toString()}`, { signal: currentFetch.signal });
+    const r = await fetch(`/api/dashboard?${params.toString()}`);
     if (!r.ok) throw new Error('Falha ao carregar dashboard');
     data = await r.json();
   } catch (e) {
-    if (e.name !== 'AbortError') {
-      console.warn('Falha ao buscar /api/dashboard, usando mock local.', e);
-      data = mockDashboardData();
-    } else {
-      return; // requisição abortada, não continua
-    }
+    console.warn('Falha ao buscar /api/dashboard, usando mock local.', e);
+    data = mockDashboardData();
   }
 
   if (!data || Object.keys(data).length === 0) data = mockDashboardData();
 
-  // KPIs (mantém as mesmas chaves que a API envia)
-  document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = data.totals?.total ?? 0);
-  document.getElementById('dash-pend')  && (document.getElementById('dash-pend').textContent  = data.totals?.pendentes ?? 0);
-  document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = data.totals?.aprovadas ?? 0);
-  document.getElementById('dash-rej')   && (document.getElementById('dash-rej').textContent   = data.totals?.rejeitadas ?? 0);
+  // KPIs rápidos (se existirem no DOM)
+  const elTotal = document.getElementById('dash-total');
+  const elPend  = document.getElementById('dash-pend');
+  const elAprv  = document.getElementById('dash-aprov');
+  const elRej   = document.getElementById('dash-rej');
+  if (elTotal) elTotal.textContent = data.totals.total || 0;
+  if (elPend)  elPend.textContent  = data.totals.pendentes || 0;
+  if (elAprv)  elAprv.textContent  = data.totals.aprovadas || 0;
+  if (elRej)   elRej.textContent   = data.totals.rejeitadas || 0;
 
   preencherRanking(data.top_items || []);
   preencherResumo(data.totals || {});
@@ -512,44 +514,34 @@ document.addEventListener('DOMContentLoaded', () => {
   if (inpFrom) inpFrom.value = from;
   if (inpTo)   inpTo.value = to;
 
-  updateLogLink(inpFrom?.value || null, inpTo?.value || null);
-
-  // Alterna gráficos (mostra só um por vez) + acessibilidade
-  const toggleButtons = [
-    ['btn-graf-dia','chart-prejuizo-dia'],
-    ['btn-graf-mes','chart-prejuizo-mes'],
-    ['btn-graf-6mes','chart-prejuizo-6mes'],
-    ['btn-graf-status','chart-status']
-  ];
   const showOnly = (id) => {
     ['chart-prejuizo-dia', 'chart-prejuizo-mes', 'chart-prejuizo-6mes', 'chart-status']
-      .forEach(k => { const el = document.getElementById(k); if (el) el.style.display = (k === id ? 'block' : 'none'); });
-    toggleButtons.forEach(([btnId, chartId]) => {
-      const b = document.getElementById(btnId);
-      if (b) {
-        const active = id === chartId;
-        b.classList.toggle('active', active);
-        b.setAttribute('aria-pressed', String(active));
-      }
-    });
+      .forEach(k => {
+        const el = document.getElementById(k);
+        if (el) el.style.display = (k === id ? 'block' : 'none');
+      });
+    // ativa visualmente os botões, se existirem
+    [['btn-graf-dia','chart-prejuizo-dia'],['btn-graf-mes','chart-prejuizo-mes'],['btn-graf-6mes','chart-prejuizo-6mes'],['btn-graf-status','chart-status']]
+      .forEach(([btnId, chartId]) => {
+        const b = document.getElementById(btnId);
+        if (b) b.classList.toggle('active', id === chartId);
+      });
   };
+
   document.getElementById('btn-graf-dia')?.addEventListener('click', () => showOnly('chart-prejuizo-dia'));
   document.getElementById('btn-graf-mes')?.addEventListener('click', () => showOnly('chart-prejuizo-mes'));
   document.getElementById('btn-graf-6mes')?.addEventListener('click', () => showOnly('chart-prejuizo-6mes'));
   document.getElementById('btn-graf-status')?.addEventListener('click', () => showOnly('chart-status'));
-  showOnly('chart-prejuizo-dia'); // padrão
+
+  // exibe "Últimos 30 dias" por padrão
+  showOnly('chart-prejuizo-dia');
 
   // carregar dados iniciais
   carregarDashboard({ from, to }).catch(console.error);
 
-  // aplicar filtros
-  const aplicar = () => {
+  document.getElementById('btn-aplicar')?.addEventListener('click', () => {
     const f = document.getElementById('filtro-from')?.value || null;
     const t = document.getElementById('filtro-to')?.value || null;
-    updateLogLink(f, t);
     carregarDashboard({ from: f, to: t }).catch(console.error);
-  };
-  document.getElementById('btn-aplicar')?.addEventListener('click', aplicar);
-  inpFrom?.addEventListener('keydown', (e) => { if (e.key === 'Enter') aplicar(); });
-  inpTo?.addEventListener('keydown',   (e) => { if (e.key === 'Enter') aplicar(); });
+  });
 });

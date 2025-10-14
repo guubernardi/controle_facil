@@ -3,119 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Dashboard - Retorno Facil</title>
-
-  <!-- Ícones / fontes -->
+  <title>Dashboard — Retorno Facil</title>
   <link rel="icon" href="assets/img/logo_rf.png" type="image/png"/>
-  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/x-icon">
+  <link rel="stylesheet" href="css/index.css"/>
+  <link rel="stylesheet" href="css/navbar.css"/>
+  <link rel="stylesheet" href="css/dashboard.css"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="icon">>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-
-  <!-- CSS -->
-  <link rel="stylesheet" href="css/index.css"/>
-  <link rel="stylesheet" href="css/navigation.css"/>
-  <link rel="stylesheet" href="css/dashboard.css"/>
 </head>
 <body class="dashboard-page">
 
-  <aside id="sidebar" class="sidebar">
-    <!-- topo -->
-    <div class="sidebar-header">
-      <a href="home.html" class="sidebar-logo">
-        <span class="sidebar-logo-text">Retorno Fácil</span>
-      </a>
-      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu" title="Menu">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h18v2H3z"/>
-        </svg>
-      </button>
-    </div>
-    <!-- navegação -->
-    <nav class="sidebar-nav">
-      <a href="home.html" class="sidebar-nav-item" data-page="home">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-          <polyline points="9 22 9 12 15 12 15 22"/>
-        </svg>
-        <span class="sidebar-nav-text">Home</span>
-      </a>
-
-      <a href="central.html" class="sidebar-nav-item" data-page="central">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <rect x="3" y="3" width="7" height="7"/>
-          <rect x="14" y="3" width="7" height="7"/>
-          <rect x="14" y="14" width="7" height="7"/>
-          <rect x="3" y="14" width="7" height="7"/>
-        </svg>
-        <span class="sidebar-nav-text">Central</span>
-      </a>
-
-      <a href="index.html" class="sidebar-nav-item" data-page="devolucoes">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <polyline points="9 14 4 9 9 4"/>
-          <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
-        </svg>
-        <span class="sidebar-nav-text">Devoluções</span>
-      </a>
-
-      <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboard">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <line x1="18" y1="20" x2="18" y2="10"/>
-          <line x1="12" y1="20" x2="12" y2="4"/>
-          <line x1="6" y1="20" x2="6" y2="14"/>
-        </svg>
-        <span class="sidebar-nav-text">Dashboard</span>
-      </a>
-
-      <a href="logs.html" class="sidebar-nav-item" data-page="logs">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <line x1="16" y1="13" x2="8" y2="13"/>
-          <line x1="16" y1="17" x2="8" y2="17"/>
-          <polyline points="10 9 9 9 8 9"/>
-        </svg>
-        <span class="sidebar-nav-text">Log de Custos</span>
-      </a>
-
-        <!-- Configurações -->
-        <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
-          <span class="sidebar-nav-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
-              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Configurações</span>
-        </a>
-    </nav>
-
-
-    <!-- rodapé -->
-    <div class="sidebar-footer">
-      <div class="sidebar-user">
-        <div class="sidebar-user-info">
-          <div class="sidebar-user-name">Gustavo</div>
-          <div class="sidebar-user-email">gustavo@email.com</div>
-        </div>
-      </div>
-      <button class="sidebar-logout" title="Sair" aria-label="Sair">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
-      </button>
-    </div>
-  </aside>
-<div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
-
-  <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
-  <!-- === /Sidebar === -->
-
-  <!-- cabeçalho injetado por navigation.js -->
-  <div id="cabecalho"></div>
-
   <main class="dashboard-container">
-    <!-- Cabeçalho da página -->
+ 
     <section class="dashboard-header">
       <div class="dashboard-header-content">
         <h1 class="dashboard-welcome">Bem-vindo ao Dashboard</h1>
@@ -123,7 +25,7 @@
       </div>
     </section>
 
-    <!-- Filtros -->
+     Filtros 
     <section class="dashboard-filters">
       <div class="filtros-grupo">
         <div class="campo-filtro">
@@ -134,8 +36,8 @@
           <label for="filtro-to" class="filtro-label">Data final</label>
           <input type="date" id="filtro-to" class="input-form" />
         </div>
-        <button id="btn-aplicar" class="botao botao-principal" type="button">
-          <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <button id="btn-aplicar" class="botao botao-principal">
+          <svg class="btn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/>
             <path d="M10.5 2.5L13.5 5.5"/>
           </svg>
@@ -144,14 +46,14 @@
       </div>
     </section>
 
-    <!-- KPIs -->
+     KPIs 
     <section class="dashboard-stats-grid">
-      <!-- Total -->
+
       <div class="stat-card total">
         <div class="stat-card-header">
-          <span class="stat-card-title" title="Quantidade total de solicitações de devolução registradas.">Total de Solicitações</span>
+          <span class="stat-card-title">Total de Devoluções</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--total" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg class="dash-icon icon--total" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
               <circle cx="9" cy="7" r="4"/>
               <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
@@ -160,45 +62,42 @@
           </div>
         </div>
         <div class="stat-card-value" id="dash-total">0</div>
-        <div class="stat-card-change">Todas as solicitações registradas</div>
+        <div class="stat-card-change">Todas as devoluções registradas</div>
       </div>
 
-      <!-- Abertas -->
       <div class="stat-card pendente">
         <div class="stat-card-header">
-          <span class="stat-card-title" title="Inclui solicitações em análise, recebidas no CD ou em inspeção.">Abertas</span>
+          <span class="stat-card-title">Pendentes</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--pendente" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg class="dash-icon icon--pendente" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 6 12 12 16 14"/>
             </svg>
           </div>
         </div>
         <div class="stat-card-value" id="dash-pend">0</div>
-        <div class="stat-card-change">Em análise / no CD / em inspeção</div>
+        <div class="stat-card-change">Aguardando análise</div>
       </div>
 
-      <!-- Autorizadas p/ postagem -->
       <div class="stat-card aprovado">
         <div class="stat-card-header">
-          <span class="stat-card-title" title="Autorizadas pelo marketplace/loja. O cliente pode postar. Não indica reembolso.">Autorizadas p/ postagem</span>
+          <span class="stat-card-title">Aprovadas</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--aprovado" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg class="dash-icon icon--aprovado" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
               <polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
           </div>
         </div>
         <div class="stat-card-value" id="dash-aprov">0</div>
-        <div class="stat-card-change">Cliente pode postar • não é reembolso</div>
+        <div class="stat-card-change">Devoluções aceitas</div>
       </div>
 
-      <!-- Rejeitadas -->
       <div class="stat-card rejeitado">
         <div class="stat-card-header">
-          <span class="stat-card-title" title="Solicitações recusadas. Em regra, sem reembolso.">Rejeitadas</span>
+          <span class="stat-card-title">Rejeitadas</span>
           <div class="stat-card-icon">
-            <svg class="dash-icon icon--rejeitado" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg class="dash-icon icon--rejeitado" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <line x1="15" y1="9" x2="9" y2="15"/>
               <line x1="9" y1="9" x2="15" y2="15"/>
@@ -208,9 +107,10 @@
         <div class="stat-card-value" id="dash-rej">0</div>
         <div class="stat-card-change">Devoluções negadas</div>
       </div>
+
     </section>
 
-    <!-- Linha 2: Gráfico + Resumo -->
+     Linha 2: Gráfico + Resumo 
     <section class="dashboard-main-grid">
       <div class="dashboard-card chart-card">
         <div class="dashboard-card-header">
@@ -219,7 +119,7 @@
             <p class="dashboard-card-subtitle">Acompanhe o impacto financeiro das devoluções</p>
           </div>
           <a id="link-log" href="/logs.html" class="btn-link" title="Ver log detalhado de custos">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
               <polyline points="14 2 14 8 20 8"/>
               <line x1="16" y1="13" x2="8" y2="13"/>
@@ -228,26 +128,57 @@
             </svg>
             Ver log completo
           </a>
+          <script>
+            document.addEventListener('DOMContentLoaded', () => {
+              const f = document.getElementById('filtro-from')?.value;
+              const t = document.getElementById('filtro-to')?.value;
+              const a = document.getElementById('link-log');
+              if (a && f && t) a.href = `/logs.html?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+            });
+          </script>
         </div>
-
-        <!-- controles do gráfico -->
         <div class="chart-controls" role="tablist" aria-label="Modos do gráfico">
-          <button id="btn-graf-dia" class="botao botao-outline active" aria-pressed="true">Últimos 30 dias</button>
-          <button id="btn-graf-mes" class="botao botao-outline" aria-pressed="false">Mês atual</button>
-          <button id="btn-graf-6mes" class="botao botao-outline" aria-pressed="false">Últimos 6 meses</button>
-          <button id="btn-graf-status" class="botao botao-outline" aria-pressed="false">Por Status</button>
+          <button id="btn-graf-dia" class="botao botao-outline active" aria-pressed="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Últimos 30 dias
+          </button>
+          <button id="btn-graf-mes" class="botao botao-outline" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            Mês atual
+          </button>
+          <button id="btn-graf-6mes" class="botao botao-outline" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="1" x2="12" y2="23"/>
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            Últimos 6 meses
+          </button>
+          <button id="btn-graf-status" class="botao botao-outline" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+              <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+            </svg>
+            Por Status
+          </button>
         </div>
-
-        <!-- área dos gráficos -->
         <div class="chart-wrapper">
-          <canvas id="chart-prejuizo-dia" aria-label="Gráfico de prejuízo dos últimos 30 dias" role="img"></canvas>
-          <canvas id="chart-prejuizo-mes" style="display:none;" aria-label="Gráfico de prejuízo do mês" role="img"></canvas>
-          <canvas id="chart-prejuizo-6mes" style="display:none;" aria-label="Gráfico de prejuízo (6 meses)" role="img"></canvas>
-          <canvas id="chart-status" style="display:none;" aria-label="Distribuição por status" role="img"></canvas>
+          <canvas id="chart-prejuizo-dia"></canvas>
+          <canvas id="chart-prejuizo-mes" style="display:none;"></canvas>
+          <canvas id="chart-prejuizo-6mes" style="display:none;"></canvas>
+          <canvas id="chart-status" style="display:none;"></canvas>
         </div>
       </div>
 
-      <!-- Resumo do período -->
       <div class="dashboard-card summary-card">
         <div class="dashboard-card-header">
           <div>
@@ -259,7 +190,7 @@
       </div>
     </section>
 
-    <!-- Linha 3: Ranking -->
+     Linha 3: Ranking (full width) 
     <section class="dashboard-ranking-full">
       <div class="dashboard-card">
         <div class="dashboard-card-header">
@@ -273,36 +204,8 @@
     </section>
   </main>
 
-  <!-- ...deixe o ASIDE e UM overlay só -->
-    <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
-
-    <!-- Botão flutuante para MOBILE -->
-    <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Abrir menu" title="Menu">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path d="M3 6h18M3 12h18M3 18h18"/>
-      </svg>
-    </button>
-  <!-- Scripts -->
-  <script src="js/navigation.js" defer></script>
+  <script src="js/header.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
   <script src="js/dashboard.js" defer></script>
-
-  <!-- Mantém o link do log com o período aplicado -->
-  <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const link = document.getElementById('link-log');
-      const from = document.getElementById('filtro-from');
-      const to   = document.getElementById('filtro-to');
-      const apply = () => {
-        const f = from?.value || '';
-        const t = to?.value || '';
-        link.href = (f && t) ? `/logs.html?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}` : '/logs.html';
-      };
-      apply();
-      document.getElementById('btn-aplicar')?.addEventListener('click', apply);
-      from?.addEventListener('change', apply);
-      to?.addEventListener('change', apply);
-    });
-  </script>
 </body>
 </html>

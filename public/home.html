@@ -4,43 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Home — Retorno Fácil</title>
-
-  <!-- Favicon -->
   <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
-
-  <!-- Fontes -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-
-  <!-- Estilos da sidebar (novo menu) -->
-  <link rel="stylesheet" href="css/navigation.css" />
-
-  <!-- Estilos específicos da Home -->
+  <link rel="stylesheet" href="css/navbar.css" />
   <link rel="stylesheet" href="css/home.css" />
+  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/x-icon">
 </head>
 <body class="home-page">
-  <aside id="sidebar" class="sidebar">
-    <div class="sidebar-header">
-      <div class="sidebar-logo">
-        <span class="sidebar-logo-text">Retorno Fácil</span>
-      </div>
-      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar sidebar">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 12h18M3 6h18M3 18h18"/>
-        </svg>
-      </button>
-    </div>
-      <nav class="sidebar-nav">
-        <!-- HOME -->
-        <a href="home.html" class="sidebar-nav-item" data-page="home">
-          <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-            <polyline points="9 22 9 12 15 12 15 22"/>
-          </svg>
-          <span class="sidebar-nav-text">Home</span>
-        </a>
+  <div id="cabecalho"></div>
+  <script src="js/header.js"></script>
 
+<<<<<<< Updated upstream
+  <main class="container"> 
+=======
         <!-- CENTRAL -->
         <a href="central.html" class="sidebar-nav-item" data-page="central">
           <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -84,7 +62,7 @@
         </a>
 
         <!-- Configurações -->
-        <a class="sidebar-nav-item" data-page="settings" href="settings/cofig.html">
+        <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
           <span class="sidebar-nav-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
@@ -122,6 +100,7 @@
   ========================================================== -->
   <main class="container">
     <!-- FAIXA / CARDS DE AVISOS -->
+>>>>>>> Stashed changes
     <section class="faixa" aria-label="avisos e onboarding">
       <div class="banner-carousel">
         <div class="card info" id="av_card_1">
@@ -171,14 +150,13 @@
             <div class="right">
               <h3>Integração Mercado Livre</h3>
               <p>Conexão direta chegando em breve. Por enquanto, use o CSV.</p>
-              <small><strong>Status</strong>: <span class="tag -warn">em breve</span></small>
+              <small>Status: <span class="tag -warn">em breve</span></small>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ABAS -->
     <section class="abas">
       <button class="aba ativa" data-tab="visao">
         <svg class="aba-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -197,8 +175,7 @@
         Eventos
       </button>
     </section>
-
-    <!-- PAINEL: VISÃO GERAL -->
+     
     <section id="tab_visao" class="tab painel ativo">
       <div class="grid3">
         <article class="bloco">
@@ -221,7 +198,7 @@
               </div>
               <div class="lista-action">
                 <b id="qtd_rcd" class="lista-value">0</b>
-                <button class="seta" aria-label="Abrir">
+                <button class="seta">
                   <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
                     <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
                   </svg>
@@ -243,7 +220,7 @@
               </div>
               <div class="lista-action">
                 <b id="qtd_semcsv" class="lista-value">0</b>
-                <button class="seta" aria-label="Abrir">
+                <button class="seta">
                   <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
                     <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
                   </svg>
@@ -263,7 +240,7 @@
               </div>
               <div class="lista-action">
                 <b id="qtd_csvpend" class="lista-value">0</b>
-                <button class="seta" aria-label="Abrir">
+                <button class="seta">
                   <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
                     <path fill-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm4.28 10.28a.75.75 0 000-1.06l-3-3a.75.75 0 10-1.06 1.06l1.72 1.72H8.25a.75.75 0 000 1.5h5.69l-1.72 1.72a.75.75 0 101.06 1.06l3-3z" clip-rule="evenodd"></path>
                   </svg>
@@ -295,7 +272,6 @@
       </div>
     </section>
 
-    <!-- PAINEL: EVENTOS -->
     <section id="tab_eventos" class="tab painel" aria-labelledby="Eventos">
       <div class="bloco bloco-wide" id="bloco_eventos">
         <header class="bloco-header">
@@ -316,8 +292,6 @@
     </section>
   </main>
 
-  <!-- Scripts do layout e da Home -->
-  <script src="js/navigation.js"></script>
   <script type="module" src="js/home.js"></script>
 </body>
 </html>
