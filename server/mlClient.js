@@ -1,3 +1,4 @@
+// server/mlClient.js
 'use strict';
 const fs = require('fs/promises');
 const path = require('path');
@@ -7,7 +8,6 @@ const dayjs = require('dayjs');
 const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
 const ML_BASE_URL  = process.env.ML_BASE_URL  || 'https://api.mercadolibre.com';
 const CLIENT_ID     = process.env.ML_CLIENT_ID;
-the
 const CLIENT_SECRET = process.env.ML_CLIENT_SECRET;
 
 const STORE = path.resolve(process.cwd(), 'data/meli.json');
@@ -45,10 +45,8 @@ async function ensureFreshAccount(acc) {
   if (!acc || !acc.access_token) return null;
 
   const expiresAt = dayjs(acc.expires_at || 0);
-  // margem de 60s
-  if (expiresAt.isAfter(dayjs().add(60, 'second'))) return acc;
+  if (expiresAt.isAfter(dayjs().add(60, 'second'))) return acc; // margem 60s
 
-  // expirou → refresh
   const r = await refreshToken(acc.refresh_token);
   const next = {
     ...acc,
@@ -75,11 +73,11 @@ async function getAuthedAxios() {
     headers: { Authorization: `Bearer ${acc.access_token}` }
   });
 
-  return { http, account: acc };
+  return {
+     http, account: acc 
+    };
 }
 
-module.exports = {
-  loadAccount,
-  saveAccount,
-  getAuthedAxios,
+module.exports = { 
+  loadAccount, saveAccount, getAuthedAxios 
 };

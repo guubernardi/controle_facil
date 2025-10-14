@@ -1,3 +1,4 @@
+// server/server.js
 'use strict';
 
 /**
@@ -154,64 +155,16 @@ try {
 }
 
 /* ========= OAuth Mercado Livre =========
-   Tentamos vários caminhos. Se nada existir, criamos
-   um fallback mínimo de /auth/ml/login e /auth/ml/callback
+   (usa o arquivo server/routes/ml-auth.js)
 ======================================== */
-let mlAuthRegistered = false;
-const tryRegister = (p) => {
-  try {
-    const mod = require(p);
-    if (typeof mod === 'function') {
-      mod(app);
-      console.log('[BOOT] Rotas ML OAuth carregadas de', p);
-      mlAuthRegistered = true;
-    }
-  } catch (_) { /* ignore */ }
-};
-tryRegister('./routes/ml-auth');   // server/routes/ml-auth.js
-tryRegister('./ml-auth');          // server/ml-auth.js
-tryRegister('../ml-auth');         // raiz/ml-auth.js
-
-if (!mlAuthRegistered) {
-  console.warn('[BOOT] Rotas ML OAuth não encontradas — usando fallback mínimo.');
-
-  // Alias compatível com links antigos
-  app.get('/integrations/mercadolivre/connect', (_req, res) => res.redirect('/auth/ml/login'));
-
-  // Fallback: monta a URL de autorização e redireciona
-  app.get('/auth/ml/login', (req, res) => {
-    const clientId = process.env.ML_CLIENT_ID;
-    const baseAuth = 'https://auth.mercadolivre.com.br/authorization';
-    if (!clientId) return res.status(500).send('ML_CLIENT_ID não configurado');
-
-    const redirectUri =
-      process.env.ML_REDIRECT_URI ||
-      `${req.protocol}://${req.get('host')}/auth/ml/callback`;
-
-    // um state simples só pra teste/local
-    const state = Buffer.from(JSON.stringify({ t: Date.now() })).toString('base64url');
-
-    const url = `${baseAuth}?response_type=code` +
-      `&client_id=${encodeURIComponent(clientId)}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-      `&state=${encodeURIComponent(state)}`;
-
-    res.redirect(url);
-  });
-
-  // Fallback de callback — apenas ecoa o código; o handler real pode vir depois
-  app.get('/auth/ml/callback', (req, res) => {
-    const { code, state, error, error_description } = req.query || {};
-    if (error) {
-      return res.status(400).send(`Erro do ML: ${error} - ${error_description || ''}`);
-    }
-    res
-      .status(200)
-      .send(
-        `<pre>OK (fallback)\ncode=${code}\nstate=${state}\n\n` +
-        `Configure ./routes/ml-auth.js para trocar o code por tokens.</pre>`
-      );
-  });
+try {
+  const registerMlAuth = require('./routes/ml-auth');
+  if (typeof registerMlAuth === 'function') {
+    registerMlAuth(app);
+    console.log('[BOOT] Rotas ML OAuth registradas');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas ML OAuth não carregadas (opcional):', e?.message || e);
 }
 
 /* ------------------------------------------------------------
@@ -376,16 +329,331 @@ app.get('/api/returns/logs', async (req, res) => {
 });
 
 /* ------------------------------------------------------------
- *  Dashboard & Home (mesmo que antes)
+ *  DASHBOARD (dados consolidados)
+ *  /api/dashboard?from=YYYY-MM-DD&to=YYYY-MM-DD&limitTop=5
  * ------------------------------------------------------------ */
-// ... (mantive exatamente seus handlers de /api/dashboard, /api/home/kpis,
-//     /api/home/pending, /api/home/announcements sem alterações; para
-//     economizar espaço, você pode manter os seus originais aqui.)
-// === Início bloco original ===
-/* (cole aqui exatamente os handlers /api/dashboard, /api/home/kpis, 
-   /api/home/pending e /api/home/announcements do seu arquivo atual,
-   pois não mudaram) */
-// === Fim bloco original ===
+app.get('/api/dashboard', async (req, res) => {
+  // helper mock (usado se der erro no banco)
+  const mock = () => {
+    const today = new Date();
+    const daily = Array.from({ length: 30 }).map((_, i) => {
+      const d = new Date(today.getTime() - (29 - i) * 86400000);
+      return { date: d.toISOString().slice(0, 10), prejuizo: Math.round(Math.random() * 2000) };
+    });
+    const monthly = Array.from({ length: 6 }).map((_, i) => {
+      const dt = new Date(today.getFullYear(), today.getMonth() - 5 + i, 1);
+      return { month: dt.toLocaleString('pt-BR', { month: 'short', year: 'numeric' }), prejuizo: Math.round(Math.random() * 8000) };
+    });
+    const status = { pendente: 12, aprovado: 34, rejeitado: 7 };
+    const top_items = Array.from({ length: Number(req.query.limitTop || 5) }).map((_, i) => ({
+      sku: 'SKU-' + (1000 + i),
+      devolucoes: Math.floor(Math.random() * 20) + 1,
+      prejuizo: Math.round(Math.random() * 1500)
+    }));
+    const totals = {
+      total: 120,
+      pendentes: 12,
+      aprovadas: 80,
+      rejeitadas: 28,
+      prejuizo_total: monthly.reduce((s, m) => s + Number(m.prejuizo || 0), 0)
+    };
+    return { daily, monthly, status, top_items, totals };
+  };
+
+  try {
+    const { from, to, limitTop = '5' } = req.query;
+    const lim = Math.max(1, Math.min(parseInt(limitTop, 10) || 5, 20));
+
+    // datas padrão: últimos 30 dias
+    const now = new Date();
+    const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString().slice(0, 10);
+    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29).toISOString().slice(0, 10);
+
+    const pFrom = from || defaultFrom;
+    const pTo   = to   || defaultTo;
+
+    // Monta base + custo efetivo (mesma regra visual do front)
+    const cols = await tableHasColumns('devolucoes', ['tipo_reclamacao','reclamacao','log_status','valor_produto','valor_frete','status','created_at','sku']);
+
+    if (!cols.created_at) {
+      // tabela não existe
+      return res.json(mock());
+    }
+
+    const params = [pFrom, pTo];
+
+    // DAILY
+    const qDaily = await query(
+      `
+      WITH base AS (
+        SELECT
+          created_at::date AS day,
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT day,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
+        FROM base
+      )
+      SELECT day::text AS date, COALESCE(SUM(custo),0)::numeric AS prejuizo
+      FROM calc
+      GROUP BY 1
+      ORDER BY 1
+      `,
+      params
+    );
+
+    // MONTHLY
+    const qMonthly = await query(
+      `
+      WITH base AS (
+        SELECT
+          date_trunc('month', created_at)::date AS m,
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT m,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
+        FROM base
+      )
+      SELECT to_char(m, 'Mon YYYY') AS month, COALESCE(SUM(custo),0)::numeric AS prejuizo
+      FROM calc
+      GROUP BY 1
+      ORDER BY MIN(m)
+      `,
+      params
+    );
+
+    // STATUS
+    const qStatus = await query(
+      `
+      WITH base AS (
+        SELECT LOWER(COALESCE(status,'')) AS st
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      )
+      SELECT
+        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int  AS pendente,
+        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int AS aprovado,
+        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitado
+      FROM base
+      `,
+      params
+    );
+
+    // TOTALS (contagens + prejuízo total)
+    const qTotals = await query(
+      `
+      WITH base AS (
+        SELECT
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo,
+          st
+        FROM base
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM calc)                                               AS total,
+        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%pend%')                        AS pendentes,
+        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%aprov%')                       AS aprovadas,
+        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%rej%' OR st LIKE '%neg%')      AS rejeitadas,
+        (SELECT COALESCE(SUM(custo),0)::numeric FROM calc)                              AS prejuizo_total
+      `,
+      params
+    );
+
+    // TOP ITEMS (por SKU)
+    const qTop = await query(
+      `
+      WITH base AS (
+        SELECT
+          sku,
+          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo,
+          LOWER(COALESCE(status,'')) AS st,
+          LOWER(COALESCE(log_status,'')) AS ls,
+          COALESCE(valor_produto,0) AS vp,
+          COALESCE(valor_frete,0) AS vf,
+          created_at
+        FROM devolucoes
+        WHERE created_at >= $1 AND created_at < $2
+      ),
+      calc AS (
+        SELECT
+          sku,
+          motivo,
+          CASE
+            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
+            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
+            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
+            ELSE vp + vf
+          END::numeric(12,2) AS custo
+        FROM base
+      ),
+      agg AS (
+        SELECT
+          sku,
+          COUNT(*)::int AS devolucoes,
+          COALESCE(SUM(custo),0)::numeric AS prejuizo
+        FROM calc
+        GROUP BY sku
+      ),
+      motivo_rank AS (
+        SELECT
+          sku, motivo,
+          ROW_NUMBER() OVER (PARTITION BY sku ORDER BY COUNT(*) DESC) AS rn
+        FROM calc
+        GROUP BY sku, motivo
+      )
+      SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
+      FROM agg a
+      LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
+      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      ORDER BY a.devolucoes DESC, a.prejuizo DESC
+      LIMIT $3
+      `,
+      [pFrom, pTo, lim]
+    );
+
+    const data = {
+      daily: qDaily.rows,
+      monthly: qMonthly.rows,
+      status: qStatus.rows[0] || { pendente: 0, aprovado: 0, rejeitado: 0 },
+      top_items: qTop.rows,
+      totals: qTotals.rows[0] || { total: 0, pendentes: 0, aprovadas: 0, rejeitadas: 0, prejuizo_total: 0 }
+    };
+
+    return res.json(data);
+  } catch (e) {
+    console.error('GET /api/dashboard erro:', e);
+    return res.json(mock());
+  }
+});
+
+/* ------------------------------------------------------------
+ *  KPIs / Pendências / Integrações (Home)
+ * ------------------------------------------------------------ */
+app.get('/api/home/kpis', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const where = [];
+    const params = [];
+    if (from) { params.push(from); where.push(`created_at >= $${params.length}`); }
+    if (to)   { params.push(to);   where.push(`created_at <  $${params.length}`); }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const cols = await tableHasColumns('devolucoes', ['conciliado_em']);
+    const sql = `
+      WITH base AS (
+        SELECT
+          LOWER(COALESCE(status,'')) AS st,
+          ${cols.conciliado_em ? 'conciliado_em' : 'NULL::timestamp'} AS conciliado_em
+        FROM devolucoes
+        ${whereSql}
+      )
+      SELECT
+        COUNT(*)::int                                                        AS total,
+        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int              AS pendentes,
+        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int             AS aprovadas,
+        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitadas,
+        SUM(CASE WHEN conciliado_em IS NULL THEN 1 ELSE 0 END)::int         AS a_conciliar
+      FROM base`;
+    const r = await query(sql, params);
+    res.json(r.rows[0] || { total:0, pendentes:0, aprovadas:0, rejeitadas:0, a_conciliar:0 });
+  } catch (e) {
+    console.error('GET /api/home/kpis erro:', e);
+    res.status(500).json({ error: 'Falha ao calcular KPIs.' });
+  }
+});
+
+app.get('/api/home/pending', async (_req, res) => {
+  try {
+    const cols = await tableHasColumns('devolucoes', ['log_status','cd_inspecionado_em','conciliado_em']);
+    const whereSemInspecao = [];
+    if (cols.log_status) whereSemInspecao.push(`log_status IN ('recebido_cd','em_inspecao')`);
+    if (cols.cd_inspecionado_em) whereSemInspecao.push(`cd_inspecionado_em IS NULL`);
+    const sql1 = `
+      SELECT id, id_venda, loja_nome, sku
+      FROM devolucoes
+      ${whereSemInspecao.length ? 'WHERE ' + whereSemInspecao.join(' AND ') : 'WHERE 1=0'}
+      ORDER BY id DESC LIMIT 20
+    `;
+    const sql2 = `
+      SELECT id, id_venda, loja_nome, sku
+      FROM devolucoes
+      ${cols.conciliado_em ? 'WHERE conciliado_em IS NULL' : ''}
+      ORDER BY id DESC LIMIT 20
+    `;
+    const [r1, r2] = await Promise.all([ query(sql1), query(sql2) ]);
+    res.json({
+      recebidos_sem_inspecao: r1.rows || [],
+      sem_conciliacao_csv: (cols.conciliado_em ? r2.rows : []) || [],
+      csv_pendente: []
+    });
+  } catch (e) {
+    console.error('GET /api/home/pending erro:', e);
+    res.status(500).json({ error: 'Falha ao listar pendências.' });
+  }
+});
+
+app.get('/api/home/announcements', (_req, res) => {
+  res.json({
+    items: [
+      'Conciliação por CSV do Mercado Livre disponível.',
+      'Integração direta com ML em breve (fase beta).'
+    ]
+  });
+});
+
+app.get('/api/integrations/health', async (_req, res) => {
+  try {
+    const q = await query(`select count(*)::int as n from bling_accounts`);
+    const blingOk = (q.rows[0]?.n || 0) > 0;
+    res.json({
+      bling: { ok: blingOk, mode: 'oauth' },
+      mercado_livre: { ok: false, mode: 'csv' }
+    });
+  } catch {
+    res.json({
+      bling: { ok: false, error: 'indisponível' },
+      mercado_livre: { ok: false, mode: 'csv' }
+    });
+  }
+});
 
 /* ===========================
  *  START

@@ -1,23 +1,29 @@
 {
-  "name": "devolucoes-app",
+  "name": "devolucoes-buscou",
   "version": "0.1.0",
+  "description": "",
+  "private": true,
   "type": "commonjs",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
     "dev": "nodemon server/server.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "axios": "^1.12.2",
-    "dayjs": "^1.11.18",
-    "dotenv": "^16.6.1",
-    "express": "^4.21.2",
+    "axios": "^1.7.7",
+    "cookie-parser": "^1.4.6",
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
     "pg": "^8.16.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
   },
-  "engines": {
-    "node": ">=18"
-  }
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
