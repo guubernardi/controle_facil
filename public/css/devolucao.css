@@ -312,14 +312,37 @@ body {
 }
 
 /* neutro / outline / ghost */
-.btn--neutral { background: var(--muted); color: var(--foreground); border:1px solid var(--border); }
-.btn--neutral:hover:not(:disabled){ background: var(--card); border-color: var(--primary); }
+.btn--neutral { 
+  background: var(--muted); 
+  color: var(--foreground); 
+  border:1px solid var(--border); 
+}
 
-.btn--outline { background: transparent; border:2px solid var(--border); color: var(--foreground); }
-.btn--outline:hover:not(:disabled){ background: var(--muted); border-color: var(--primary); }
+.btn--neutral:hover:not(:disabled) { 
+  background: var(--card); 
+  border-color: var(--primary); 
+}
 
-.btn--ghost { background: transparent; color: var(--muted-foreground); }
-.btn--ghost:hover:not(:disabled){ background: var(--muted); color: var(--foreground); }
+.btn--outline { 
+  background: transparent; 
+  border:2px solid var(--border); 
+  color: var(--foreground); 
+}
+
+.btn--outline:hover:not(:disabled) { 
+  background: var(--muted); 
+  border-color: var(--primary); 
+}
+
+.btn--ghost { 
+  background: transparent; 
+  color: var(--muted-foreground); 
+}
+
+.btn--ghost:hover:not(:disabled){ 
+  background: var(--muted); 
+  color: var(--foreground); 
+}
 
 /* arrow (discreto com seta à esquerda) */
 .btn--arrow {
@@ -329,12 +352,24 @@ body {
   padding: .65rem 1rem .65rem 2.25rem; /* espaço p/ ícone */
   width: auto; /* <— não ficar 100% por padrão */
 }
-.btn--arrow .btn__icon { position:absolute; left:.75rem; transition: transform .25s ease; }
-.btn--arrow:hover:not(:disabled) { border-color: var(--primary); }
-.btn--arrow:hover:not(:disabled) .btn__icon { transform: translateX(4px); }
+.btn--arrow .btn__icon { 
+  position:absolute; 
+  left:.75rem; 
+  transition: transform .25s ease; 
+}
 
-/* utilitário opcional p/ forçar 100% quando quiser */
-.btn--block { width:100%; }
+.btn--arrow:hover:not(:disabled) { 
+  border-color: var(--primary); 
+}
+
+.btn--arrow:hover:not(:disabled) .btn__icon { 
+  transform: translateX(4px); 
+}
+
+/* utilitário p/ forçar 100% quando quiser */
+.btn--block { 
+  width:100%; 
+}
 
 /* ===========================
    Money lines

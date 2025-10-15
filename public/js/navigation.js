@@ -132,7 +132,7 @@
     });
   }
 
-  // Integra o botão "Nova Devolução" (opcional)
+  // Integra o botão "Nova Devolução"
   function setupNovaDevolucaoButton() {
     const btn = document.getElementById("sidebar-nova-devolucao");
     if (!btn) return;

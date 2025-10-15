@@ -65,7 +65,7 @@ const RULES = {
     }
   },
 
-  // -------- Overrides por plataforma (opcional) --------
+  // -------- Overrides por plataforma --------
   platforms: {
     // Ex.: Amazon usa um status diferente para item que voltou ao centro
     amazon: {

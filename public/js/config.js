@@ -206,7 +206,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!card) return;
 
     const statusEl  = document.getElementById('ml-status');
-    const badgeEl   = document.getElementById('ml-badge');      // opcional
+    const badgeEl   = document.getElementById('ml-badge');      
     const btnConn   = document.getElementById('ml-connect');
     const btnDisc   = document.getElementById('ml-disconnect');
     const btnAccounts = document.getElementById('ml-accounts-btn'); // novo botão "Contas ativas"

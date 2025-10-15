@@ -1,5 +1,6 @@
 // server/routes/ml-webhook.js
 'use strict';
+
 const express = require('express');
 const { query } = require('../db');
 const { getAuthedAxios } = require('../mlClient');
@@ -11,15 +12,32 @@ module.exports = function registerMlWebhook(app){
   // Aceita QUALQUER content-type e não quebra se o body não for JSON
   router.post('/webhooks/ml', express.raw({ type: '*/*', limit: '200kb' }), async (req, res) => {
     try {
+      // 1) Validação opcional de segredo (header OU querystring)
+      const expected = (process.env.ML_WEBHOOK_SECRET || '').trim();
+      if (expected) {
+        const headerSecret = req.get('x-webhook-secret') || '';
+        const querySecret  = (req.query?.secret ?? '').toString();
+        const match = headerSecret === expected || querySecret === expected;
+        if (!match) {
+          console.warn('[ml-webhook] invalid secret', {
+            from: req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip,
+            hasHeader: !!headerSecret,
+            hasQuery: !!querySecret
+          });
+          return res.status(401).json({ ok: false, error: 'invalid_secret' });
+        }
+      }
+
+      // 2) Parsing seguro do body (sem estourar SyntaxError)
       let payload = {};
       try {
         const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : (req.body || '');
         payload = (raw && raw.trim().startsWith('{')) ? JSON.parse(raw) : {};
       } catch {
-        // Mantém payload = {}, não gera SyntaxError no log
+        // Mantém payload = {}
       }
 
-      // Processa apenas notificações de Claims
+      // 3) Processa apenas notificações de Claims (como no seu código original)
       if (payload.topic === 'claims' && payload.resource) {
         try {
           const claimId = String(payload.resource).replace(/.*\//,'').trim();
@@ -31,18 +49,21 @@ module.exports = function registerMlWebhook(app){
             const idemp = `ml-claim:${claimId}:${det?.status || det?.stage || 'unknown'}`;
 
             await query(`
-              insert into return_events (return_id, type, title, message, meta, created_by, created_at, idemp_key)
-              select d.id, 'ml-webhook', 'Atualização de Claim', 'Webhook: claims', $1, 'ml-webhook', now(), $2
-              from devolucoes d where d.id_venda::text = $3
-              on conflict (idemp_key) do nothing
-            `, [JSON.stringify({
-                  claim_id: claimId,
-                  status: det?.status || null,
-                  stage: det?.stage || null,
-                  subtype: det?.subtype || null
-                }),
-                idemp,
-                order_id
+              INSERT INTO return_events
+                (return_id, type, title, message, meta, created_by, created_at, idemp_key)
+              SELECT d.id, 'ml-webhook', 'Atualização de Claim', 'Webhook: claims', $1, 'ml-webhook', now(), $2
+              FROM devolucoes d
+              WHERE d.id_venda::text = $3
+              ON CONFLICT (idemp_key) DO NOTHING
+            `, [
+              JSON.stringify({
+                claim_id: claimId,
+                status: det?.status || null,
+                stage: det?.stage || null,
+                subtype: det?.subtype || null
+              }),
+              idemp,
+              order_id
             ]);
 
             // Notifica front (SSE)
@@ -60,6 +81,7 @@ module.exports = function registerMlWebhook(app){
         }
       }
 
+      // 4) Sempre ACK rápido
       return res.json({ ok: true });
     } catch (e) {
       console.error('[ml-webhook] erro:', e);

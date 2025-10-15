@@ -21,9 +21,9 @@ const guides = {
             "<li><code>ML_CLIENT_ID</code></li>" +
             "<li><code>ML_CLIENT_SECRET</code></li>" +
             "<li><code>ML_REDIRECT_URI</code> → <code>/auth/ml/callback</code></li>" +
-            "<li><code>ML_AUTH_URL</code> (opcional, padrão oficial)</li>" +
-            "<li><code>ML_TOKEN_URL</code> (opcional, padrão oficial)</li>" +
-            "<li><code>ML_BASE_URL</code> (opcional, padrão oficial)</li>" +
+            "<li><code>ML_AUTH_URL</code></li>" +
+            "<li><code>ML_TOKEN_URL</code></li>" +
+            "<li><code>ML_BASE_URL</code></li>" +
             "<li><code>ML_WEBHOOK_URL</code> (URL pública para webhooks)</li>" +
           "</ul>"
       },
@@ -220,7 +220,7 @@ const guides = {
     ]
   },
 
-  // (opcional) placeholder para Shopee
+  //placeholder para Shopee
   shopee: {
     title: "Guia · Shopee",
     sections: [

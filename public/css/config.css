@@ -759,7 +759,7 @@ badge badge--erp > span {
   gap: 10px;
 }
 
-/* estado “desabilitado/em breve” (opcional) */
+/* estado “desabilitado/em breve” */
 .integration-card.is-disabled {
   opacity: .65;
   filter: grayscale(.08);
