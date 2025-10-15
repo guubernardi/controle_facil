@@ -875,39 +875,95 @@ badge badge--erp > span {
 [data-ml="card"] .integration-logo img{ max-width:140px; } /* ML pode ser um pouco maior */
 
 /* Botões do rodapé do card quebram linha quando precisar */
-.integration-actions{ display:flex; flex-wrap:wrap; gap:8px; }
-.integration-actions .btn{ flex:0 0 auto; }
+.integration-actions { 
+  display:flex; 
+  flex-wrap:wrap; 
+  gap:8px; 
+}
+
+.integration-actions .btn { 
+  flex:0 0 auto; 
+}
 
 /* Pill de status do ML */
+
 .ml-pill{
   display:inline-flex; align-items:center; gap:.4rem;
   padding:.25rem .6rem; border-radius:999px;
   font-size:.85rem; font-weight:600;
   background:#eef2ff; color:#3730a3;
 }
-.ml-pill.ok{ background:#e9f8ef; color:#047857; }
-.ml-pill.off{ background:#f3f4f6; color:#6b7280; }
+
+.ml-pill.ok { 
+  background:#e9f8ef; 
+  color:#047857; 
+}
+
+.ml-pill.off { 
+  background:#f3f4f6; 
+  color:#6b7280; 
+}
 
 /* Lista de contas salva (compacta) */
-[data-ml="accounts"]{ display:grid; gap:.5rem; margin-top:.25rem; }
-.ml-acc-row{
-  display:flex; align-items:center; justify-content:space-between; gap:.75rem;
-  padding:.5rem .75rem; border:1px solid #e5e7eb; border-radius:10px; background:#fff;
+[data-ml="accounts"]{ 
+  display:grid; 
+  gap:.5rem; 
+  margin-top:.25rem; 
 }
-.ml-acc-left{ display:flex; gap:.5rem; align-items:center; min-width:0; }
+
+.ml-acc-row{
+  display:flex; 
+  align-items:center; 
+  justify-content:space-between; 
+  gap:.75rem;
+  padding:.5rem .75rem; 
+  border:1px solid #e5e7eb; 
+  border-radius:10px; 
+  background:#fff;
+}
+
+.ml-acc-left { 
+  display:flex; 
+  gap:.5rem; 
+  align-items:center; 
+  min-width:0; 
+}
+
 .ml-acc-name{
   font-weight:600;
-  max-width:60%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:60%; 
+  white-space:nowrap; 
+  overflow:hidden; 
+  text-overflow:ellipsis;
 }
-.ml-acc-id{ color:#6b7280; font-size:.9rem; }
-.ml-badge{ font-size:.75rem; padding:.15rem .5rem; border-radius:999px; background:#ecfeff; color:#0e7490; border:1px solid #a5f3fc; }
 
-/* (opcional) se ainda aparecer o JSON de debug, esconda */
-[data-ml="log"]{ display:none !important; }
+.ml-acc-id { 
+  color:#6b7280; 
+  font-size:.9rem; 
+}
+
+.ml-badge { 
+  font-size:.75rem; 
+  padding:.15rem .5rem; 
+  border-radius:999px; 
+  background:#ecfeff; 
+  color:#0e7490; 
+  border:1px solid #a5f3fc; 
+}
+
+/*se ainda aparecer o JSON de debug, esconda */
+[data-ml="log"] { 
+  display:none !important; 
+}
 
 /* === Correções de layout dos cards === */
-.integrations-grid{ align-items:start; }        /* evita alongar verticalmente */
-.integration-card{ height:auto; }               /* deixa o conteúdo ditar a altura */
+.integrations-grid { 
+  align-items:start; 
+}      
+
+.integration-card { 
+  height:auto; 
+}              
 
 /* As ações devem vir logo após o cabeçalho, não coladas no rodapé */
 .integration-card .integration-actions{
@@ -918,6 +974,37 @@ badge badge--erp > span {
 [data-ml="accounts"].ring{
   box-shadow:0 0 0 3px #bfdbfe;
   transition: box-shadow .25s;
+}
+
+/* --- Ajuste do cabeçalho do card de integração --- */
+.integration-card .integration-head{
+  display: flex;          /* já deve estar */
+  align-items: center;    /* já deve estar */
+  gap: 12px;              /* já deve estar */
+  flex-wrap: wrap;        /* ➜ permite quebrar linha */
+}
+
+/* largura fixa do logo pra conseguirmos alinhar a pílula abaixo */
+.integration-card .integration-logo{
+  flex: 0 0 64px;         /* ajuste se o seu logo tiver outro tamanho */
+}
+
+/* título/descrição ocupam o espaço todo */
+.integration-card .integration-head > div{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* pílula do nickname (verde) vai pra LINHA DE BAIXO e alinha sob o título */
+#ml-badge,
+.pill--nick {              
+  flex-basis: 100%;         
+  margin-left: calc(64px + 12px); 
+  margin-top: 6px;
+  max-width: calc(100% - (64px + 12px));
+  white-space: nowrap;      
+  overflow: hidden;
+  text-overflow: ellipsis;  
 }
 
 
