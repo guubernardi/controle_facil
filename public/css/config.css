@@ -945,6 +945,7 @@ badge badge--erp > span {
 .ml-acc-id { 
   color:#6b7280; 
   font-size:.9rem; 
+  display: none;
 }
 
 .ml-badge { 
