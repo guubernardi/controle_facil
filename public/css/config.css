@@ -1007,6 +1007,19 @@ badge badge--erp > span {
   text-overflow: ellipsis;  
 }
 
+/* Esconde a pílula verde */
+#ml-badge { 
+  display: none !important; 
+}
+
+/* Deixa o status ocupar a linha e quebrar se precisar */
+#ml-status{
+  display: block;
+  margin-top: 6px;
+  white-space: normal;
+}
+
+
 
 /* ===========================
    Responsivo
