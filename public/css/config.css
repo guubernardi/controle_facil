@@ -840,6 +840,70 @@ badge badge--erp > span {
   line-height: 1;
 }
 
+/* === GRID dos cards de integrações === */
+.integrations-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+  gap:16px;
+  align-items:stretch;
+}
+
+/* === Card base === */
+.integration-card{
+  display:flex; flex-direction:column; gap:12px;
+  background:#fff; border:1px solid #e5e7eb; border-radius:14px;
+  padding:16px;
+  min-width:0;        /* evita estourar a coluna do grid */
+  overflow:hidden;    /* qualquer sobra, corta dentro do card */
+}
+
+.integration-head{
+  display:flex; align-items:center; gap:12px; min-width:0;
+}
+.integration-head > div{ min-width:0; } /* textos podem encolher */
+.integration-head h3{
+  margin:0 0 2px; font-size:1.1rem;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.integration-head small{
+  color:#64748b;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
+/* Logo das integrações (sem width fixo no HTML) */
+.integration-logo img{ display:block; max-width:120px; height:auto; }
+[data-ml="card"] .integration-logo img{ max-width:140px; } /* ML pode ser um pouco maior */
+
+/* Botões do rodapé do card quebram linha quando precisar */
+.integration-actions{ display:flex; flex-wrap:wrap; gap:8px; }
+.integration-actions .btn{ flex:0 0 auto; }
+
+/* Pill de status do ML */
+.ml-pill{
+  display:inline-flex; align-items:center; gap:.4rem;
+  padding:.25rem .6rem; border-radius:999px;
+  font-size:.85rem; font-weight:600;
+  background:#eef2ff; color:#3730a3;
+}
+.ml-pill.ok{ background:#e9f8ef; color:#047857; }
+.ml-pill.off{ background:#f3f4f6; color:#6b7280; }
+
+/* Lista de contas salva (compacta) */
+[data-ml="accounts"]{ display:grid; gap:.5rem; margin-top:.25rem; }
+.ml-acc-row{
+  display:flex; align-items:center; justify-content:space-between; gap:.75rem;
+  padding:.5rem .75rem; border:1px solid #e5e7eb; border-radius:10px; background:#fff;
+}
+.ml-acc-left{ display:flex; gap:.5rem; align-items:center; min-width:0; }
+.ml-acc-name{
+  font-weight:600;
+  max-width:60%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ml-acc-id{ color:#6b7280; font-size:.9rem; }
+.ml-badge{ font-size:.75rem; padding:.15rem .5rem; border-radius:999px; background:#ecfeff; color:#0e7490; border:1px solid #a5f3fc; }
+
+/* (opcional) se ainda aparecer o JSON de debug, esconda */
+[data-ml="log"]{ display:none !important; }
 
 
 /* ===========================
