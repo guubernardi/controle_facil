@@ -897,6 +897,7 @@ badge badge--erp > span {
 .ml-pill.ok { 
   background:#e9f8ef; 
   color:#047857; 
+  display: none;
 }
 
 .ml-pill.off { 
