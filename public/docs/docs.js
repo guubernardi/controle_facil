@@ -1,4 +1,3 @@
-<script>
 const guides = {
   ml: {
     title: "Guia · Mercado Livre",
@@ -47,4 +46,4 @@ const content = document.getElementById("content");
 content.innerHTML = g.sections.map(s =>
   `<section id="${s.id}"><h2>${s.h}</h2>${s.html}</section>`
 ).join("");
-</script>
+
