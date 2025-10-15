@@ -29,47 +29,272 @@ module.exports = function registerMlAuth(app) {
     redirectTo = '/settings/config.html#integracoes',
     autoDelayMs = ok ? 2500 : 5000
   }) {
-    return `<!doctype html><html lang="pt-BR"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+    return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${ok ? 'Conectado' : 'Erro'} - Controle Fácil</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--fg:#0f172a;--muted:#64748b;--border:#e2e8f0;--bg:#f8fafc;--primary:#2563eb;--ok:#16a34a;--err:#dc2626}
-*{box-sizing:border-box}html,body{height:100%}
-body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--fg);display:grid;place-items:center;padding:24px}
-.card{width:min(740px,92vw);background:#fff;border:1px solid var(--border);border-radius:16px;padding:28px;box-shadow:0 10px 24px rgba(2,6,23,.06);animation:fade .35s ease}
-.head{display:flex;gap:14px;align-items:center;margin-bottom:10px}
-.icon{width:36px;height:36px;border-radius:999px;display:grid;place-items:center;background:${ok ? 'rgba(22,163,74,.1)' : 'rgba(220,38,38,.1)'};color:${ok ? 'var(--ok)' : 'var(--err)'}}
-h1{font-size:1.35rem;margin:0;letter-spacing:-.01em}.msg{color:var(--muted);margin:.25rem 0 1rem}
-.content{line-height:1.65}.content p{margin:.5rem 0}
-.actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
-a.btn{display:inline-flex;align-items:center;gap:.5rem;text-decoration:none;border-radius:10px;padding:.625rem 1rem;border:1px solid var(--border);background:#fff;color:var(--fg);font-weight:600}
-a.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
-small.hint{display:block;color:var(--muted);margin-top:10px}
-code,pre{background:#0f172a0d;border:1px solid var(--border);border-radius:10px;padding:10px;display:block;overflow:auto}
-@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+:root {
+  /* Brand azul @usecontrolefacil */
+  --primary: #0056D2;
+  --primary-dark: #0042A6;
+  --primary-light: #E6F0FF;
+  
+  /* Feedback */
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  
+  /* Tipografia */
+  --text-primary: #1E293B;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  
+  /* Superfícies e bordas */
+  --bg-page: #F8FAFC;
+  --bg-card: #FFFFFF;
+  --border: #E5E7EB;
+  
+  /* Sombras */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  
+  /* Raios */
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.card {
+  width: min(540px, 100%);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px;
+  box-shadow: var(--shadow-lg);
+  animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.head {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: ${ok ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'};
+  color: ${ok ? 'var(--success)' : 'var(--danger)'};
+  animation: scaleIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.1s backwards;
+}
+
+h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.msg {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  margin: 0 0 20px 0;
+  line-height: 1.6;
+}
+
+.content {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  margin: 16px 0;
+}
+
+.content p {
+  margin: 12px 0;
+}
+
+.content strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  padding: 12px 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+a.btn:hover {
+  background: var(--bg-page);
+  border-color: var(--text-muted);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+a.btn:active {
+  transform: translateY(0);
+}
+
+a.btn.primary {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+  box-shadow: var(--shadow-sm);
+}
+
+a.btn.primary:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+  box-shadow: var(--shadow-md);
+}
+
+small.hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  margin-top: 16px;
+  line-height: 1.5;
+}
+
+code, pre {
+  background: var(--primary-light);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  display: block;
+  overflow: auto;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+code {
+  display: inline;
+  padding: 2px 6px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Responsividade */
+@media (max-width: 640px) {
+  .card {
+    padding: 28px 24px;
+  }
+  
+  h1 {
+    font-size: 1.25rem;
+  }
+  
+  .icon {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .actions {
+    flex-direction: column;
+  }
+  
+  a.btn {
+    width: 100%;
+  }
+}
 </style>
 ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(redirectTo)};}, ${autoDelayMs});</script>` : ''}
-</head><body>
+</head>
+<body>
 <main class="card" role="status" aria-live="polite">
   <div class="head">
     <div class="icon" aria-hidden="true">
-      ${ok ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2l-3.5-3.5-1.4 1.4L9 19 20 8l-1.4-1.4z"/></svg>' :
-              '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1010 10A10.011 10.011 0 0012 2zm1 15h-2v-2h2zm0-4h-2V7h2z"/></svg>'}
+      ${ok ? '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>' :
+              '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>'}
     </div>
     <h1>${escapeHtml(title)}</h1>
   </div>
-  <p class="msg">${ok ? 'Tokens salvos. Você já pode usar as rotas protegidas.' : 'Não foi possível concluir a conexão.'}</p>
+  <p class="msg">${ok ? 'Tokens salvos com sucesso. Você já pode usar as rotas protegidas.' : 'Não foi possível concluir a conexão. Verifique as credenciais.'}</p>
   <div class="content">${message || ''}${detailsHTML || ''}</div>
   <div class="actions">
     ${redirectTo ? `<a class="btn primary" href="${redirectTo}">Voltar às integrações</a>` : ''}
     <a class="btn" href="/index.html">Ir para Devoluções</a>
   </div>
-  <small class="hint">${ok ? 'Você será redirecionado em instantes…' : 'Revise as credenciais e tente novamente.'}</small>
+  <small class="hint">${ok ? 'Você será redirecionado automaticamente em instantes…' : 'Revise as credenciais e tente novamente.'}</small>
 </main>
-</body></html>`;
-  }
+</body>
+</html>
+`; }
 
   // ---------- LOGIN ----------
   app.get('/auth/ml/login', (req, res) => {
