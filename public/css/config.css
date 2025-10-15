@@ -905,6 +905,21 @@ badge badge--erp > span {
 /* (opcional) se ainda aparecer o JSON de debug, esconda */
 [data-ml="log"]{ display:none !important; }
 
+/* === Correções de layout dos cards === */
+.integrations-grid{ align-items:start; }        /* evita alongar verticalmente */
+.integration-card{ height:auto; }               /* deixa o conteúdo ditar a altura */
+
+/* As ações devem vir logo após o cabeçalho, não coladas no rodapé */
+.integration-card .integration-actions{
+  margin-top:12px !important;
+}
+
+/* Destaque rápido quando rolar até a lista de contas */
+[data-ml="accounts"].ring{
+  box-shadow:0 0 0 3px #bfdbfe;
+  transition: box-shadow .25s;
+}
+
 
 /* ===========================
    Responsivo

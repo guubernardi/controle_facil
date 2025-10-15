@@ -77,7 +77,7 @@ function renderAccountsList(data){
     left.innerHTML = `
       <span class="ml-acc-name">${acc.nickname}</span>
       <span class="ml-acc-id">(${acc.user_id})</span>
-      ${active === acc.user_id ? `<span class="ml-badge">ativa</span>` : ''}
+      ${active === acc.user_id ? `<span class="ml-badge">Ativa</span>` : ''}
     `;
 
     const actions = document.createElement('div');

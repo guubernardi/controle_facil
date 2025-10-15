@@ -18,8 +18,7 @@ document.addEventListener("DOMContentLoaded", () => {
       try{
         const r = await fetch(`/api/settings${path}`);
         if(!r.ok) throw 0;
-        // pode vir 204 sem body
-        if (r.status === 204) return null;
+        if (r.status === 204) return null; // pode vir 204 sem body
         const ct = r.headers.get("content-type") || "";
         return ct.includes("application/json") ? await r.json() : null;
       }catch{
@@ -207,9 +206,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!card) return;
 
     const statusEl  = document.getElementById('ml-status');
-    const badgeEl   = document.getElementById('ml-badge');
+    const badgeEl   = document.getElementById('ml-badge');      // opcional
     const btnConn   = document.getElementById('ml-connect');
     const btnDisc   = document.getElementById('ml-disconnect');
+    const btnAccounts = document.getElementById('ml-accounts-btn'); // novo botão "Contas ativas"
 
     function setLoading(on) {
       if (on && statusEl)  statusEl.textContent = 'Verificando status…';
@@ -225,7 +225,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function applyUiConnected(nickname, expiresAt) {
       card.classList.add('is-connected');
-      if (statusEl) statusEl.innerHTML = `Conectado como <b>@${nickname}</b>${expiresAt ? ` (expira: ${new Date(expiresAt).toLocaleString('pt-BR')})` : ''}`;
+      if (statusEl) {
+        const exp = expiresAt ? ` (expira: ${new Date(expiresAt).toLocaleString('pt-BR')})` : '';
+        statusEl.innerHTML = `Conectado como <b>@${esc(nickname || 'conta')}</b>${exp}`;
+      }
       if (badgeEl)  badgeEl.textContent = 'Conectado';
       if (btnConn)  btnConn.hidden = true;
       if (btnDisc)  btnDisc.hidden = false;
@@ -237,50 +240,36 @@ document.addEventListener("DOMContentLoaded", () => {
         const r = await fetch('/api/ml/status', { cache: 'no-store' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
-
-        if (j.connected) {
-          applyUiConnected(j.nickname || 'conta', j.expires_at);
-        } else {
-          applyUiDisconnected();
-        }
+        if (j.connected) applyUiConnected(j.nickname || 'conta', j.expires_at);
+        else applyUiDisconnected();
       } catch (e) {
         console.warn('[ML] status falhou:', e);
         applyUiDisconnected();
       }
     }
 
+    // Botão "Contas ativas" – rola até a lista e destaca
+    btnAccounts?.addEventListener('click', () => {
+      const panel = document.querySelector('[data-ml="accounts"]');
+      if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        panel.classList.add('ring');
+        setTimeout(() => panel.classList.remove('ring'), 1200);
+      }
+    });
+
+    // Desconectar
     btnDisc?.addEventListener('click', async () => {
       try {
         const r = await fetch('/api/ml/disconnect', { method: 'POST' });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         await refreshMlStatus();
-        // reaproveita o toast global se houver
-        const t = document.getElementById('toast');
-        if (t) { t.textContent = 'Desconectado do Mercado Livre.'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2000); }
+        toast('Desconectado do Mercado Livre.');
       } catch (e) {
         alert('Falha ao desconectar.');
       }
     });
 
-    // Status da integração Mercado Livre
-    (async () => {
-      const s = document.getElementById('ml-status');
-      const btnDisc = document.getElementById('ml-disconnect');
-      if (!s) return;
-      try {
-        const r = await fetch('/api/ml/me');
-        const j = await r.json();
-        if (j.ok) {
-          s.textContent = `Conectado: ${j.account.nickname}`;
-          if (btnDisc) btnDisc.hidden = false; // (a rota de desconectar é opcional)
-        } else {
-          s.textContent = 'Não conectado';
-        }
-      } catch {
-        s.textContent = 'Não conectado';
-      }
-    })();
-    
     // primeira checagem ao abrir a página/aba
     refreshMlStatus();
   })();
