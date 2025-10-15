@@ -19,7 +19,6 @@ try {
 const express = require('express');
 const path = require('path');
 const { query } = require('./db');
-const events = require('./events');
 
 const app = express();
 
@@ -34,16 +33,32 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 
-app.get('/docs', (_req, res) => res.redirect('/docs/index.html'));
-app.get('/docs/:slug', (req, res) => {
-  res.redirect(`/docs/index.html?g=${encodeURIComponent(req.params.slug)}`);
-});
-
-/** Static */
+/** Static (raiz /public) */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// rota SSE
-app.get('/events', events.sse);
+/** Aliases para documentação estática */
+// /docs → /public/docs/index.html
+app.get('/docs', (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'docs', 'index.html'));
+});
+// /docs/:slug → /public/docs/index.html?g=:slug  (ex.: /docs/ml, /docs/bling, /docs/api)
+app.get('/docs/:slug', (req, res) => {
+  const slug = encodeURIComponent(req.params.slug || '');
+  res.redirect(`/docs/index.html?g=${slug}`);
+});
+
+/** SSE (opcional) */
+try {
+  const events = require('./events');
+  if (typeof events?.sse === 'function') {
+    app.get('/events', events.sse);
+    console.log('[BOOT] SSE /events habilitado');
+  } else {
+    console.warn('[BOOT] SSE desabilitado: função sse não encontrada em ./events');
+  }
+} catch (e) {
+  console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
+}
 
 /** JSON UTF-8 nas rotas /api */
 app.use('/api', (_req, res, next) => {
@@ -547,7 +562,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      WHERE a.sku IS NOT NULL AND A.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
