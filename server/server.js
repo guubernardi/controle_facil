@@ -34,6 +34,11 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 
+app.get('/docs', (_req, res) => res.redirect('/docs/index.html'));
+app.get('/docs/:slug', (req, res) => {
+  res.redirect(`/docs/index.html?g=${encodeURIComponent(req.params.slug)}`);
+});
+
 /** Static */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
