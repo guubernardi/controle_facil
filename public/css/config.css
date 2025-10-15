@@ -888,10 +888,14 @@ badge badge--erp > span {
 /* Pill de status do ML */
 
 .ml-pill{
-  display:inline-flex; align-items:center; gap:.4rem;
-  padding:.25rem .6rem; border-radius:999px;
-  font-size:.85rem; font-weight:600;
-  background:#eef2ff; color:#3730a3;
+  display:inline-flex; 
+  align-items:center; gap:.4rem;
+  padding:.25rem .6rem; 
+  border-radius:999px;
+  font-size:.85rem; 
+  font-weight:600;
+  background:#eef2ff; 
+  color:#3730a3;
 }
 
 .ml-pill.ok { 
@@ -1020,6 +1024,25 @@ badge badge--erp > span {
   white-space: normal;
 }
 
+/* Esconde a pílula verde (apelido) no header do card do Mercado Livre */
+[data-integration="ml"] .integration-head .pill,
+[data-integration="ml"] .integration-head .chip,
+[data-integration="ml"] .integration-head .tag,
+[data-integration="ml"] .integration-head .badge--ok,
+[data-integration="ml"] .integration-head [id*="badge"] {
+  display: none !important;
+}
+
+/* Garante que o título quebre linha bonitinho e dê espaço ao status */
+[data-integration="ml"] .integration-head h3 {
+  width: 100%;
+  margin-bottom: 6px;
+}
+#ml-status {
+  display: block;
+  margin-top: 2px;
+  white-space: normal;
+}
 
 
 /* ===========================
