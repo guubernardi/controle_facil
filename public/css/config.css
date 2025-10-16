@@ -1179,3 +1179,7 @@ body {
     flex-shrink: 0;
   }
 }
+
+#ml-stores-modal [hidden] {
+  display: none !important;
+}

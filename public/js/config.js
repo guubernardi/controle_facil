@@ -4,11 +4,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const $  = (sel, ctx = document) => ctx.querySelector(sel);
   const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
 
-  // injeta CSS mínimo p/ toast + confirm (evita ficar “fora da tela”)
-  const ensureConfirmStyles = () => {
-    if (document.getElementById("confirm-styles")) return;
+  // injeta CSS mínimo p/ toast + confirm + modal [hidden]
+  const ensureUiStyles = () => {
+    if (document.getElementById("rf-ui-styles")) return;
     const s = document.createElement("style");
-    s.id = "confirm-styles";
+    s.id = "rf-ui-styles";
     s.textContent = `
       .toast-notification{position:fixed;right:20px;bottom:20px;z-index:9999;opacity:0;transform:translateY(10px);transition:all .25s ease;background:#111827;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:8px;align-items:center}
       .toast-notification.show{opacity:1;transform:none}
@@ -20,10 +20,12 @@ document.addEventListener("DOMContentLoaded", () => {
       .btn--danger{background:#dc2626;color:#fff;border-color:#dc2626}
       .spinner{display:inline-block;width:18px;height:18px;border-radius:50%;border:2px solid #e5e7eb;border-top-color:var(--primary,#0056d2);animation:mlspin .8s linear infinite;margin-right:8px;vertical-align:middle}
       @keyframes mlspin {to{transform:rotate(360deg)}}
+      /* garante que os blocos do modal obedeçam [hidden] sem interferir no resto do app */
+      #ml-stores-modal [hidden]{display:none !important;}
     `;
     document.head.appendChild(s);
   };
-  ensureConfirmStyles();
+  ensureUiStyles();
 
   const toast = (msg, type = "info") => {
     const existing = document.querySelector(".toast-notification");
@@ -57,7 +59,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const confirm = (msg) =>
     new Promise((resolve) => {
-      ensureConfirmStyles();
       const overlay = document.createElement("div");
       overlay.className = "confirm-overlay";
       overlay.innerHTML = `
@@ -234,7 +235,12 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
-  btnUsersSave ?.addEventListener("click", async () => { showLoading(btnUsersSave); try { await api.put("/users", users); toast("Lista de usuários salva!", "success"); } catch { toast("Erro ao salvar usuários", "error"); } finally { hideLoading(btnUsersSave); }});
+  btnUsersSave ?.addEventListener("click", async () => {
+    showLoading(btnUsersSave);
+    try { await api.put("/users", users); toast("Lista de usuários salva!", "success"); }
+    catch { toast("Erro ao salvar usuários", "error"); }
+    finally { hideLoading(btnUsersSave); }
+  });
   btnUsersReload?.addEventListener("click", loadUsers);
 
   // ================== REGRAS ==================
@@ -283,7 +289,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   btnRegrasReload?.addEventListener("click", loadRegras);
-  $$('input[type="checkbox"]', formRegras).forEach((c) => c.addEventListener("change", () => toast("Configuração alterada (lembre-se de salvar)", "info")));
+  $$('input[type="checkbox"]', formRegras).forEach((c) =>
+    c.addEventListener("change", () => toast("Configuração alterada (lembre-se de salvar)", "info"))
+  );
 
   // ------- carregar tudo na primeira entrada -------
   loadEmpresa(); loadUsers(); loadRegras();
@@ -368,6 +376,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const openModal  = () => { if (!modal) return; modal.hidden = false; document.body.style.overflow = "hidden"; };
     const closeModal = () => { if (!modal) return; modal.hidden = true;  document.body.style.overflow = ""; };
 
+    // helper: mostra apenas um estado do modal
+    const setStoresState = (state) => {
+      if (!modal) return;
+      const is = (s) => state === s;
+      modalLoading.hidden = !is("loading");
+      modalContent.hidden = !is("content");
+      modalEmpty.hidden   = !is("empty");
+      modalError.hidden   = !is("error");
+    };
+
     // normaliza resposta de /api/ml/stores OU /api/ml/me (fallback)
     const normalizeStores = (data) => {
       if (!data) return [];
@@ -381,7 +399,6 @@ document.addEventListener("DOMContentLoaded", () => {
           site_id: a.site_id || a.site || "MLB",
         }));
       }
-      // algumas implementações retornam um único objeto
       if (data.user_id || data.id || data.nickname) {
         return [{
           id: data.user_id || data.id,
@@ -394,105 +411,53 @@ document.addEventListener("DOMContentLoaded", () => {
       return [];
     };
 
-    async function fetchStores() {
-      // tenta primeiro o endpoint dedicado
-      try {
-        const r1 = await fetch("/api/ml/stores", { cache: "no-store" });
-        if (r1.ok) return normalizeStores(await r1.json());
-      } catch {}
-      // fallback para /api/ml/me (várias bases já têm)
-      try {
-        const r2 = await fetch("/api/ml/me", { cache: "no-store" });
-        if (r2.ok) return normalizeStores(await r2.json());
-      } catch {}
-      return [];
-    }
-
-// adicione perto dos outros "const" do modal:
-let _loadingStores = false;
-
-  async function loadStores() {
-    if (!modal || _loadingStores) return;   // evita chamadas paralelas
-    _loadingStores = true;
-
-    // estado inicial (apenas loading visível)
-    modalLoading.hidden = false;
-    modalContent.hidden = true;
-    modalEmpty.hidden   = true;
-    modalError.hidden   = true;
-    modalContent.innerHTML = "";
-
-    try {
-      // tenta /api/ml/stores; se falhar, cai para /api/ml/me
-      const getJson = async (url) => {
-        const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      };
-
-      let data = null;
-      try { data = await getJson("/api/ml/stores"); }
-      catch { try { data = await getJson("/api/ml/me"); } catch { data = null; } }
-
-      const normalizeStores = (d) => {
-        if (!d) return [];
-        if (Array.isArray(d.stores)) return d.stores;
-        if (Array.isArray(d.accounts)) {
-          return d.accounts.map(a => ({
-            id: a.user_id || a.id,
-            name: a.nickname || a.name || `Conta ${a.user_id || a.id}`,
-            nickname: a.nickname,
-            site_id: a.site_id || "MLB",
-            active: a.active ?? true
-          }));
-        }
-        if (d.user_id || d.id || d.nickname) {
-          return [{
-            id: d.user_id || d.id,
-            name: d.nickname || d.name || "Conta",
-            nickname: d.nickname,
-            site_id: d.site_id || "MLB",
-            active: true
-          }];
-        }
-        return [];
-      };
-
-      const stores = normalizeStores(data);
-
-      if (!stores.length) {
-        modalLoading.hidden = true;
-        modalEmpty.hidden   = false;  // mostra “Nenhuma loja conectada”
-        return;
-      }
-
-      modalContent.innerHTML = stores.map(store => `
-        <div class="modal-store-item">
-          <div class="modal-store-info">
-            <div class="modal-store-name">${esc(store.name || store.nickname || "Loja")}</div>
-            <div class="modal-store-id">ID: ${esc(store.id || "N/A")} • ${esc(store.site_id || "")}</div>
-          </div>
-          <span class="modal-store-badge ${store.active ? "active" : "inactive"}">
-            ${store.active ? "Ativa" : "Inativa"}
-          </span>
+    const renderStoreItem = (store) => `
+      <div class="modal-store-item">
+        <div class="modal-store-info">
+          <div class="modal-store-name">${esc(store.name || store.nickname || "Loja")}</div>
+          <div class="modal-store-id">ID: ${esc(store.id || "N/A")} • ${esc(store.site_id || "")}</div>
         </div>
-      `).join("");
+        <span class="modal-store-badge ${store.active ? "active" : "inactive"}">
+          ${store.active ? "Ativa" : "Inativa"}
+        </span>
+      </div>
+    `;
 
-      modalLoading.hidden = true;
-      modalContent.hidden = true;   // garante reset
-      modalEmpty.hidden   = true;
-      modalError.hidden   = true;
-      modalContent.hidden = false;  // exibe conteúdo
-    } catch (e) {
-      console.error("[ML Modal] Erro ao carregar lojas:", e);
-      modalLoading.hidden = true;
-      modalContent.hidden = true;
-      modalEmpty.hidden   = true;
-      modalError.hidden   = false;
-    } finally {
-      _loadingStores = false;
+    let _loadingStores = false;
+    async function loadStores() {
+      if (!modal || _loadingStores) return;   // evita chamadas paralelas
+      _loadingStores = true;
+
+      setStoresState("loading");
+      modalContent.innerHTML = "";
+
+      try {
+        const tryFetch = async (url) => {
+          const r = await fetch(url, { cache: "no-store" });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        };
+
+        let data = null;
+        try { data = await tryFetch("/api/ml/stores"); }
+        catch { try { data = await tryFetch("/api/ml/me"); } catch { data = null; } }
+
+        const stores = normalizeStores(data);
+
+        if (!stores.length) {
+          setStoresState("empty");
+          return;
+        }
+
+        modalContent.innerHTML = stores.map(renderStoreItem).join("");
+        setStoresState("content");
+      } catch (e) {
+        console.error("[ML Modal] Erro ao carregar lojas:", e);
+        setStoresState("error");
+      } finally {
+        _loadingStores = false;
+      }
     }
-  }
 
     btnShowStores?.addEventListener("click", () => { openModal(); loadStores(); });
     $$("[data-close-modal]", modal).forEach((b) => b.addEventListener("click", closeModal));
