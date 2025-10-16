@@ -8,7 +8,7 @@
   <!-- fontes e estilos globais do app -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="../css/navigation.css" />
   <link rel="stylesheet" href="../css/config.css" />
@@ -23,7 +23,7 @@
   <nav>
     <a class="sidebar-nav-item" data-page="home" href="../home.html">
       <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 10.5 12 3l9 7.5"/><path d="M5 10v10h14V10"/>
         </svg>
       </span>
@@ -32,7 +32,7 @@
 
     <a class="sidebar-nav-item" data-page="central" href="../central.html">
       <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
           <rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
         </svg>
@@ -42,7 +42,7 @@
 
     <a class="sidebar-nav-item" data-page="devolucoes" href="../index.html">
       <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
         </svg>
       </span>
@@ -51,7 +51,7 @@
 
     <a class="sidebar-nav-item" data-page="dashboard" href="../dashboard.html">
       <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
       </span>
@@ -60,7 +60,7 @@
 
     <a class="sidebar-nav-item" data-page="logs" href="../logs.html">
       <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
         </svg>
@@ -70,7 +70,7 @@
 
     <a class="sidebar-nav-item active" data-page="settings" href="./config.html">
       <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.07a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 4.2 19.4l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.07a1.65 1.65 0 0 0 1.51-1Z"/>
         </svg>
@@ -94,14 +94,6 @@
     <section class="banner">
       <div class="container">
         <h1 class="banner-titulo">Central de Configurações</h1>
-        <div class="container-pesquisa">
-          <input type="text" class="input-pesquisa" placeholder="Pesquise aqui..." id="inputPesquisa">
-          <button class="botao-pesquisa" aria-label="Pesquisar">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M9 17A8 8 0 1 0 9 1a8 8 0 0 0 0 16zM18 18l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-        </div>
       </div>
     </section>
 
@@ -172,7 +164,7 @@
               </div>
 
               <div class="actions-line">
-                <button class="btn btn--primary" type="submit">Salvar</button>
+                <button class="btn btn--primary" type="submit">Salvar alterações</button>
                 <button class="btn btn--ghost" type="button" id="empresa-recarregar">Recarregar</button>
               </div>
             </form>
@@ -219,7 +211,7 @@
             <h2 class="titulo-secao-main">Regras de Custos</h2>
 
             <form id="form-regras" class="form-grid">
-              <h3 class="sub" style="grid-column:1/-1">Cálculo do custo</h3>
+              <h3 class="sub" style="grid-column:1/-1; font-size: 16px; font-weight: 600; margin-bottom: 12px;">Cálculo do custo</h3>
 
               <label class="switch" style="grid-column:1/-1">
                 <input type="checkbox" name="rule_rejeitado_zero" checked>
@@ -238,27 +230,27 @@
 
               <p class="help" style="grid-column:1/-1">Regra padrão: <b>Produto + Frete</b>.</p>
 
-              <h3 class="sub" style="grid-column:1/-1; margin-top:16px">Rótulos mostrados ao usuário</h3>
+              <h3 class="sub" style="grid-column:1/-1; margin-top:24px; font-size: 16px; font-weight: 600; margin-bottom: 12px;">Rótulos mostrados ao usuário</h3>
 
               <div class="form-row">
-                <label>“Aprovada”</label>
+                <label>"Aprovada"</label>
                 <input name="label_aprovada" value="Aprovada">
               </div>
               <div class="form-row">
-                <label>“Rejeitada”</label>
+                <label>"Rejeitada"</label>
                 <input name="label_rejeitada" value="Rejeitada">
               </div>
               <div class="form-row">
-                <label>“Recebido no CD”</label>
+                <label>"Recebido no CD"</label>
                 <input name="label_recebido_cd" value="Recebido no CD">
               </div>
               <div class="form-row">
-                <label>“Em inspeção”</label>
+                <label>"Em inspeção"</label>
                 <input name="label_em_inspecao" value="Em inspeção">
               </div>
 
               <div class="actions-line" style="grid-column:1/-1">
-                <button class="btn btn--primary" type="submit">Salvar</button>
+                <button class="btn btn--primary" type="submit">Salvar alterações</button>
                 <button class="btn btn--ghost" type="button" id="regras-recarregar">Recarregar</button>
               </div>
             </form>
@@ -279,7 +271,7 @@
                     </div>
                     <div>
                       <h3>Bling (ERP)</h3>
-                      <small>Sincronize pedidos, clientes e notas.</small>
+                      <small>Sincronize pedidos, clientes e notas fiscais.</small>
                     </div>
                     <span class="badge badge--erp">ERP</span>
                   </header>
@@ -291,15 +283,15 @@
 
                 <article class="integration-card is-disabled" aria-disabled="true">
                   <header class="integration-head">
-                    <div class="integration-logo"><img src="../assets/img/tinny_logo.png" alt="Logo Tinny"></div>
+                    <div class="integration-logo"><img src="../assets/img/tinny_logo.png" alt="Logo Tiny"></div>
                     <div>
                       <h3>Tiny ERP</h3>
-                      <small>Em breve</small>
+                      <small>Integração em desenvolvimento</small>
                     </div>
                     <span class="badge badge--erp">ERP</span>
                   </header>
                   <div class="integration-actions">
-                    <button class="btn" disabled>Conectar</button>
+                    <button class="btn" disabled>Em breve</button>
                     <button class="btn btn--ghost" disabled>Ver guia</button>
                   </div>
                 </article>
@@ -312,7 +304,7 @@
               <div class="integrations-grid">
 
                 <!-- Mercado Livre -->
-                <article class="integration-card" id="ml-card" data-ml="card">
+                <article class="integration-card" id="ml-card" data-ml="card" data-integration="ml">
                   <header class="integration-head">
                     <div class="integration-logo">
                      <img src="../assets/img/logo_mercadolivre.png" alt="Logo Mercado Livre"/>
@@ -320,7 +312,7 @@
                     <div>
                       <h3>Mercado Livre</h3>
                       <small class="integration-status">
-                        <span class="ml-pill" data-ml="status-pill">Carregando…</span>
+                        <span class="ml-pill" data-ml="status-pill" id="ml-status">Carregando…</span>
                       </small>
                     </div>
                     <span class="badge badge--ecom">E-commerce</span>
@@ -328,14 +320,14 @@
 
                   <div class="integration-actions">
                     <a class="btn btn--primary btn--sm" href="/auth/ml/login" data-ml="connect">Conectar</a>
-                    <button class="btn btn--ghost" type="button" data-ml="disconnect">Desconectar</button>
-                    <button class="btn btn--ghost" type="button" data-ml="me">Contas</button>
-                    <a class="btn btn--ghost" id="ml-guide" href="../docs/index.html?g=ml" target="_blank" rel="noopener">Ver guia</a>
+                    <button class="btn btn--ghost btn--sm" type="button" data-ml="disconnect">Desconectar</button>
+                    <button class="btn btn--ghost btn--sm" type="button" data-ml="me">Contas</button>
+                    <a class="btn btn--ghost btn--sm" id="ml-guide" href="../docs/index.html?g=ml" target="_blank" rel="noopener">Ver guia</a>
                   </div>
 
-                  <div class="integration-extra" style="margin-top:8px">
+                  <div class="integration-extra">
                     <strong>Contas salvas</strong>
-                    <ul data-ml="accounts" style="list-style:none; padding:0; margin:6px 0 0"></ul>
+                    <ul data-ml="accounts"></ul>
                     <pre class="ml-log" data-ml="log" hidden></pre>
                   </div>
                 </article>
@@ -346,12 +338,12 @@
                     <div class="integration-logo"><img src="../assets/img/logo_shopee.png" alt="Logo Shopee"></div>
                     <div>
                       <h3>Shopee</h3>
-                      <small>Em breve</small>
+                      <small>Integração em desenvolvimento</small>
                     </div>
                     <span class="badge badge--ecom">E-commerce</span>
                   </header>
                   <div class="integration-actions">
-                    <button class="btn" disabled>Conectar</button>
+                    <button class="btn" disabled>Em breve</button>
                     <button class="btn btn--ghost" disabled>Ver guia</button>
                   </div>
                 </article>
@@ -382,7 +374,7 @@
                     <div class="integration-logo">🔑</div>
                     <div>
                       <h3>API Tokens</h3>
-                      <small>Gere tokens para integrar via API.</small>
+                      <small>Gere tokens para integrar via API REST.</small>
                     </div>
                     <span class="badge badge--dev">API</span>
                   </header>
@@ -401,6 +393,59 @@
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Modal de Lojas do Mercado Livre -->
+  <div id="ml-stores-modal" class="modal-overlay" role="dialog" aria-labelledby="ml-modal-title" aria-modal="true" hidden>
+    <div class="modal-container">
+      <div class="modal-header">
+        <div class="modal-header-content">
+          <img src="../assets/img/logo_mercadolivre.png" alt="Mercado Livre" class="modal-logo" />
+          <h2 id="ml-modal-title">Lojas Conectadas</h2>
+        </div>
+        <button type="button" class="modal-close" aria-label="Fechar modal" data-close-modal>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      
+      <div class="modal-body">
+        <div id="ml-stores-loading" class="modal-loading">
+          <div class="spinner"></div>
+          <p>Carregando lojas...</p>
+        </div>
+        
+        <div id="ml-stores-content" class="modal-stores-list" hidden>
+           Conteúdo será preenchido dinamicamente 
+        </div>
+        
+        <div id="ml-stores-empty" class="modal-empty" hidden>
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          <p>Nenhuma loja conectada</p>
+          <small>Conecte sua conta do Mercado Livre para começar</small>
+        </div>
+        
+        <div id="ml-stores-error" class="modal-error" hidden>
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="15" y1="9" x2="9" y2="15"></line>
+            <line x1="9" y1="9" x2="15" y2="15"></line>
+          </svg>
+          <p>Erro ao carregar lojas</p>
+          <small>Tente novamente mais tarde</small>
+        </div>
+      </div>
+      
+      <div class="modal-footer">
+        <button type="button" class="btn btn--ghost" data-close-modal>Fechar</button>
+      </div>
+    </div>
+  </div>
 
   <!-- JS da página -->
   <script src="../js/config.js"></script>
