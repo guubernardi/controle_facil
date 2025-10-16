@@ -7,49 +7,47 @@ const { getAuthedAxios } = require('../mlClient');
 module.exports = function registerMlApi(app) {
   const r = express.Router();
 
-  /**
-   * GET /api/ml/stores
-   * Lista as contas ML conhecidas pela base (user_ids que temos token).
-   * Para cada user_id, buscamos /users/{user_id} no ML para trazer nickname/site.
-   */
-  r.get('/api/ml/stores', async (req, res) => {
+  // GET /api/ml/stores
+  r.get('/api/ml/stores', async (_req, res) => {
     try {
-      // 👇 ajuste se o nome da tabela/colunas for diferente na sua base
       const q = await query(`
-        select distinct user_id
-          from ml_tokens
-         where access_token is not null
-         order by user_id
+        SELECT DISTINCT user_id, nickname
+          FROM public.ml_tokens
+         WHERE access_token IS NOT NULL
+         ORDER BY user_id
       `);
 
-      const stores = [];
-      for (const row of q.rows) {
-        const user_id = row.user_id;
-        try {
-          const { http } = await getAuthedAxios(user_id); // já renova se preciso
-          const { data: u } = await http.get(`/users/${user_id}`);
+      // paraleliza as chamadas ao ML
+      const stores = await Promise.all(
+        q.rows.map(async (row) => {
+          const user_id = row.user_id;
+          try {
+            const { http } = await getAuthedAxios(user_id);
+            // tanto /users/me quanto /users/{id} funcionam; /me evita mismatch
+            const { data: u } = await http.get('/users/me');
 
-          stores.push({
-            id: u.id || user_id,
-            user_id,
-            nickname: u.nickname || null,
-            name: u.nickname || `Conta ${user_id}`,
-            site_id: u.site_id || 'MLB',
-            active: true
-          });
-        } catch (e) {
-          // se falhar a chamada p/ esse user_id, ainda retornamos a “conta”, porém inativa
-          stores.push({
-            id: user_id,
-            user_id,
-            nickname: null,
-            name: `Conta ${user_id}`,
-            site_id: 'MLB',
-            active: false,
-            error: String(e?.message || e)
-          });
-        }
-      }
+            return {
+              id: u.id || user_id,
+              user_id,
+              nickname: u.nickname || row.nickname || null,
+              name: u.nickname || row.nickname || `Conta ${user_id}`,
+              site_id: u.site_id || 'MLB',
+              active: true,
+            };
+          } catch (e) {
+            // se falhar, ainda retornamos a “conta”, marcando inativa
+            return {
+              id: user_id,
+              user_id,
+              nickname: row.nickname || null,
+              name: row.nickname || `Conta ${user_id}`,
+              site_id: 'MLB',
+              active: false,
+              error: String(e?.message || e),
+            };
+          }
+        })
+      );
 
       return res.json({ stores });
     } catch (e) {
@@ -58,20 +56,15 @@ module.exports = function registerMlApi(app) {
     }
   });
 
-  /**
-   * GET /api/ml/me
-   * Fallback simples: pega o último user_id e retorna os dados do usuário do ML.
-   * O front usa isso se /api/ml/stores não existir/der erro.
-   */
-  r.get('/api/ml/me', async (req, res) => {
+  // GET /api/ml/me (fallback simples)
+  r.get('/api/ml/me', async (_req, res) => {
     try {
-      // último token atualizado
       const q = await query(`
-        select user_id
-          from ml_tokens
-         where access_token is not null
-         order by updated_at desc
-         limit 1
+        SELECT user_id
+          FROM public.ml_tokens
+         WHERE access_token IS NOT NULL
+         ORDER BY COALESCE(updated_at, now()) DESC
+         LIMIT 1
       `);
 
       if (!q.rows.length) {
@@ -80,7 +73,7 @@ module.exports = function registerMlApi(app) {
 
       const user_id = q.rows[0].user_id;
       const { http } = await getAuthedAxios(user_id);
-      const { data: u } = await http.get(`/users/${user_id}`);
+      const { data: u } = await http.get('/users/me');
 
       return res.json({
         connected: true,
@@ -89,8 +82,8 @@ module.exports = function registerMlApi(app) {
           user_id: u.id,
           nickname: u.nickname,
           site_id: u.site_id,
-          active: true
-        }]
+          active: true,
+        }],
       });
     } catch (e) {
       console.error('[GET /api/ml/me] erro:', e);
