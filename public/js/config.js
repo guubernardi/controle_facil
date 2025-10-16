@@ -1,354 +1,474 @@
-// settings/config.js – abas + CRUD + integração ML (robusto)
-// (c) seu projeto
+// settings/config.js – roteador de abas + CRUD simples (com fallback localStorage)
 document.addEventListener("DOMContentLoaded", () => {
-  const $ = (s, c = document) => c.querySelector(s);
-  const $$ = (s, c = document) => Array.from(c.querySelectorAll(s));
-  const esc = (s = "") => String(s).replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+  // ============ helpers ============
+  const $  = (sel, ctx = document) => ctx.querySelector(sel);
+  const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
 
-  // usa o #toast da página
-  const toast = (msg) => {
-    const el = $("#toast");
-    if (!el) return console.log("[toast]", msg);
-    el.textContent = msg;
-    el.classList.add("show");
-    setTimeout(() => el.classList.remove("show"), 2600);
-  };
-
-  // loading helpers
-  const showLoading = (btn) => { if (!btn) return; btn.disabled = true; btn.dataset.originalText = btn.textContent; btn.innerHTML = '<span class="spinner"></span> Carregando...'; };
-  const hideLoading  = (btn) => { if (!btn) return; btn.disabled = false; btn.textContent = btn.dataset.originalText || btn.textContent; };
-
-  // confirm com overlay fixo
-  const ensureConfirmCss = () => {
-    if ($("#confirm-css")) return;
+  // injeta CSS mínimo p/ toast + confirm (evita ficar “fora da tela”)
+  const ensureConfirmStyles = () => {
+    if (document.getElementById("confirm-styles")) return;
     const s = document.createElement("style");
-    s.id = "confirm-css";
+    s.id = "confirm-styles";
     s.textContent = `
-      .confirm-overlay{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .2s}
-      .confirm-overlay.show{opacity:1}
-      .confirm-dialog{max-width:420px;width:calc(100% - 32px);background:#fff;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:18px}
-      .confirm-actions{display:flex;gap:10px;justify-content:flex-end}
-      .btn--danger{background:#dc2626;color:#fff;border:1px solid #b91c1c}
+      .toast-notification{position:fixed;right:20px;bottom:20px;z-index:9999;opacity:0;transform:translateY(10px);transition:all .25s ease;background:#111827;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:8px;align-items:center}
+      .toast-notification.show{opacity:1;transform:none}
+      .toast-icon{opacity:.8}
+      .confirm-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
+      .confirm-dialog{background:#fff;border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 20px 40px rgba(0,0,0,.2);min-width:280px;max-width:92vw;padding:20px;display:flex;flex-direction:column;gap:12px}
+      .confirm-icon{font-size:22px}
+      .confirm-actions{display:flex;gap:8px;justify-content:flex-end}
+      .btn--danger{background:#dc2626;color:#fff;border-color:#dc2626}
+      .spinner{display:inline-block;width:18px;height:18px;border-radius:50%;border:2px solid #e5e7eb;border-top-color:var(--primary,#0056d2);animation:mlspin .8s linear infinite;margin-right:8px;vertical-align:middle}
+      @keyframes mlspin {to{transform:rotate(360deg)}}
     `;
     document.head.appendChild(s);
   };
-  const confirmDlg = (msg) => new Promise((resolve) => {
-    ensureConfirmCss();
-    const ov = document.createElement("div");
-    ov.className = "confirm-overlay";
-    ov.innerHTML = `
-      <div class="confirm-dialog" role="dialog" aria-modal="true">
-        <div style="font-size:20px;margin-bottom:8px">⚠</div>
-        <p class="confirm-message" style="margin:0 0 14px">${msg}</p>
-        <div class="confirm-actions">
-          <button class="btn btn--ghost confirm-cancel">Cancelar</button>
-          <button class="btn btn--danger confirm-ok">Confirmar</button>
-        </div>
-      </div>`;
-    document.body.appendChild(ov);
-    requestAnimationFrame(() => ov.classList.add("show"));
-    const done = (v)=>{ ov.classList.remove("show"); setTimeout(()=>ov.remove(),180); resolve(v); };
-    ov.querySelector(".confirm-cancel").onclick = () => done(false);
-    ov.querySelector(".confirm-ok").onclick     = () => done(true);
-    ov.addEventListener("click", (e)=>{ if (e.target===ov) done(false); });
-    document.addEventListener("keydown",(e)=>{ if(e.key==="Escape") done(false); },{once:true});
-  });
+  ensureConfirmStyles();
 
-  // API settings (fallback localStorage)
+  const toast = (msg, type = "info") => {
+    const existing = document.querySelector(".toast-notification");
+    if (existing) existing.remove();
+    const icons = { success: "✓", error: "✕", warning: "⚠", info: "ℹ" };
+    const t = document.createElement("div");
+    t.className = `toast-notification toast-${type}`;
+    t.innerHTML = `<span class="toast-icon">${icons[type] || icons.info}</span><span class="toast-message">${msg}</span>`;
+    document.body.appendChild(t);
+    requestAnimationFrame(() => t.classList.add("show"));
+    setTimeout(() => {
+      t.classList.remove("show");
+      setTimeout(() => t.remove(), 250);
+    }, 3000);
+  };
+
+  const esc = (s = "") =>
+    String(s).replace(/[&<>"']/g, (m) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[m]));
+
+  const showLoading = (btn) => {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.dataset.originalText = btn.textContent;
+    btn.innerHTML = '<span class="spinner"></span> Carregando...';
+  };
+  const hideLoading = (btn) => {
+    if (!btn) return;
+    btn.disabled = false;
+    btn.textContent = btn.dataset.originalText || btn.textContent;
+  };
+
+  const confirm = (msg) =>
+    new Promise((resolve) => {
+      ensureConfirmStyles();
+      const overlay = document.createElement("div");
+      overlay.className = "confirm-overlay";
+      overlay.innerHTML = `
+        <div class="confirm-dialog">
+          <div class="confirm-icon">⚠</div>
+          <p class="confirm-message">${msg}</p>
+          <div class="confirm-actions">
+            <button class="btn btn--ghost confirm-cancel">Cancelar</button>
+            <button class="btn btn--danger confirm-ok">Confirmar</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const cleanup = (result) => { overlay.remove(); resolve(result); };
+      overlay.querySelector(".confirm-cancel").onclick = () => cleanup(false);
+      overlay.querySelector(".confirm-ok").onclick     = () => cleanup(true);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) cleanup(false); });
+    });
+
+  // -------- mini storage (API -> localStorage fallback) ----------
   const api = {
-    async get(path){
+    async get(path) {
       try {
         const r = await fetch(`/api/settings${path}`);
-        if(!r.ok) throw 0;
-        if(r.status===204) return null;
-        const ct = r.headers.get("content-type")||"";
+        if (!r.ok) throw 0;
+        if (r.status === 204) return null;
+        const ct = r.headers.get("content-type") || "";
         return ct.includes("application/json") ? await r.json() : null;
       } catch {
-        return JSON.parse(localStorage.getItem(`settings:${path}`)||"null");
+        return JSON.parse(localStorage.getItem(`settings:${path}`) || "null");
       }
     },
-    async put(path,payload){
-      try{
-        const r = await fetch(`/api/settings${path}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-        if(!r.ok) throw 0;
-        if(r.status===204) return payload;
-        const ct = r.headers.get("content-type")||"";
-        return ct.includes("application/json")? await r.json() : payload;
-      }catch{
+    async put(path, payload) {
+      try {
+        const r = await fetch(`/api/settings${path}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!r.ok) throw 0;
+        if (r.status === 204) return payload;
+        const ct = r.headers.get("content-type") || "";
+        return ct.includes("application/json") ? await r.json() : payload;
+      } catch {
         localStorage.setItem(`settings:${path}`, JSON.stringify(payload));
         return payload;
       }
-    }
+    },
   };
 
-  // --------- roteador de abas ---------
+  // -------- roteamento/hash (#empresa, #usuarios, #regras, #integracoes) --------
   const panes = $$(".config-pane");
   const menu  = $$(".item-menu");
-  const showPane = (id)=>{
-    panes.forEach(p=>p.classList.toggle("active", p.id===id));
-    menu.forEach(m=>m.classList.toggle("ativo", m.dataset.target===id));
+
+  function showPane(id) {
+    panes.forEach((p) => p.classList.toggle("active", p.id === id));
+    menu.forEach((m) => m.classList.toggle("ativo", m.dataset.target === id));
     localStorage.setItem("settings:lastTab", id);
-  };
-  const applyHash = ()=>{
-    const wanted = (location.hash||"#empresa").slice(1);
-    showPane(panes.some(p=>p.id===wanted)?wanted:"empresa");
-  };
+  }
+  function applyHash() {
+    const wanted = (location.hash || "#empresa").replace("#", "");
+    const exists = panes.some((p) => p.id === wanted);
+    showPane(exists ? wanted : "empresa");
+  }
   window.addEventListener("hashchange", applyHash);
-  menu.forEach(a=>a.addEventListener("click",(e)=>{e.preventDefault(); const id=e.currentTarget.dataset.target; if(!id) return; location.hash=`#${id}`;}));
-  if(!location.hash){ location.hash = `#${localStorage.getItem("settings:lastTab")||"empresa"}`; }
+
+  menu.forEach((a) =>
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const id = e.currentTarget.dataset.target;
+      if (!id) return;
+      if (location.hash !== `#${id}`) location.hash = `#${id}`;
+      else applyHash();
+      e.currentTarget.blur();
+    })
+  );
+
+  if (!location.hash) {
+    const last = localStorage.getItem("settings:lastTab") || "empresa";
+    location.hash = `#${last}`;
+  }
   applyHash();
 
-  // --------- EMPRESA ---------
+  // ================== EMPRESA ==================
   const formEmpresa = $("#form-empresa");
   const btnEmpresaReload = $("#empresa-recarregar");
-  async function loadEmpresa(){
+
+  async function loadEmpresa() {
     showLoading(btnEmpresaReload);
-    try{
-      const d=(await api.get("/company"))||{};
-      ["razao_social","nome_fantasia","cnpj","email","telefone","endereco"].forEach(k=>{ if(formEmpresa?.[k]) formEmpresa[k].value=d[k]||""; });
-      toast("Dados da empresa carregados");
-    }catch{ toast("Erro ao carregar dados da empresa"); }
-    finally{ hideLoading(btnEmpresaReload); }
+    try {
+      const d = (await api.get("/company")) || {};
+      ["razao_social","nome_fantasia","cnpj","email","telefone","endereco"].forEach((k) => {
+        if (formEmpresa?.[k]) formEmpresa[k].value = d[k] || "";
+      });
+      toast("Dados da empresa carregados", "success");
+    } catch {
+      toast("Erro ao carregar dados da empresa", "error");
+    } finally { hideLoading(btnEmpresaReload); }
   }
-  formEmpresa?.addEventListener("submit", async (e)=>{
+
+  formEmpresa?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = formEmpresa.querySelector('button[type="submit"]'); showLoading(btn);
-    try{
+    const submitBtn = formEmpresa.querySelector('button[type="submit"]');
+    showLoading(submitBtn);
+    try {
       const payload = Object.fromEntries(new FormData(formEmpresa).entries());
       await api.put("/company", payload);
-      toast("Dados da empresa salvos!");
-      formEmpresa.classList.add("form-success"); setTimeout(()=>formEmpresa.classList.remove("form-success"),600);
-    }catch{ toast("Erro ao salvar dados da empresa"); }
-    finally{ hideLoading(btn); }
+      toast("Dados da empresa salvos com sucesso!", "success");
+    } catch {
+      toast("Erro ao salvar dados da empresa", "error");
+    } finally { hideLoading(submitBtn); }
   });
   btnEmpresaReload?.addEventListener("click", loadEmpresa);
 
-  // --------- USUÁRIOS ---------
-  const tbodyUsers = $("#usuarios-list");
-  const formAddUser = $("#form-add-user");
-  const btnUsersSave = $("#usuarios-salvar");
+  // ================== USUÁRIOS ==================
+  const tbodyUsers     = $("#usuarios-list");
+  const formAddUser    = $("#form-add-user");
+  const btnUsersSave   = $("#usuarios-salvar");
   const btnUsersReload = $("#usuarios-recarregar");
   let users = [];
-  const renderUsers = ()=>{
-    if(!tbodyUsers) return;
-    tbodyUsers.innerHTML = users.map((u,i)=>`
+
+  function renderUsers() {
+    if (!tbodyUsers) return;
+    tbodyUsers.innerHTML = users.map((u, i) => `
       <tr class="user-row">
         <td>${esc(u.nome)}</td>
         <td>${esc(u.email)}</td>
         <td>
           <select data-i="${i}" class="edit-role">
-            <option value="admin"   ${u.papel==="admin"?"selected":""}>Admin</option>
-            <option value="gestor"  ${u.papel==="gestor"?"selected":""}>Gestor</option>
-            <option value="operador"${u.papel==="operador"?"selected":""}>Operador</option>
+            <option value="admin"    ${u.papel === "admin" ? "selected" : ""}>Admin</option>
+            <option value="gestor"   ${u.papel === "gestor" ? "selected" : ""}>Gestor</option>
+            <option value="operador" ${u.papel === "operador" ? "selected" : ""}>Operador</option>
           </select>
         </td>
         <td><button class="btn btn--ghost remove" data-i="${i}">Remover</button></td>
-      </tr>`).join("");
-  };
-  async function loadUsers(){ showLoading(btnUsersReload); try{ users=(await api.get("/users"))||[]; renderUsers(); toast("Lista de usuários atualizada"); }catch{ toast("Erro ao carregar usuários"); } finally{ hideLoading(btnUsersReload); } }
-  formAddUser?.addEventListener("submit",(e)=>{
+      </tr>
+    `).join("");
+  }
+
+  async function loadUsers() {
+    showLoading(btnUsersReload);
+    try {
+      users = (await api.get("/users")) || [];
+      renderUsers();
+      toast("Lista de usuários atualizada", "success");
+    } catch {
+      toast("Erro ao carregar usuários", "error");
+    } finally { hideLoading(btnUsersReload); }
+  }
+
+  formAddUser?.addEventListener("submit", (e) => {
     e.preventDefault();
     const f = new FormData(formAddUser);
-    const nome=(f.get("nome")||"").toString().trim();
-    const email=(f.get("email")||"").toString().trim().toLowerCase();
-    const papel=(f.get("papel")||"operador").toString();
-    if(!nome) return toast("Informe o nome do usuário");
-    if(!/^\S+@\S+\.\S+$/.test(email)) return toast("E-mail inválido");
-    if(users.some(u=>(u.email||"").toLowerCase()===email)) return toast("Este e-mail já está cadastrado");
-    users.push({nome,email,papel}); formAddUser.reset(); renderUsers(); toast(`Usuário ${nome} adicionado!`);
+    const nome  = (f.get("nome")  || "").toString().trim();
+    const email = (f.get("email") || "").toString().trim().toLowerCase();
+    const papel = (f.get("papel") || "operador").toString();
+    if (!nome) return toast("Informe o nome do usuário", "warning");
+    if (!/^\S+@\S+\.\S+$/.test(email)) return toast("E-mail inválido", "warning");
+    if (users.some((u) => (u.email || "").toLowerCase() === email)) return toast("Este e-mail já está cadastrado", "warning");
+    users.push({ nome, email, papel }); formAddUser.reset(); renderUsers(); toast(`Usuário ${nome} adicionado!`, "success");
   });
-  tbodyUsers?.addEventListener("change",(e)=>{ if(e.target.classList.contains("edit-role")){ const i=+e.target.dataset.i; if(users[i]){ users[i].papel=e.target.value; toast("Papel alterado (salve para aplicar)"); } } });
-  tbodyUsers?.addEventListener("click", async (e)=>{ if(e.target.classList.contains("remove")){ const i=+e.target.dataset.i; const u=users[i]; if(await confirmDlg(`Remover o usuário <strong>${esc(u?.nome||"")}</strong>?`)){ users.splice(i,1); renderUsers(); toast("Usuário removido (salve para aplicar)"); } }});
-  btnUsersSave?.addEventListener("click", async ()=>{ showLoading(btnUsersSave); try{ await api.put("/users", users); toast("Usuários salvos!"); }catch{ toast("Erro ao salvar usuários"); } finally{ hideLoading(btnUsersSave); }});
+
+  tbodyUsers?.addEventListener("change", (e) => {
+    if (e.target.classList.contains("edit-role")) {
+      const i = +e.target.dataset.i;
+      if (users[i]) { users[i].papel = e.target.value; toast("Papel alterado (lembre-se de salvar)", "info"); }
+    }
+  });
+  tbodyUsers?.addEventListener("click", async (e) => {
+    if (e.target.classList.contains("remove")) {
+      const i = +e.target.dataset.i;
+      const user = users[i];
+      if (await confirm(`Tem certeza que deseja remover o usuário <strong>${esc(user?.nome || "")}</strong>?`)) {
+        users.splice(i, 1); renderUsers(); toast("Usuário removido (lembre-se de salvar)", "success");
+      }
+    }
+  });
+  btnUsersSave ?.addEventListener("click", async () => { showLoading(btnUsersSave); try { await api.put("/users", users); toast("Lista de usuários salva!", "success"); } catch { toast("Erro ao salvar usuários", "error"); } finally { hideLoading(btnUsersSave); }});
   btnUsersReload?.addEventListener("click", loadUsers);
 
-  // --------- REGRAS ---------
+  // ================== REGRAS ==================
   const formRegras = $("#form-regras");
   const btnRegrasReload = $("#regras-recarregar");
-  async function loadRegras(){
-    showLoading(btnRegrasReload);
-    try{
-      const d=(await api.get("/rules"))||{};
-      const data={
-        rule_rejeitado_zero: d.rule_rejeitado_zero ?? true,
-        rule_motivo_cliente_zero: d.rule_motivo_cliente_zero ?? true,
-        rule_cd_somente_frete: d.rule_cd_somente_frete ?? true,
-        label_aprovada: d.label_aprovada ?? "Aprovada",
-        label_rejeitada: d.label_rejeitada ?? "Rejeitada",
-        label_recebido_cd: d.label_recebido_cd ?? "Recebido no CD",
-        label_em_inspecao: d.label_em_inspecao ?? "Em inspeção",
-      };
-      Object.entries(data).forEach(([k,v])=>{
-        if(!formRegras?.[k]) return;
-        if(formRegras[k].type==="checkbox") formRegras[k].checked=!!v; else formRegras[k].value=v;
-      });
-      toast("Regras carregadas");
-    }catch{ toast("Erro ao carregar regras"); }
-    finally{ hideLoading(btnRegrasReload); }
-  }
-  formRegras?.addEventListener("submit", async (e)=>{
-    e.preventDefault();
-    const btn=formRegras.querySelector('button[type="submit"]'); showLoading(btn);
-    try{
-      const fd=new FormData(formRegras); const payload=Object.fromEntries(fd.entries());
-      ["rule_rejeitado_zero","rule_motivo_cliente_zero","rule_cd_somente_frete"].forEach(k=>payload[k]=!!formRegras[k].checked);
-      await api.put("/rules", payload); toast("Regras salvas!");
-      formRegras.classList.add("form-success"); setTimeout(()=>formRegras.classList.remove("form-success"),600);
-    }catch{ toast("Erro ao salvar regras"); }
-    finally{ hideLoading(btn); }
-  });
-  $$('input[type="checkbox"]', formRegras).forEach(c=>c.addEventListener("change",()=>toast("Configuração alterada (salve para aplicar)")));
 
-  // carregar dados iniciais
+  async function loadRegras() {
+    showLoading(btnRegrasReload);
+    try {
+      const d = (await api.get("/rules")) || {};
+      const data = {
+        rule_rejeitado_zero:      d.rule_rejeitado_zero      ?? true,
+        rule_motivo_cliente_zero: d.rule_motivo_cliente_zero ?? true,
+        rule_cd_somente_frete:    d.rule_cd_somente_frete    ?? true,
+        label_aprovada:           d.label_aprovada           ?? "Aprovada",
+        label_rejeitada:          d.label_rejeitada          ?? "Rejeitada",
+        label_recebido_cd:        d.label_recebido_cd        ?? "Recebido no CD",
+        label_em_inspecao:        d.label_em_inspecao        ?? "Em inspeção",
+      };
+      Object.entries(data).forEach(([k, v]) => {
+        if (!formRegras?.[k]) return;
+        if (formRegras[k].type === "checkbox") formRegras[k].checked = !!v;
+        else formRegras[k].value = v;
+      });
+      toast("Regras carregadas", "success");
+    } catch {
+      toast("Erro ao carregar regras", "error");
+    } finally { hideLoading(btnRegrasReload); }
+  }
+
+  formRegras?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const submitBtn = formRegras.querySelector('button[type="submit"]');
+    showLoading(submitBtn);
+    try {
+      const fd = new FormData(formRegras);
+      const payload = Object.fromEntries(fd.entries());
+      ["rule_rejeitado_zero","rule_motivo_cliente_zero","rule_cd_somente_frete"].forEach(
+        (k) => (payload[k] = !!formRegras[k].checked)
+      );
+      await api.put("/rules", payload);
+      toast("Regras salvas com sucesso!", "success");
+    } catch {
+      toast("Erro ao salvar regras", "error");
+    } finally { hideLoading(submitBtn); }
+  });
+
+  btnRegrasReload?.addEventListener("click", loadRegras);
+  $$('input[type="checkbox"]', formRegras).forEach((c) => c.addEventListener("change", () => toast("Configuração alterada (lembre-se de salvar)", "info")));
+
+  // ------- carregar tudo na primeira entrada -------
   loadEmpresa(); loadUsers(); loadRegras();
 
-  // --------- INTEGRAÇÃO: MERCADO LIVRE ---------
+  // ================== INTEGRAÇÃO: Mercado Livre ==================
   (async () => {
     const card = document.querySelector('[data-integration="ml"]');
     if (!card) return;
 
-    const statusEl     = $("#ml-status");
-    const btnConn      = card.querySelector('[data-ml="connect"]');
-    const btnDisc      = card.querySelector('[data-ml="disconnect"]');
-    const btnShowStores= card.querySelector('[data-ml="me"]');
-    const listEl       = card.querySelector('[data-ml="accounts"]');
+    const statusEl      = document.getElementById("ml-status");
+    const badgeEl       = document.getElementById("ml-badge");
+    const btnConn       = document.getElementById("ml-connect");
+    const btnDisc       = document.getElementById("ml-disconnect");
+    const btnAccounts   = document.getElementById("ml-accounts-btn");
+    const btnShowStores = document.querySelector('[data-ml="me"]');
 
-    const setConnUI = (connected, nickname, exp) => {
-      if (connected) {
-        card.classList.add("is-connected");
-        if (statusEl) {
-          const expTxt = exp ? ` (expira: ${new Date(exp).toLocaleString("pt-BR")})` : "";
-          statusEl.innerHTML = `Conectado como <b>@${esc(nickname||"conta")}</b>${expTxt}`;
-        }
-        if (btnConn) btnConn.hidden = true;
-        if (btnDisc) btnDisc.hidden = false;
-      } else {
-        card.classList.remove("is-connected");
-        if (statusEl) statusEl.textContent = "Não conectado";
-        if (btnConn) btnConn.hidden = false;
-        if (btnDisc) btnDisc.hidden = true;
-        if (listEl) listEl.innerHTML = "";
-      }
+    const setLoading = (on) => { if (on && statusEl) statusEl.textContent = "Verificando status…"; };
+
+    const applyUiDisconnected = () => {
+      card.classList.remove("is-connected");
+      if (statusEl) statusEl.textContent = "Não conectado";
+      if (badgeEl)  badgeEl.textContent  = "E-commerce";
+      if (btnConn)  btnConn.hidden = false;
+      if (btnDisc)  btnDisc.hidden = true;
     };
 
-    const fetchJsonWithTimeout = async (url, ms=10000) => {
-      const ctrl = new AbortController(); const t = setTimeout(()=>ctrl.abort(), ms);
+    const applyUiConnected = (nickname, expiresAt) => {
+      card.classList.add("is-connected");
+      if (statusEl) {
+        const exp = expiresAt ? ` (expira: ${new Date(expiresAt).toLocaleString("pt-BR")})` : "";
+        statusEl.innerHTML = `Conectado como <b>@${esc(nickname || "conta")}</b>${exp}`;
+      }
+      if (badgeEl) badgeEl.textContent = "Conectado";
+      if (btnConn) btnConn.hidden = true;
+      if (btnDisc) btnDisc.hidden = false;
+    };
+
+    async function refreshMlStatus() {
       try {
-        const r = await fetch(url, { cache:"no-store", signal: ctrl.signal });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return await r.json();
-      } finally {
-        clearTimeout(t);
-      }
-    };
-
-    async function refreshMlStatus(){
-      try{
-        if (statusEl) statusEl.textContent = "Verificando status…";
-        const j = await fetchJsonWithTimeout("/api/ml/status");
-        setConnUI(!!j.connected, j.nickname, j.expires_at);
-      }catch(e){
-        console.warn("[ML] status erro:", e);
-        setConnUI(false);
+        setLoading(true);
+        const r = await fetch("/api/ml/status", { cache: "no-store" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        if (j.connected) applyUiConnected(j.nickname || "conta", j.expires_at);
+        else             applyUiDisconnected();
+      } catch (e) {
+        console.warn("[ML] status falhou:", e);
+        applyUiDisconnected();
       }
     }
 
-    // ---------- modal de lojas ----------
+    btnAccounts?.addEventListener("click", () => {
+      const panel = document.querySelector('[data-ml="accounts"]');
+      if (!panel) return;
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      panel.classList.add("ring");
+      setTimeout(() => panel.classList.remove("ring"), 1200);
+    });
+
+    btnDisc?.addEventListener("click", async () => {
+      const ok = await confirm("Tem certeza que deseja desconectar do Mercado Livre?");
+      if (!ok) return;
+      showLoading(btnDisc);
+      try {
+        const r = await fetch("/api/ml/disconnect", { method: "POST" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        await refreshMlStatus();
+        toast("Desconectado do Mercado Livre com sucesso", "success");
+      } catch (e) {
+        console.error(e);
+        toast("Falha ao desconectar do Mercado Livre", "error");
+      } finally { hideLoading(btnDisc); }
+    });
+
+    // ------ Modal de Lojas ------
     const modal        = $("#ml-stores-modal");
     const modalLoading = $("#ml-stores-loading");
     const modalContent = $("#ml-stores-content");
     const modalEmpty   = $("#ml-stores-empty");
     const modalError   = $("#ml-stores-error");
 
-    const setModalView = (view) => {
-      const map = {
-        loading: modalLoading,
-        content: modalContent,
-        empty:   modalEmpty,
-        error:   modalError,
-      };
-      Object.entries(map).forEach(([k,el])=>{
-        if(!el) return;
-        const on = (k===view);
-        el.hidden = !on;
-        el.style.display = on ? (k==="content" ? "flex" : "block") : "none";
-      });
+    const openModal  = () => { if (!modal) return; modal.hidden = false; document.body.style.overflow = "hidden"; };
+    const closeModal = () => { if (!modal) return; modal.hidden = true;  document.body.style.overflow = ""; };
+
+    // normaliza resposta de /api/ml/stores OU /api/ml/me (fallback)
+    const normalizeStores = (data) => {
+      if (!data) return [];
+      if (Array.isArray(data.stores)) return data.stores;
+      if (Array.isArray(data.accounts)) {
+        return data.accounts.map((a) => ({
+          id: a.user_id || a.id,
+          name: a.nickname || a.name || `Conta ${a.user_id || a.id}`,
+          nickname: a.nickname,
+          active: a.active ?? true,
+          site_id: a.site_id || a.site || "MLB",
+        }));
+      }
+      // algumas implementações retornam um único objeto
+      if (data.user_id || data.id || data.nickname) {
+        return [{
+          id: data.user_id || data.id,
+          name: data.nickname || data.name || "Conta",
+          nickname: data.nickname,
+          active: true,
+          site_id: data.site_id || "MLB",
+        }];
+      }
+      return [];
     };
 
-    const openModal  = ()=>{ if(!modal) return; modal.hidden=false; document.body.style.overflow="hidden"; };
-    const closeModal = ()=>{ if(!modal) return; modal.hidden=true;  document.body.style.overflow=""; };
+    async function fetchStores() {
+      // tenta primeiro o endpoint dedicado
+      try {
+        const r1 = await fetch("/api/ml/stores", { cache: "no-store" });
+        if (r1.ok) return normalizeStores(await r1.json());
+      } catch {}
+      // fallback para /api/ml/me (várias bases já têm)
+      try {
+        const r2 = await fetch("/api/ml/me", { cache: "no-store" });
+        if (r2.ok) return normalizeStores(await r2.json());
+      } catch {}
+      return [];
+    }
 
-    const normalizeStores = (payload)=>{
-      const root = (payload && (payload.stores||payload.accounts||payload.items||payload.list)) || payload || [];
-      const arr = Array.isArray(root) ? root : [];
-      return arr.map((it)=>({
-        id: it.id ?? it.user_id ?? it.account_id ?? it.seller_id ?? it.nickname ?? "N/A",
-        name: it.name ?? it.nickname ?? it.store_name ?? `Conta ${it.id ?? ""}`.trim(),
-        active: (it.active ?? it.enabled ?? (it.status ? String(it.status).toLowerCase()==="active" : true))
-      }));
-    };
+    async function loadStores() {
+      if (!modal) return;
 
-    async function loadStores(){
-      if(!modal) return;
-      setModalView("loading");
-      try{
-        let data;
-        try{
-          data = await fetchJsonWithTimeout("/api/ml/stores"); // se existir
-        }catch(e1){
-          console.debug("[ML] /api/ml/stores falhou, tentando /api/ml/me", e1?.message || e1);
-          data = await fetchJsonWithTimeout("/api/ml/me");
+      // estado inicial
+      modalLoading.hidden = false;
+      modalContent.hidden = true;
+      modalEmpty.hidden   = true;
+      modalError.hidden   = true;
+      modalContent.innerHTML = "";
+
+      try {
+        const stores = await fetchStores();
+
+        if (!stores.length) {
+          modalLoading.hidden = true;
+          modalEmpty.hidden   = true;   // se quiser mostrar “nenhuma loja”, deixe false
+          // Vamos mostrar explicitamente a empty:
+          modalEmpty.hidden   = false;
+          return;
         }
-        const stores = normalizeStores(data);
-        if(!stores.length){ setModalView("empty"); return; }
 
-        modalContent.innerHTML = stores.map((s)=>`
+        modalContent.innerHTML = stores.map((store) => `
           <div class="modal-store-item">
             <div class="modal-store-info">
-              <div class="modal-store-name">${esc(s.name)}</div>
-              <div class="modal-store-id">ID: ${esc(String(s.id))}</div>
+              <div class="modal-store-name">${esc(store.name || store.nickname || "Loja")}</div>
+              <div class="modal-store-id">ID: ${esc(store.id || "N/A")} • ${esc(store.site_id || "")}</div>
             </div>
-            <span class="modal-store-badge ${s.active ? "active":"inactive"}">${s.active?"Ativa":"Inativa"}</span>
-          </div>`).join("");
+            <span class="modal-store-badge ${store.active ? "active" : "inactive"}">
+              ${store.active ? "Ativa" : "Inativa"}
+            </span>
+          </div>
+        `).join("");
 
-        setModalView("content");
-      }catch(e){
+        modalLoading.hidden = true;
+        modalContent.hidden = false;
+      } catch (e) {
         console.error("[ML Modal] Erro ao carregar lojas:", e);
-        setModalView("error");
+        modalLoading.hidden = true;
+        modalError.hidden   = false;
       }
     }
 
-    btnShowStores?.addEventListener("click", ()=>{ openModal(); loadStores(); });
-    $$("[data-close-modal]", modal).forEach((b)=>b.addEventListener("click", closeModal));
-    modal?.addEventListener("click",(e)=>{ if(e.target===modal) closeModal(); });
-    document.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && !modal?.hidden) closeModal(); });
+    btnShowStores?.addEventListener("click", () => { openModal(); loadStores(); });
+    $$("[data-close-modal]", modal).forEach((b) => b.addEventListener("click", closeModal));
+    modal?.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal?.hidden) closeModal(); });
 
-    // desconectar
-    btnDisc?.addEventListener("click", async ()=>{
-      if(!(await confirmDlg("Tem certeza que deseja desconectar do Mercado Livre?"))) return;
-      showLoading(btnDisc);
-      try{
-        const r = await fetch("/api/ml/disconnect",{method:"POST"});
-        if(!r.ok) throw new Error(`HTTP ${r.status}`);
-        await refreshMlStatus();
-        toast("Desconectado do Mercado Livre");
-      }catch(e){
-        console.warn(e);
-        toast("Falha ao desconectar do Mercado Livre");
-      }finally{
-        hideLoading(btnDisc);
-      }
-    });
-
-    await refreshMlStatus();
+    // primeira leitura do status
+    refreshMlStatus();
   })();
 
-  // Ctrl/Cmd+S salva o formulário ativo
-  document.addEventListener("keydown",(e)=>{
-    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){
+  // Ctrl/Cmd + S salva o formulário visível
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
-      const pane=$(".config-pane.active"); const form=pane && $("form",pane);
-      if(form){ form.dispatchEvent(new Event("submit",{cancelable:true,bubbles:true})); toast("Salvando…"); }
+      const activePane = $(".config-pane.active");
+      const form = activePane && $("form", activePane);
+      if (form) {
+        form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+        toast("Salvando…", "info");
+      }
     }
   });
 });
