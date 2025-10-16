@@ -385,21 +385,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const card = document.querySelector('[data-integration="ml"]')
     if (!card) return
 
-    const statusEl = document.getElementById("ml-status")
-    const badgeEl = document.getElementById("ml-badge")
-    const btnConn = document.getElementById("ml-connect")
-    const btnDisc = document.getElementById("ml-disconnect")
-    const btnAccounts = document.getElementById("ml-accounts-btn")
-    const btnShowStores = document.querySelector('[data-ml="me"]')
-
-    function setLoading(on) {
-      if (on && statusEl) statusEl.textContent = "Verificando status…"
-    }
+    const statusEl      = document.getElementById("ml-status")
+    const btnConn       = card.querySelector('[data-ml="connect"]')
+    const btnDisc       = card.querySelector('[data-ml="disconnect"]')
+    const btnShowStores = card.querySelector('[data-ml="me"]')
+    const accList       = card.querySelector('[data-ml="accounts"]')
 
     function applyUiDisconnected() {
       card.classList.remove("is-connected")
       if (statusEl) statusEl.textContent = "Não conectado"
-      if (badgeEl) badgeEl.textContent = "E-commerce"
       if (btnConn) btnConn.hidden = false
       if (btnDisc) btnDisc.hidden = true
     }
@@ -410,120 +404,105 @@ document.addEventListener("DOMContentLoaded", () => {
         const exp = expiresAt ? ` (expira: ${new Date(expiresAt).toLocaleString("pt-BR")})` : ""
         statusEl.innerHTML = `Conectado como <b>@${esc(nickname || "conta")}</b>${exp}`
       }
-      if (badgeEl) badgeEl.textContent = "Conectado"
       if (btnConn) btnConn.hidden = true
       if (btnDisc) btnDisc.hidden = false
     }
 
     async function refreshMlStatus() {
       try {
-        setLoading(true)
+        if (statusEl) statusEl.textContent = "Verificando status…"
         const r = await fetch("/api/ml/status", { cache: "no-store" })
         if (!r.ok) throw new Error("HTTP " + r.status)
         const j = await r.json()
         if (j.connected) {
           applyUiConnected(j.nickname || "conta", j.expires_at)
-          toast("Mercado Livre conectado", "success")
         } else {
           applyUiDisconnected()
         }
       } catch (e) {
         console.warn("[ML] status falhou:", e)
         applyUiDisconnected()
-        toast("Erro ao verificar status do Mercado Livre", "error")
       }
     }
 
-    btnAccounts?.addEventListener("click", () => {
-      const panel = document.querySelector('[data-ml="accounts"]')
-      if (panel) {
-        panel.scrollIntoView({ behavior: "smooth", block: "start" })
-        panel.classList.add("ring")
-        setTimeout(() => panel.classList.remove("ring"), 1200)
+    // --------- Modal Lojas ----------
+    const modal        = document.getElementById("ml-stores-modal")
+    const modalLoading = document.getElementById("ml-stores-loading")
+    const modalContent = document.getElementById("ml-stores-content")
+    const modalEmpty   = document.getElementById("ml-stores-empty")
+    const modalError   = document.getElementById("ml-stores-error")
+
+    function openModal()  { if (modal){ modal.hidden = false; document.body.style.overflow = "hidden" } }
+    function closeModal() { if (modal){ modal.hidden = true;  document.body.style.overflow = "" } }
+
+    async function fetchAccounts() {
+      const r = await fetch("/api/ml/me", { cache: "no-store" })
+      if (!r.ok) throw new Error("HTTP " + r.status)
+      const data = await r.json()
+
+      // Normaliza vários formatos possíveis
+      let raw = data.accounts || data.items || data.users || data.results || []
+      if (!Array.isArray(raw)) raw = []
+
+      // Se a API retornar apenas um objeto com id/nickname
+      if (!raw.length && (data.id || data.user_id) && (data.nickname || data.name)) {
+        raw = [{ id: data.id || data.user_id, nickname: data.nickname || data.name, active: true }]
       }
-    })
 
-    btnDisc?.addEventListener("click", async () => {
-      const confirmed = await confirm("Tem certeza que deseja desconectar do Mercado Livre?")
-
-      if (confirmed) {
-        showLoading(btnDisc)
-        try {
-          const r = await fetch("/api/ml/disconnect", { method: "POST" })
-          if (!r.ok) throw new Error("HTTP " + r.status)
-          await refreshMlStatus()
-          toast("Desconectado do Mercado Livre com sucesso", "success")
-        } catch (e) {
-          toast("Falha ao desconectar do Mercado Livre", "error")
-        } finally {
-          hideLoading(btnDisc)
-        }
-      }
-    })
-
-    const modal = $("#ml-stores-modal")
-    const modalLoading = $("#ml-stores-loading")
-    const modalContent = $("#ml-stores-content")
-    const modalEmpty = $("#ml-stores-empty")
-    const modalError = $("#ml-stores-error")
-
-    function openModal() {
-      if (!modal) return
-      modal.hidden = false
-      document.body.style.overflow = "hidden"
+      return raw.map(a => ({
+        id:    a.id || a.user_id || a.account_id || a.uid || "",
+        name:  a.nickname || a.name || a.store_name || "Loja",
+        active: a.active !== undefined ? !!a.active : true
+      }))
     }
 
-    function closeModal() {
-      if (!modal) return
-      modal.hidden = true
-      document.body.style.overflow = ""
+    function renderAccountsInCard(stores) {
+      if (!accList) return
+      if (!stores.length) { accList.innerHTML = ""; return }
+      accList.innerHTML = stores.map(s => `
+        <li class="ml-acc-row">
+          <div class="ml-acc-left">
+            <span class="ml-acc-name">${esc(s.name)}</span>
+          </div>
+          <span class="ml-badge">${esc(s.id)}</span>
+        </li>
+      `).join("")
     }
 
-    async function loadStores() {
+    async function loadStoresIntoModal() {
       if (!modal) return
-
-      // Mostra loading
       modalLoading.hidden = false
       modalContent.hidden = true
       modalEmpty.hidden = true
       modalError.hidden = true
 
       try {
-        // Faz requisição para buscar lojas
-        const response = await fetch("/api/ml/stores", { cache: "no-store" })
+        const stores = await fetchAccounts()
 
-        if (!response.ok) throw new Error("Erro ao buscar lojas")
+        // Preenche listinha do card
+        renderAccountsInCard(stores)
 
-        const data = await response.json()
-        const stores = data.stores || []
-
-        if (stores.length === 0) {
-          // Nenhuma loja encontrada
+        if (!stores.length) {
           modalLoading.hidden = true
           modalEmpty.hidden = false
-        } else {
-          // Renderiza lojas
-          modalContent.innerHTML = stores
-            .map(
-              (store) => `
-            <div class="modal-store-item">
-              <div class="modal-store-info">
-                <div class="modal-store-name">${esc(store.name || store.nickname || "Loja")}</div>
-                <div class="modal-store-id">ID: ${esc(store.id || "N/A")}</div>
-              </div>
-              <span class="modal-store-badge ${store.active ? "active" : "inactive"}">
-                ${store.active ? "Ativa" : "Inativa"}
-              </span>
-            </div>
-          `,
-            )
-            .join("")
-
-          modalLoading.hidden = true
-          modalContent.hidden = false
+          return
         }
-      } catch (error) {
-        console.error("[ML Modal] Erro ao carregar lojas:", error)
+
+        modalContent.innerHTML = stores.map((s, i) => `
+          <div class="modal-store-item" style="animation-delay:${i*0.05}s">
+            <div class="modal-store-info">
+              <div class="modal-store-name">${esc(s.name)}</div>
+              <div class="modal-store-id">ID: ${esc(s.id)}</div>
+            </div>
+            <span class="modal-store-badge ${s.active ? "active" : "inactive"}">
+              ${s.active ? "Ativa" : "Inativa"}
+            </span>
+          </div>
+        `).join("")
+        modalLoading.hidden = true
+        modalContent.hidden = false
+      } catch (err) {
+        console.error("[ML Modal] Erro ao carregar lojas:", err)
         modalLoading.hidden = true
         modalError.hidden = false
       }
@@ -532,27 +511,41 @@ document.addEventListener("DOMContentLoaded", () => {
     // Botão "Contas" abre o modal
     btnShowStores?.addEventListener("click", () => {
       openModal()
-      loadStores()
+      loadStoresIntoModal()
     })
 
-    // Botões de fechar modal
-    $$("[data-close-modal]", modal).forEach((btn) => {
-      btn.addEventListener("click", closeModal)
-    })
+    // Fechar modal (botões e overlay)
+    modal?.querySelectorAll("[data-close-modal]").forEach(btn => btn.addEventListener("click", closeModal))
+    modal?.addEventListener("click", e => { if (e.target === modal) closeModal() })
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && !modal?.hidden) closeModal() })
 
-    // Clique no overlay fecha o modal
-    modal?.addEventListener("click", (e) => {
-      if (e.target === modal) closeModal()
-    })
+    // Desconectar
+    btnDisc?.addEventListener("click", async () => {
+      const confirmed = await confirm("Tem certeza que deseja desconectar do Mercado Livre?")
+      if (!confirmed) return
 
-    // ESC fecha o modal
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !modal?.hidden) {
-        closeModal()
+      showLoading(btnDisc)
+      try {
+        const r = await fetch("/api/ml/disconnect", { method: "POST" })
+        if (!r.ok) throw new Error("HTTP " + r.status)
+        await refreshMlStatus()
+        renderAccountsInCard([])
+        toast("Desconectado do Mercado Livre com sucesso", "success")
+      } catch (e) {
+        toast("Falha ao desconectar do Mercado Livre", "error")
+      } finally {
+        hideLoading(btnDisc)
       }
     })
 
-    refreshMlStatus()
+    // status inicial + carrega lista (no card) em background
+    await refreshMlStatus()
+    try {
+      const stores = await fetchAccounts()
+      renderAccountsInCard(stores)
+    } catch (e) {
+      console.warn("[ML] Não foi possível obter contas:", e)
+    }
   })()
 
   document.addEventListener("keydown", (e) => {
