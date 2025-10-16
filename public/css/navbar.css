@@ -1,6 +1,5 @@
 @charset 'UTF-8';
 
-/* Variáveis Otimizadas (Mais coerentes com um design system moderno) */
 :root {
     /* Cores de Ação */
     --color-primary: hsl(240, 70%, 50%); /* Azul principal para o ativo/botão principal */

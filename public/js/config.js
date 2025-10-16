@@ -408,47 +408,91 @@ document.addEventListener("DOMContentLoaded", () => {
       return [];
     }
 
-    async function loadStores() {
-      if (!modal) return;
+// adicione perto dos outros "const" do modal:
+let _loadingStores = false;
 
-      // estado inicial
-      modalLoading.hidden = false;
-      modalContent.hidden = true;
+  async function loadStores() {
+    if (!modal || _loadingStores) return;   // evita chamadas paralelas
+    _loadingStores = true;
+
+    // estado inicial (apenas loading visível)
+    modalLoading.hidden = false;
+    modalContent.hidden = true;
+    modalEmpty.hidden   = true;
+    modalError.hidden   = true;
+    modalContent.innerHTML = "";
+
+    try {
+      // tenta /api/ml/stores; se falhar, cai para /api/ml/me
+      const getJson = async (url) => {
+        const r = await fetch(url, { cache: "no-store" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      };
+
+      let data = null;
+      try { data = await getJson("/api/ml/stores"); }
+      catch { try { data = await getJson("/api/ml/me"); } catch { data = null; } }
+
+      const normalizeStores = (d) => {
+        if (!d) return [];
+        if (Array.isArray(d.stores)) return d.stores;
+        if (Array.isArray(d.accounts)) {
+          return d.accounts.map(a => ({
+            id: a.user_id || a.id,
+            name: a.nickname || a.name || `Conta ${a.user_id || a.id}`,
+            nickname: a.nickname,
+            site_id: a.site_id || "MLB",
+            active: a.active ?? true
+          }));
+        }
+        if (d.user_id || d.id || d.nickname) {
+          return [{
+            id: d.user_id || d.id,
+            name: d.nickname || d.name || "Conta",
+            nickname: d.nickname,
+            site_id: d.site_id || "MLB",
+            active: true
+          }];
+        }
+        return [];
+      };
+
+      const stores = normalizeStores(data);
+
+      if (!stores.length) {
+        modalLoading.hidden = true;
+        modalEmpty.hidden   = false;  // mostra “Nenhuma loja conectada”
+        return;
+      }
+
+      modalContent.innerHTML = stores.map(store => `
+        <div class="modal-store-item">
+          <div class="modal-store-info">
+            <div class="modal-store-name">${esc(store.name || store.nickname || "Loja")}</div>
+            <div class="modal-store-id">ID: ${esc(store.id || "N/A")} • ${esc(store.site_id || "")}</div>
+          </div>
+          <span class="modal-store-badge ${store.active ? "active" : "inactive"}">
+            ${store.active ? "Ativa" : "Inativa"}
+          </span>
+        </div>
+      `).join("");
+
+      modalLoading.hidden = true;
+      modalContent.hidden = true;   // garante reset
       modalEmpty.hidden   = true;
       modalError.hidden   = true;
-      modalContent.innerHTML = "";
-
-      try {
-        const stores = await fetchStores();
-
-        if (!stores.length) {
-          modalLoading.hidden = true;
-          modalEmpty.hidden   = true;   // se quiser mostrar “nenhuma loja”, deixe false
-          // Vamos mostrar explicitamente a empty:
-          modalEmpty.hidden   = false;
-          return;
-        }
-
-        modalContent.innerHTML = stores.map((store) => `
-          <div class="modal-store-item">
-            <div class="modal-store-info">
-              <div class="modal-store-name">${esc(store.name || store.nickname || "Loja")}</div>
-              <div class="modal-store-id">ID: ${esc(store.id || "N/A")} • ${esc(store.site_id || "")}</div>
-            </div>
-            <span class="modal-store-badge ${store.active ? "active" : "inactive"}">
-              ${store.active ? "Ativa" : "Inativa"}
-            </span>
-          </div>
-        `).join("");
-
-        modalLoading.hidden = true;
-        modalContent.hidden = false;
-      } catch (e) {
-        console.error("[ML Modal] Erro ao carregar lojas:", e);
-        modalLoading.hidden = true;
-        modalError.hidden   = false;
-      }
+      modalContent.hidden = false;  // exibe conteúdo
+    } catch (e) {
+      console.error("[ML Modal] Erro ao carregar lojas:", e);
+      modalLoading.hidden = true;
+      modalContent.hidden = true;
+      modalEmpty.hidden   = true;
+      modalError.hidden   = false;
+    } finally {
+      _loadingStores = false;
     }
+  }
 
     btnShowStores?.addEventListener("click", () => { openModal(); loadStores(); });
     $$("[data-close-modal]", modal).forEach((b) => b.addEventListener("click", closeModal));

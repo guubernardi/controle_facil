@@ -187,6 +187,17 @@ try {
   console.warn('[BOOT] Rotas ML OAuth não carregadas (opcional):', e?.message || e);
 }
 
+/* ========= API Mercado Livre (stores/contas) ========= */
+try {
+  const registerMlApi = require('./routes/ml-api');
+  if (typeof registerMlApi === 'function') {
+    registerMlApi(app);
+    console.log('[BOOT] Rotas ML API registradas');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
+}
+
 /* ------------------------------------------------------------
  *  Healthchecks
  * ------------------------------------------------------------ */
