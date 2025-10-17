@@ -81,13 +81,10 @@
                             <input type="checkbox" id="rememberMe" name="rememberMe">
                             <span>Lembrar-me</span>
                         </label>
-                        <a href="#" class="forgot-password">Esqueceu a senha?</a>
+                        <a href="/reset.html" class="forgot-password">Esqueceu a senha?</a>
                     </div>
-
-                    <button type="submit" class="submit-btn">
-                        <a href="home.html">Entrar</a>
-                    </button>
-
+                    <div id="loginError" class="error" role="alert" style="display:none"></div>
+                    <button type="submit" class="submit-btn" id="btnLogin">Entrar</button>
                     <div class="divider">
                         <span>ou continue com</span>
                     </div>
@@ -119,6 +116,10 @@
         </div>
     </div>
 
-    <script src="js/login.js"></script>
+    <script>
+         window.__LOGIN_ENDPOINT__ = '/login';
+    </script>
+<script src="/js/login.js" defer></script>
+
 </body>
 </html>

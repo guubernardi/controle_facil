@@ -3,21 +3,27 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Controle Facil - Edição</title>
+  <title>Devolução — Controle Fácil</title>
+  <meta name="description" content="Editar dados, valores e histórico de uma devolução." />
+
   <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- Fontes (únicas) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet"/>
+
+  <!-- Estilos da página -->
   <link rel="stylesheet" href="css/devolucao.css">
 </head>
 <body class="devolucao-page">
 
-  <!-- Topbar -->
+  <!-- Auth guard (bloqueia se não logado) -->
+  <script src="/js/auth-guard.js"></script>
+
+  <!-- Topbar mínima -->
   <div class="topbar-mini">
-    <a href="/index.html" class="voltar" aria-label="Voltar para o Log de Custos">
+    <a href="index.html" class="voltar" aria-label="Voltar para Devoluções">
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M15 18l-6-6 6-6"/>
       </svg>
@@ -248,8 +254,10 @@
       </section>
     </div>
   </main>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <!-- Scripts da página -->
   <script src="js/labels.js"></script>
   <script src="js/devolucao-editar.js"></script>
 </body>

@@ -62,7 +62,7 @@
         </a>
 
         <!-- DASHBOARDS & RELATÓRIOS -->
-        <a href="dashboards.html" class="sidebar-nav-item" data-page="dashboards">
+        <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboards">
           <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="20" x2="18" y2="8"/>
             <line x1="12" y1="20" x2="12" y2="4"/>
@@ -96,14 +96,14 @@
       </nav>
 
     <div class="sidebar-footer">
-      <!-- Dados fictícios do usuário; troque quando tiver auth -->
       <div class="sidebar-user">
         <div class="sidebar-user-info">
-          <div class="sidebar-user-name">Gustavo</div>
-          <div class="sidebar-user-email">gustavo@email.com</div>
+          <div class="sidebar-user-name" id="sidebarUserName">—</div>
+          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
+          <div class="sidebar-ml" id="mlInfo">ML: —</div>
         </div>
       </div>
-      <button class="sidebar-logout" aria-label="Sair">
+      <button class="sidebar-logout" id="btnLogout" aria-label="Sair">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
           <polyline points="16 17 21 12 16 7"/>
@@ -317,6 +317,7 @@
   </main>
 
   <!-- Scripts do layout e da Home -->
+  <script src="/js/auth-guard.js"></script>
   <script src="js/navigation.js"></script>
   <script type="module" src="js/home.js"></script>
 </body>

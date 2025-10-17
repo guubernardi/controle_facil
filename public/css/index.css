@@ -1063,13 +1063,6 @@ body.has-sidebar.sidebar-collapsed .conteudo-principal{
   transform: translateY(1px);
 }
 
-/* Botão outline */
-.botao-outline {
-  background: #ffffff;
-  color: #374151;
-  border: 1.5px solid #d1d5db;
-}
-
 .botao-outline:hover:not(:disabled) {
   background: #f9fafb;
   border-color: #9ca3af;

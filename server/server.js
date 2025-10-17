@@ -9,8 +9,9 @@
 
 try {
   if (process.env.NODE_ENV !== 'production') {
-    require('dotenv').config();
-    console.log('[BOOT] dotenv carregado (.env)');
+    // override: true = .env SOBRESCREVE variáveis já existentes
+    require('dotenv').config({ override: true });
+    console.log('[BOOT] dotenv carregado (.env) [override]');
   }
 } catch (_) {
   console.log('[BOOT] dotenv não carregado (ok em produção)');
@@ -20,10 +21,22 @@ const express = require('express');
 const path = require('path');
 const { query } = require('./db');
 
-const app = express();
+/* === Sessão === */
+const session = require('express-session');
+const ConnectPg = require('connect-pg-simple')(session);
 
-/** Middlewares globais */
+const app = express();
+app.disable('x-powered-by');
+
+// após registrar os middlewares estáticos
+app.get('/', (req, res) => {
+  if (req.session?.user) return res.redirect('/home.html');
+  return res.redirect('/login.html');
+});
+
+/** Parsers globais (ANTES das rotas) */
 app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 // Tratador de JSON inválido (evita 500)
 app.use((err, _req, res, next) => {
@@ -33,15 +46,33 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 
+/** Sessão (antes do static e de qualquer rota) */
+app.set('trust proxy', 1);
+app.use(session({
+  store: new ConnectPg({
+    conString: process.env.DATABASE_URL,
+    createTableIfMissing: true,
+    tableName: 'session'
+  }),
+  name: 'rf.sid',
+  secret: process.env.SESSION_SECRET || 'dev-change-me',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 12 * 60 * 60 * 1000 // 12h (sobrescrito pelo "remember me")
+  }
+}));
+
 /** Static (raiz /public) */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 /** Aliases para documentação estática */
-// /docs → /public/docs/index.html
 app.get('/docs', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'docs', 'index.html'));
 });
-// /docs/:slug → /public/docs/index.html?g=:slug  (ex.: /docs/ml, /docs/bling, /docs/api)
 app.get('/docs/:slug', (req, res) => {
   const slug = encodeURIComponent(req.params.slug || '');
   res.redirect(`/docs/index.html?g=${slug}`);
@@ -60,11 +91,36 @@ try {
   console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
 }
 
-/** JSON UTF-8 nas rotas /api */
+/** Cabeçalho de resposta JSON nas rotas /api */
 app.use('/api', (_req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
+
+/** Rotas de autenticação */
+const authRoutes = require('./routes/auth');
+app.use('/api/auth', authRoutes);
+
+/** Compatibilidade: front antigo que POSTava em /login */
+app.post('/login', (req, res) => res.redirect(307, '/api/auth/login'));
+
+/** Guard de autenticação para /api (exceto rotas abertas) */
+app.use('/api', (req, res, next) => {
+  const p = req.path; // '/health', '/db/ping', '/auth/login', etc.
+  if (
+    p === '/health' ||        // GET /api/health
+    p === '/db/ping' ||       // GET /api/db/ping
+    p.startsWith('/auth/')    // /api/auth/*
+  ) {
+    return next();
+  }
+  if (req.session?.user) return next();
+  return res.status(401).json({ error: 'Não autorizado' });
+});
+
+/** RBAC por prefixo */
+app.use('/api/csv', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __, next) => next()));
+app.use('/api/settings', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __, next) => next()));
 
 /** Rotas utilitárias */
 try {
@@ -93,7 +149,7 @@ try {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
-/* Helpers compartilhados */
+/* Helpers */
 function safeParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
@@ -112,9 +168,7 @@ async function tableHasColumns(table, columns) {
   return out;
 }
 
-/**
- * addReturnEvent (idempotente)
- */
+/** addReturnEvent (idempotente) */
 async function addReturnEvent({
   returnId, type, title = null, message = null, meta = null,
   createdBy = 'system', idempKey = null
@@ -157,10 +211,33 @@ async function addReturnEvent({
 /* ========= ROTAS CSV ========= */
 try {
   const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-  registerCsvUploadExtended(app, { addReturnEvent }); // injeta addReturnEvent
+  registerCsvUploadExtended(app, { addReturnEvent });
   console.log('[BOOT] Rotas CSV carregadas');
 } catch (e) {
   console.warn('[BOOT] Falha ao carregar rotas CSV:', e?.message || e);
+}
+
+/* ========= Central (overview) ========= */
+try {
+  const registerCentral = require('./routes/central');
+  if (typeof registerCentral === 'function') {
+    registerCentral(app);
+    console.log('[BOOT] Rotas Central registradas');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas Central não carregadas (opcional):', e?.message || e);
+}
+
+
+/* ========= Returns (listagem genérica) ========= */
+try {
+  const registerReturns = require('./routes/returns');
+  if (typeof registerReturns === 'function') {
+    registerReturns(app);
+    console.log('[BOOT] Rotas Returns registradas');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas Returns não carregadas (opcional):', e?.message || e);
 }
 
 /* ========= Webhook Mercado Livre ========= */
@@ -174,9 +251,7 @@ try {
   console.warn('[BOOT] Webhook ML não carregado (opcional):', e?.message || e);
 }
 
-/* ========= OAuth Mercado Livre =========
-   (usa o arquivo server/routes/ml-auth.js)
-======================================== */
+/* ========= OAuth Mercado Livre ========= */
 try {
   const registerMlAuth = require('./routes/ml-auth');
   if (typeof registerMlAuth === 'function') {
@@ -361,10 +436,8 @@ app.get('/api/returns/logs', async (req, res) => {
 
 /* ------------------------------------------------------------
  *  DASHBOARD (dados consolidados)
- *  /api/dashboard?from=YYYY-MM-DD&to=YYYY-MM-DD&limitTop=5
  * ------------------------------------------------------------ */
 app.get('/api/dashboard', async (req, res) => {
-  // helper mock (usado se der erro no banco)
   const mock = () => {
     const today = new Date();
     const daily = Array.from({ length: 30 }).map((_, i) => {
@@ -395,7 +468,6 @@ app.get('/api/dashboard', async (req, res) => {
     const { from, to, limitTop = '5' } = req.query;
     const lim = Math.max(1, Math.min(parseInt(limitTop, 10) || 5, 20));
 
-    // datas padrão: últimos 30 dias
     const now = new Date();
     const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString().slice(0, 10);
     const defaultFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29).toISOString().slice(0, 10);
@@ -403,17 +475,14 @@ app.get('/api/dashboard', async (req, res) => {
     const pFrom = from || defaultFrom;
     const pTo   = to   || defaultTo;
 
-    // Monta base + custo efetivo (mesma regra visual do front)
     const cols = await tableHasColumns('devolucoes', ['tipo_reclamacao','reclamacao','log_status','valor_produto','valor_frete','status','created_at','sku']);
 
     if (!cols.created_at) {
-      // tabela não existe
       return res.json(mock());
     }
 
     const params = [pFrom, pTo];
 
-    // DAILY
     const qDaily = await query(
       `
       WITH base AS (
@@ -445,7 +514,6 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    // MONTHLY
     const qMonthly = await query(
       `
       WITH base AS (
@@ -477,7 +545,6 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    // STATUS
     const qStatus = await query(
       `
       WITH base AS (
@@ -494,7 +561,6 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    // TOTALS (contagens + prejuízo total)
     const qTotals = await query(
       `
       WITH base AS (
@@ -528,7 +594,6 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    // TOP ITEMS (por SKU)
     const qTop = await query(
       `
       WITH base AS (

@@ -10,17 +10,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const s = document.createElement("style");
     s.id = "rf-ui-styles";
     s.textContent = `
-      .toast-notification{position:fixed;right:20px;bottom:20px;z-index:9999;opacity:0;transform:translateY(10px);transition:all .25s ease;background:#111827;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:8px;align-items:center}
-      .toast-notification.show{opacity:1;transform:none}
-      .toast-icon{opacity:.8}
-      .confirm-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:16px}
-      .confirm-dialog{background:#fff;border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 20px 40px rgba(0,0,0,.2);min-width:280px;max-width:92vw;padding:20px;display:flex;flex-direction:column;gap:12px}
-      .confirm-icon{font-size:22px}
-      .confirm-actions{display:flex;gap:8px;justify-content:flex-end}
-      .btn--danger{background:#dc2626;color:#fff;border-color:#dc2626}
-      .spinner{display:inline-block;width:18px;height:18px;border-radius:50%;border:2px solid #e5e7eb;border-top-color:var(--primary,#0056d2);animation:mlspin .8s linear infinite;margin-right:8px;vertical-align:middle}
-      @keyframes mlspin {to{transform:rotate(360deg)}}
-      /* garante que os blocos do modal obedeçam [hidden] sem interferir no resto do app */
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+      @keyframes slideUp { from { opacity: 0; transform: translateY(20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+      .toast-notification{position:fixed;right:20px;bottom:20px;z-index:9999;opacity:0;transform:translateY(20px) scale(0.95);transition:all .3s cubic-bezier(0.34, 1.56, 0.64, 1);color:#fff;border-radius:12px;padding:14px 18px;display:flex;gap:10px;align-items:center;backdrop-filter:blur(10px);font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,0.2);}
+      .toast-notification.show{opacity:1;transform:translateY(0) scale(1);}
+      .toast-icon{display:flex;align-items:center;justify-content:center;width:24px;height:24px;}
+      .toast-icon svg{filter:drop-shadow(0 2px 4px rgba(0,0,0,0.2));}
+      .confirm-overlay{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px;}
+      .confirm-dialog{background:#fff;border:1px solid var(--border,#e5e7eb);border-radius:16px;box-shadow:0 24px 48px rgba(0,0,0,.25);min-width:320px;max-width:92vw;padding:24px;display:flex;flex-direction:column;gap:16px;}
+      .confirm-icon{display:flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#fef3c7,#fde68a);margin:0 auto;}
+      .confirm-message{font-size:15px;line-height:1.6;color:#374151;text-align:center;}
+      .confirm-actions{display:flex;gap:10px;justify-content:center;margin-top:8px;}
+      .btn--danger{background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border-color:#dc2626;box-shadow:0 2px 8px rgba(239,68,68,0.3);}
+      .btn--danger:hover{background:linear-gradient(135deg,#dc2626,#b91c1c);box-shadow:0 4px 16px rgba(239,68,68,0.4);}
+      .spinner{display:inline-block;vertical-align:middle;margin-right:8px;}
       #ml-stores-modal [hidden]{display:none !important;}
     `;
     document.head.appendChild(s);
@@ -30,15 +34,27 @@ document.addEventListener("DOMContentLoaded", () => {
   const toast = (msg, type = "info") => {
     const existing = document.querySelector(".toast-notification");
     if (existing) existing.remove();
-    const icons = { success: "✓", error: "✕", warning: "⚠", info: "ℹ" };
+    const icons = { 
+      success: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>', 
+      error: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>', 
+      warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>', 
+      info: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>' 
+    };
+    const colors = {
+      success: 'background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);',
+      error: 'background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 8px 24px rgba(239, 68, 68, 0.4);',
+      warning: 'background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); box-shadow: 0 8px 24px rgba(245, 158, 11, 0.4);',
+      info: 'background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); box-shadow: 0 8px 24px rgba(59, 130, 246, 0.4);'
+    };
     const t = document.createElement("div");
     t.className = `toast-notification toast-${type}`;
+    t.style = colors[type] || colors.info;
     t.innerHTML = `<span class="toast-icon">${icons[type] || icons.info}</span><span class="toast-message">${msg}</span>`;
     document.body.appendChild(t);
     requestAnimationFrame(() => t.classList.add("show"));
     setTimeout(() => {
       t.classList.remove("show");
-      setTimeout(() => t.remove(), 250);
+      setTimeout(() => t.remove(), 300);
     }, 3000);
   };
 
@@ -49,21 +65,31 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!btn) return;
     btn.disabled = true;
     btn.dataset.originalText = btn.textContent;
-    btn.innerHTML = '<span class="spinner"></span> Carregando...';
+    const spinner = '<svg class="spinner" width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></path></svg>';
+    btn.innerHTML = spinner + ' Carregando...';
+    btn.style.opacity = '0.8';
   };
   const hideLoading = (btn) => {
     if (!btn) return;
     btn.disabled = false;
     btn.textContent = btn.dataset.originalText || btn.textContent;
+    btn.style.opacity = '1';
   };
 
   const confirm = (msg) =>
     new Promise((resolve) => {
       const overlay = document.createElement("div");
       overlay.className = "confirm-overlay";
+      overlay.style = 'animation: fadeIn 0.2s ease;';
       overlay.innerHTML = `
-        <div class="confirm-dialog">
-          <div class="confirm-icon">⚠</div>
+        <div class="confirm-dialog" style="animation: slideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);">
+          <div class="confirm-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </div>
           <p class="confirm-message">${msg}</p>
           <div class="confirm-actions">
             <button class="btn btn--ghost confirm-cancel">Cancelar</button>
@@ -71,7 +97,11 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
         </div>`;
       document.body.appendChild(overlay);
-      const cleanup = (result) => { overlay.remove(); resolve(result); };
+      const cleanup = (result) => { 
+        overlay.style.animation = 'fadeOut 0.2s ease';
+        setTimeout(() => overlay.remove(), 200);
+        resolve(result); 
+      };
       overlay.querySelector(".confirm-cancel").onclick = () => cleanup(false);
       overlay.querySelector(".confirm-ok").onclick     = () => cleanup(true);
       overlay.addEventListener("click", (e) => { if (e.target === overlay) cleanup(false); });

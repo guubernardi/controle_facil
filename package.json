@@ -14,10 +14,14 @@
   },
   "dependencies": {
     "axios": "^1.7.7",
+    "bcrypt": "^6.0.0",
+    "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.6",
     "dayjs": "^1.11.13",
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
+    "express-rate-limit": "^8.1.0",
+    "express-session": "^1.18.2",
     "pg": "^8.16.3"
   },
   "devDependencies": {

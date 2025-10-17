@@ -3,90 +3,116 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Configurações - Controle Fácil</title>
+  <title>Configurações — Controle Fácil</title>
 
   <!-- fontes e estilos globais do app -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
+  <!-- CSS -->
   <link rel="stylesheet" href="../css/navigation.css" />
   <link rel="stylesheet" href="../css/config.css" />
   <link rel="stylesheet" href="../css/ml.css" />
 
   <link rel="shortcut icon" href="../assets/img/logo_rf.png" type="image/png">
 </head>
-<body class="settings-page">
+<body class="settings-page" data-page="settings">
 
-  <!-- Sidebar principal do app -->
-  <script src="../js/navigation.js"></script>
-  <nav>
-    <a class="sidebar-nav-item" data-page="home" href="../home.html">
-      <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <!-- SIDEBAR -->
+  <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
+    <div class="sidebar-header">
+      <a href="../home.html" class="sidebar-logo" aria-label="Retorno Fácil">
+        <span class="sidebar-logo-text">Retorno Fácil</span>
+      </a>
+      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu" title="Menu" aria-expanded="false" aria-controls="sidebar">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M3 6h18M3 12h18M3 18h18"/>
+        </svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a class="sidebar-nav-item" data-page="home" href="../home.html">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M3 10.5 12 3l9 7.5"/><path d="M5 10v10h14V10"/>
         </svg>
-      </span>
-      <span class="sidebar-nav-text">Home</span>
-    </a>
+        <span class="sidebar-nav-text">Home</span>
+      </a>
 
-    <a class="sidebar-nav-item" data-page="central" href="../central.html">
-      <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
-          <rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
+      <a class="sidebar-nav-item" data-page="central" href="../central.html">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
         </svg>
-      </span>
-      <span class="sidebar-nav-text">Central</span>
-    </a>
+        <span class="sidebar-nav-text">Central</span>
+      </a>
 
-    <a class="sidebar-nav-item" data-page="devolucoes" href="../index.html">
-      <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <a class="sidebar-nav-item" data-page="devolucoes" href="../index.html">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
         </svg>
-      </span>
-      <span class="sidebar-nav-text">Devoluções</span>
-    </a>
+        <span class="sidebar-nav-text">Devoluções</span>
+      </a>
 
-    <a class="sidebar-nav-item" data-page="dashboard" href="../dashboard.html">
-      <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+      <a class="sidebar-nav-item" data-page="dashboard" href="../dashboard.html">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <line x1="18" y1="20" x2="18" y2="10"/>
+          <line x1="12" y1="20" x2="12" y2="4"/>
+          <line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
-      </span>
-      <span class="sidebar-nav-text">Dashboard</span>
-    </a>
+        <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
+      </a>
 
-    <a class="sidebar-nav-item" data-page="logs" href="../logs.html">
-      <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <a class="sidebar-nav-item" data-page="logs" href="../logs.html">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
         </svg>
-      </span>
-      <span class="sidebar-nav-text">Log de Custos</span>
-    </a>
+        <span class="sidebar-nav-text">Log de Custos</span>
+      </a>
 
-    <a class="sidebar-nav-item active" data-page="settings" href="./config.html">
-      <span class="sidebar-nav-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.07a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 4.2 19.4l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.07a1.65 1.65 0 0 0 1.51-1Z"/>
+      <a class="sidebar-nav-item" data-page="settings" href="./config.html" aria-current="page">
+        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+          <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
         </svg>
-      </span>
-      <span class="sidebar-nav-text">Configurações</span>
-    </a>
-  </nav>
+        <span class="sidebar-nav-text">Configurações</span>
+      </a>
+    </nav>
 
-  <!-- Conteúdo -->
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <div class="sidebar-user-info">
+          <div class="sidebar-user-name" id="sidebarUserName">—</div>
+          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
+        </div>
+      </div>
+      <button class="sidebar-logout" id="btnLogout" title="Sair" aria-label="Sair">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <path d="M16 17l5-5-5-5"/>
+          <path d="M21 12H9"/>
+        </svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Overlay único para mobile -->
+  <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
+
+  <!-- CONTEÚDO -->
   <main class="conteudo-principal">
     <header class="cabecalho">
       <div class="container">
-        <nav class="breadcrumb">
+        <nav class="breadcrumb" aria-label="Você está em">
           <a href="../home.html" class="breadcrumb-link">Home</a>
-          <span class="breadcrumb-separador">›</span>
-          <span class="breadcrumb-atual">Configurações</span>
+          <span class="breadcrumb-separador" aria-hidden="true">›</span>
+          <span class="breadcrumb-atual" aria-current="page">Configurações</span>
         </nav>
       </div>
     </header>
@@ -100,7 +126,7 @@
     <div class="container">
       <div class="nav-voltar">
         <a href="../home.html" class="link-voltar">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <path d="M12.5 15l-5-5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           Preferências / Empresa
@@ -112,19 +138,41 @@
         <aside class="barra-lateral">
           <nav class="menu">
             <a href="#empresa" class="item-menu ativo" data-target="empresa">
-              <span class="icone-menu">🏢</span>
+              <span class="icone-menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/>
+                  <path d="M3 9h18M9 21V9"/>
+                </svg>
+              </span>
               <span class="rotulo-menu">Empresa</span>
             </a>
             <a href="#usuarios" class="item-menu" data-target="usuarios">
-              <span class="icone-menu">👥</span>
+              <span class="icone-menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                  <circle cx="9" cy="7" r="4"/>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                </svg>
+              </span>
               <span class="rotulo-menu">Usuários & Permissões</span>
             </a>
             <a href="#regras" class="item-menu" data-target="regras">
-              <span class="icone-menu">⚙️</span>
+              <span class="icone-menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+                  <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
+                </svg>
+              </span>
               <span class="rotulo-menu">Regras de Custos</span>
             </a>
             <a href="#integracoes" class="item-menu" data-target="integracoes">
-              <span class="icone-menu">🔌</span>
+              <span class="icone-menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M6 9V2m0 0L3 5m3-3 3 3M6 20a8 8 0 1 0 8-8"/>
+                  <circle cx="15" cy="15" r="5"/>
+                  <path d="M12 15h7"/>
+                </svg>
+              </span>
               <span class="rotulo-menu">Integrações</span>
             </a>
           </nav>
@@ -132,7 +180,6 @@
 
         <!-- CONTEÚDO DAS ABAS -->
         <section class="area-conteudo">
-
           <!-- EMPRESA -->
           <section id="empresa" class="config-pane active" aria-labelledby="tab-empresa">
             <h2 class="titulo-secao-main">Configurações da empresa</h2>
@@ -302,12 +349,10 @@
             <div class="integrations-section">
               <h3 class="integrations-title">E-commerces</h3>
               <div class="integrations-grid">
-
-                <!-- Mercado Livre -->
                 <article class="integration-card" id="ml-card" data-ml="card" data-integration="ml">
                   <header class="integration-head">
                     <div class="integration-logo">
-                     <img src="../assets/img/logo_mercadolivre.png" alt="Logo Mercado Livre"/>
+                      <img src="../assets/img/logo_mercadolivre.png" alt="Logo Mercado Livre"/>
                     </div>
                     <div>
                       <h3>Mercado Livre</h3>
@@ -332,7 +377,6 @@
                   </div>
                 </article>
 
-                <!-- Shopee -->
                 <article class="integration-card is-disabled" aria-disabled="true">
                   <header class="integration-head">
                     <div class="integration-logo"><img src="../assets/img/logo_shopee.png" alt="Logo Shopee"></div>
@@ -386,7 +430,6 @@
               </div>
             </div>
           </section>
-
         </section>
       </div>
     </div>
@@ -409,17 +452,15 @@
           </svg>
         </button>
       </div>
-      
+
       <div class="modal-body">
         <div id="ml-stores-loading" class="modal-loading">
           <div class="spinner"></div>
           <p>Carregando lojas...</p>
         </div>
-        
-        <div id="ml-stores-content" class="modal-stores-list" hidden>
-           Conteúdo será preenchido dinamicamente 
-        </div>
-        
+
+        <div id="ml-stores-content" class="modal-stores-list" hidden></div>
+
         <div id="ml-stores-empty" class="modal-empty" hidden>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <circle cx="12" cy="12" r="10"></circle>
@@ -429,7 +470,7 @@
           <p>Nenhuma loja conectada</p>
           <small>Conecte sua conta do Mercado Livre para começar</small>
         </div>
-        
+
         <div id="ml-stores-error" class="modal-error" hidden>
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <circle cx="12" cy="12" r="10"></circle>
@@ -440,15 +481,24 @@
           <small>Tente novamente mais tarde</small>
         </div>
       </div>
-      
+
       <div class="modal-footer">
         <button type="button" class="btn btn--ghost" data-close-modal>Fechar</button>
       </div>
     </div>
   </div>
 
-  <!-- JS da página -->
-  <script src="../js/config.js"></script>
+  <!-- Botão flutuante (mobile) -->
+  <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Abrir menu" title="Menu" aria-controls="sidebar" aria-expanded="false">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <path d="M3 6h18M3 12h18M3 18h18"/>
+    </svg>
+  </button>
+
+  <!-- Scripts -->
+  <script src="/js/auth-guard.js"></script>
+  <script src="../js/navigation.js" defer></script>
+  <script src="../js/config.js" defer></script>
   <script src="../js/docs.js" defer></script>
 </body>
 </html>

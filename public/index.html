@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Controle Facil - Devoluções</title>
+  <title>Controle Fácil - Devoluções</title>
   <meta name="description" content="Sistema completo para gerenciamento de devoluções de produtos com interface moderna e intuitiva"/>
   <meta name="author" content="Sistema Devoluções"/>
   <meta name="keywords" content="devoluções, gestão, produtos, e-commerce, sistema"/>
@@ -62,13 +62,13 @@
         <span class="sidebar-nav-text">Devoluções</span>
       </a>
 
-      <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboard">
+      <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboards">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <line x1="18" y1="20" x2="18" y2="10"/>
           <line x1="12" y1="20" x2="12" y2="4"/>
           <line x1="6" y1="20" x2="6" y2="14"/>
         </svg>
-        <span class="sidebar-nav-text">Dashboard</span>
+        <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
       </a>
 
       <a href="logs.html" class="sidebar-nav-item" data-page="logs">
@@ -83,24 +83,26 @@
       </a>
 
       <!-- Configurações -->
-        <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
-          <span class="sidebar-nav-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
-              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Configurações</span>
-        </a>
-      </nav>    
+      <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
+        <span class="sidebar-nav-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Configurações</span>
+      </a>
+    </nav>
+
     <div class="sidebar-footer">
       <div class="sidebar-user">
         <div class="sidebar-user-info">
-          <div class="sidebar-user-name">Gustavo</div>
-          <div class="sidebar-user-email">gustavo@email.com</div>
+          <div class="sidebar-user-name" id="sidebarUserName">—</div>
+          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
+          <div class="sidebar-ml" id="mlInfo">ML: —</div>
         </div>
       </div>
-      <button class="sidebar-logout" aria-label="Sair">
+      <button class="sidebar-logout" id="btnLogout" aria-label="Sair">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
           <polyline points="16 17 21 12 16 7"/>
@@ -110,9 +112,9 @@
     </div>
   </aside>
 
-  <div id="sidebar-overlay" class="sidebar-overlay" hidden></div>
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-  <!-- HEADER -->
+  <!-- HEADER (sem botão de nova devolução) -->
   <header id="cabecalho" class="cabecalho">
     <div class="container">
       <div class="cabecalho-conteudo">
@@ -126,7 +128,7 @@
             </div>
           </div>
           <div class="titulo-area">
-            <h1 class="titulo-principal">Retorno Facil</h1>
+            <h1 class="titulo-principal">Retorno Fácil</h1>
             <p class="subtitulo">
               <svg class="icone-trending" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                 <path d="M0 11.5a.5.5 0 0 1 .5-.5h2.279l4.471-4.471a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7.5 8.293V2.5A.5.5 0 0 1 8 2z"/>
@@ -135,15 +137,7 @@
             </p>
           </div>
         </div>
-
-        <div class="acoes-header">
-          <button id="botao-nova-devolucao" class="botao botao-principal">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M8 0a.5.5 0 0 1 .5.5v7h7a.5.5 0 0 1 0 1h-7v7a.5.5 0 0 1-1 0v-7h-7a.5.5 0 0 1 0-1h7v-7A.5.5 0 0 1 8 0z"/>
-            </svg>
-            Nova Devolução
-          </button>
-        </div>
+        <div class="acoes-header"></div>
       </div>
     </div>
   </header>
@@ -273,10 +267,10 @@
               <path d="M50 75h20" stroke="#2196F3" stroke-width="2" stroke-linecap="round"/>
             </svg>
             <h3 class="titulo-vazio">Nenhuma devolução encontrada</h3>
-            <p id="descricao-vazia" class="descricao-vazio">Comece criando uma nova devolução ou ajuste os filtros de pesquisa</p>
-            <button id="btn-criar-vazio" class="botao botao-principal" style="margin-top: 1.5rem;">
-              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0a.5.5 0 0 1 .5.5v7h7a.5.5 0 0 1 0 1h-7v7a.5.5 0 0 1-1 0v-7h-7a.5.5 0 0 1 0-1h7v-7A.5.5 0 0 1 8 0z"/></svg>
-              Nova Devolução
+            <p id="descricao-vazia" class="descricao-vazio">Sincronize com o Mercado Livre ou ajuste os filtros de pesquisa</p>
+            <!-- Botão de sincronização (ou único lugar com este id) -->
+            <button id="btn-sync-ml" class="botao botao-principal" type="button" style="margin-top: 1.5rem;">
+              Sincronizar com ML
             </button>
           </div>
         </div>
@@ -304,92 +298,7 @@
     </div>
   </div>
 
-  <!-- MODAL: NOVA DEVOLUÇÃO (sem overlay filho) -->
-  <div id="modal-nova-devolucao" class="modal" role="dialog" aria-modal="true" aria-labelledby="novoTitulo" hidden>
-    <div class="modal-card" role="document">
-      <div class="modal-header">
-        <h2 id="novoTitulo">Nova Devolução</h2>
-        <button id="botao-fechar-modal" class="btn-icon" type="button" aria-label="Fechar modal">&times;</button>
-      </div>
-
-      <form id="form-nova-devolucao" class="modal-body">
-        <div class="grid">
-          <div class="campo-form">
-            <label for="numero-pedido">Número do Pedido</label>
-            <input id="numero-pedido" type="text" autocomplete="off" inputmode="numeric" placeholder="Ex.: 1234567890" aria-describedby="numero-pedido-hint"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="numero-nota">Número da NF</label>
-            <input id="numero-nota" type="text" autocomplete="off" placeholder="Ex.: 12345" aria-describedby="numero-nota-hint"/>
-          </div>
-
-          <div class="campo-form campo-span-2">
-            <label for="chave-nota">Chave da NFe</label>
-            <input id="chave-nota" type="text" autocomplete="off" placeholder="44 dígitos" maxlength="44" aria-describedby="chave-nota-hint"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="nome-cliente">Cliente</label>
-            <input id="nome-cliente" type="text" autocomplete="name" required aria-required="true"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="nome-produto">Produto</label>
-            <input id="nome-produto" type="text" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-owns="lista-produtos-ul" aria-haspopup="listbox" required aria-required="true"/>
-            <div id="lista-produtos" class="dropdown" role="listbox" aria-label="Sugestões de produto">
-              <ul id="lista-produtos-ul"></ul>
-            </div>
-          </div>
-
-          <div class="campo-form">
-            <label for="sku-produto">SKU</label>
-            <input id="sku-produto" type="text" autocomplete="off" placeholder="SKU interno"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="valor-produto">Valor Produto (R$)</label>
-            <input id="valor-produto" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0,00"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="valor-frete">Valor Frete (R$)</label>
-            <input id="valor-frete" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0,00"/>
-          </div>
-
-          <div class="campo-form">
-            <label for="motivo-codigo">Motivo</label>
-            <select id="motivo-codigo" required aria-required="true">
-              <option value="">Selecione um motivo</option>
-            </select>
-          </div>
-
-          <div class="campo-form">
-            <label for="responsavel-custo">Responsável pelo custo</label>
-            <select id="responsavel-custo">
-              <option value="">Selecione...</option>
-              <option value="plataforma">Plataforma (Compra Garantida)</option>
-              <option value="loja">Loja</option>
-              <option value="transportadora">Transportadora</option>
-              <option value="fabricante">Fabricante</option>
-            </select>
-          </div>
-
-          <div class="campo-form campo-span-2">
-            <label for="motivo-devolucao">Descrição</label>
-            <textarea id="motivo-devolucao" rows="3" placeholder="Detalhe o ocorrido (opcional)"></textarea>
-          </div>
-        </div>
-      </form>
-
-      <div class="modal-footer">
-        <button id="botao-cancelar" type="button" class="botao botao-outline">Cancelar</button>
-        <button type="submit" form="form-nova-devolucao" class="botao botao-principal">Criar</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- MODAL: DETALHES (sem overlay filho) -->
+  <!-- MODAL: DETALHES (mantido) -->
   <div id="modal-detalhes" class="modal" role="dialog" aria-modal="true" aria-labelledby="detTitulo" hidden>
     <div class="modal-card modal-lg" role="document">
       <div class="modal-header">
@@ -480,6 +389,8 @@
     </div>
   </div>
 
+  <!-- Scripts -->
+  <script src="/js/auth-guard.js"></script>
   <script src="js/navigation.js"></script>
   <script type="module" src="js/index.js"></script>
 </body>

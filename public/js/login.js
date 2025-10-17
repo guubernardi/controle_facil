@@ -1,60 +1,59 @@
-// Toggle password visibility
-const togglePassword = document.getElementById("togglePassword")
-const passwordInput = document.getElementById("password")
+// public/js/login.js
+(() => {
+  const form = document.querySelector('[data-login-form]') || document.querySelector('form');
+  const emailEl = form?.querySelector('input[type="email"], [name="email"]');
+  const passEl  = form?.querySelector('input[type="password"], [name="password"]');
+  const rememberEl = form?.querySelector('input[type="checkbox"][name="remember"]') || form?.querySelector('input[type="checkbox"]');
+  const errorBox = document.getElementById('login-error'); // opcional (se existir)
 
-if (togglePassword && passwordInput) {
-  togglePassword.addEventListener("click", function () {
-    const type = passwordInput.getAttribute("type") === "password" ? "text" : "password"
-    passwordInput.setAttribute("type", type)
+  function showError(msg) {
+    if (errorBox) {
+      errorBox.textContent = msg || 'Falha ao autenticar.';
+      errorBox.hidden = false;
+    } else {
+      alert(msg || 'Falha ao autenticar.');
+    }
+  }
 
-    // Toggle icon (you can add different SVG icons for show/hide)
-    this.classList.toggle("active")
-  })
-}
+  async function onSubmit(ev) {
+    ev.preventDefault();
+    const email = emailEl?.value?.trim();
+    const password = passEl?.value ?? '';
+    const remember = !!rememberEl?.checked;
 
-// Form submission handler
-const loginForm = document.getElementById("loginForm")
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ email, password, remember })
+      });
 
-if (loginForm) {
-  loginForm.addEventListener("submit", (e) => {
-    e.preventDefault()
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data?.error || 'Falha ao autenticar.');
+      }
 
-    const email = document.getElementById("email").value
-    const password = document.getElementById("password").value
-    const rememberMe = document.getElementById("rememberMe").checked
+      // destino pós-login:
+      const params = new URLSearchParams(location.search);
+      const nextParam = params.get('next');
+      const storedNext = sessionStorage.getItem('postLoginRedirect');
+      const target = nextParam || storedNext || '/home.html';
 
-    // Add your login logic here
-    console.log("Login attempt:", { email, password, rememberMe })
+      sessionStorage.removeItem('postLoginRedirect');
+      window.location.replace(target);
+    } catch (e) {
+      showError(e.message);
+    }
+  }
 
-    // Example: You would typically send this to your backend
-    // fetch('/api/login', {
-    //     method: 'POST',
-    //     headers: { 'Content-Type': 'application/json' },
-    //     body: JSON.stringify({ email, password, rememberMe })
-    // })
-    // .then(response => response.json())
-    // .then(data => {
-    //     if (data.success) {
-    //         window.location.href = '/dashboard';
-    //     }
-    // });
-  })
-}
+  if (form) form.addEventListener('submit', onSubmit);
 
-// Social login handlers
-const googleBtn = document.querySelector(".google-btn")
-const facebookBtn = document.querySelector(".facebook-btn")
-
-if (googleBtn) {
-  googleBtn.addEventListener("click", () => {
-    console.log("Google login clicked")
-    // Add Google OAuth logic here
-  })
-}
-
-if (facebookBtn) {
-  facebookBtn.addEventListener("click", () => {
-    console.log("Facebook login clicked")
-    // Add Facebook OAuth logic here
-  })
-}
+  // toggle de visibilidade da senha (se tiver botão/ícone com [data-toggle-pass])
+  const toggle = document.querySelector('[data-toggle-pass]');
+  if (toggle && passEl) {
+    toggle.addEventListener('click', () => {
+      passEl.type = passEl.type === 'password' ? 'text' : 'password';
+    });
+  }
+})();

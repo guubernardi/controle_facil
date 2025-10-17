@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Log de Custos - Controle Fácil</title>
+  <title>Log de Custos — Controle Fácil</title>
   <meta name="description" content="Auditoria de custos de devoluções com regras aplicadas e trilha de responsabilidade." />
   <meta name="author" content="Retorno Fácil" />
 
@@ -16,9 +16,9 @@
   <link rel="stylesheet" href="css/navigation.css">
   <link rel="stylesheet" href="css/logs.css">
 
-  <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/png">
+  <link rel="icon" href="assets/img/logo_rf.png" type="image/png">
 </head>
-<body class="logs-page">
+<body class="logs-page" data-page="logs">
 
   <!-- Sidebar -->
   <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
@@ -27,8 +27,10 @@
       <a href="home.html" class="sidebar-logo" aria-label="Retorno Fácil">
         <span class="sidebar-logo-text">Retorno Fácil</span>
       </a>
-      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu" title="Menu">
-       
+      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu" title="Menu" aria-expanded="false">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M3 6h18M3 12h18M3 18h18"/>
+        </svg>
       </button>
     </div>
 
@@ -42,79 +44,81 @@
             <path d="M5 10v10h14V10"/>
           </svg>
         </span>
-        <span class="sidebar-nav-text">Início</span>
+        <span class="sidebar-nav-text">Home</span>
       </a>
 
-        <a class="sidebar-nav-item" data-page="central" href="central.html">
-          <span class="sidebar-nav-icon">
-            <!-- Central (grid 2x2) -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <rect x="3" y="3" width="7" height="7" rx="1"/>
-              <rect x="14" y="3" width="7" height="7" rx="1"/>
-              <rect x="14" y="14" width="7" height="7" rx="1"/>
-              <rect x="3" y="14" width="7" height="7" rx="1"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Central</span>
-        </a>
+      <a class="sidebar-nav-item" data-page="central" href="central.html">
+        <span class="sidebar-nav-icon">
+          <!-- Central (grid 2x2) -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <rect x="3" y="3" width="7" height="7" rx="1"/>
+            <rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="14" y="14" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Central</span>
+      </a>
 
-        <a class="sidebar-nav-item" data-page="devolucoes" href="index.html">
-          <span class="sidebar-nav-icon">
-            <!-- Devoluções (seta de retorno) -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <polyline points="9 14 4 9 9 4"/>
-              <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Devoluções</span>
-        </a>
+      <a class="sidebar-nav-item" data-page="devolucoes" href="index.html">
+        <span class="sidebar-nav-icon">
+          <!-- Devoluções (seta de retorno) -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <polyline points="9 14 4 9 9 4"/>
+            <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Devoluções</span>
+      </a>
 
-        <a class="sidebar-nav-item" data-page="dashboard" href="dashboard.html">
-          <span class="sidebar-nav-icon">
-            <!-- Dashboard (gráfico de barras) -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <line x1="18" y1="20" x2="18" y2="10"/>
-              <line x1="12" y1="20" x2="12" y2="4"/>
-              <line x1="6" y1="20" x2="6" y2="14"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Dashboard</span>
-        </a>
-        
-        <a class="sidebar-nav-item" data-page="logs" href="logs.html">
-          <span class="sidebar-nav-icon">
-            <!-- Log de Custos (documento) -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Log de Custos</span>
-        </a>
-        <!-- Configurações -->
-        <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
-          <span class="sidebar-nav-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
-              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
-            </svg>
-          </span>
-          <span class="sidebar-nav-text">Configurações</span>
-        </a>
-      </nav>
+      <a class="sidebar-nav-item" data-page="dashboards" href="dashboard.html">
+        <span class="sidebar-nav-icon">
+          <!-- Dashboard (gráfico de barras) -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
+      </a>
+      
+      <a class="sidebar-nav-item" data-page="logs" href="logs.html" aria-current="page">
+        <span class="sidebar-nav-icon">
+          <!-- Log de Custos (documento) -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Log de Custos</span>
+      </a>
+
+      <!-- Configurações -->
+      <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
+        <span class="sidebar-nav-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
+          </svg>
+        </span>
+        <span class="sidebar-nav-text">Configurações</span>
+      </a>
+    </nav>
 
     <!-- rodapé -->
     <div class="sidebar-footer">
       <div class="sidebar-user">
         <div class="sidebar-user-info">
-          <div class="sidebar-user-name">Gustavo</div>
-          <div class="sidebar-user-email">gustavo@email.com</div>
+          <div class="sidebar-user-name" id="sidebarUserName">—</div>
+          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
+          <div class="sidebar-ml" id="mlInfo">ML: —</div>
         </div>
       </div>
-      <button class="sidebar-logout" title="Sair" aria-label="Sair">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="sidebar-logout" id="btnLogout" title="Sair" aria-label="Sair">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
           <path d="M16 17l5-5-5-5"/>
           <path d="M21 12H9"/>
@@ -122,13 +126,14 @@
       </button>
     </div>
   </aside>
+
   <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
 
   <!-- CONTEÚDO -->
   <main class="container-principal">
     <header class="cabecalho-pagina animate-slide-down">
       <div class="info-cabecalho">
-        <a href="index.html" class="botao-voltar" aria-label="Voltar para página inicial">
+        <a href="home.html" class="botao-voltar" aria-label="Voltar para Home">
           <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z"/>
           </svg>
@@ -261,7 +266,7 @@
 
         <div class="regras-info">
           <svg class="icone-info" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M13,9H11V7H13M13,17H11V11H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
+            <path d="M13,9H11V7H13M13,17H11V16H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
           </svg>
           <div>
             <strong>Regras de cálculo:</strong>
@@ -363,6 +368,7 @@
   </main>
 
   <!-- Scripts -->
+  <script src="/js/auth-guard.js"></script>
   <script src="js/navigation.js" defer></script>
   <script src="js/logs.js" defer></script>
 </body>
