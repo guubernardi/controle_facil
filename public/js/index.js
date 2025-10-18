@@ -1,8 +1,8 @@
 /*
  * Retorno Fácil — index.js (Feed Geral de Devoluções)
- * Lista últimos 30 dias (até 500) e abre modal de Detalhes no clique do card.
- * Só vai para Logs ao clicar no botão com data-action="log".
- * Inclui edição (PUT), exclusão (DELETE) e histórico quando disponível.
+ * - Ao clicar no "olho" OU no card, ABRE a página devolucao-editar.html?id=...
+ * - Deep link (?id= / ?return_id=) também redireciona para a página de edição.
+ * - Mantém KPIs, filtros, SSE, exportação, etc.
  */
 
 /* eslint-disable no-console */
@@ -25,8 +25,9 @@ class DevolucoesFeed {
 
     this.logsPage = 'logs.html';
 
-    // refs do modal
+    // refs do modal (index.html tem um, mas não vamos usar)
     this.modal = document.getElementById('modal-detalhes');
+
     this.md = {
       id: document.getElementById('md-id'),
       numero: document.getElementById('md-numero'),
@@ -48,6 +49,7 @@ class DevolucoesFeed {
       btnAddNote: document.getElementById('btnAddNote'),
       timelineList: document.getElementById('timelineList'),
     };
+
     this.editando = false;
 
     this.inicializar();
@@ -60,6 +62,17 @@ class DevolucoesFeed {
     this.renderizar();
     this.syncTabsUI();
     this.escutarEventos();
+    this.openFromURL();
+  }
+
+  // deep link (?id= / ?return_id=)
+  openFromURL() {
+    const sp = new URLSearchParams(location.search);
+    const rid = sp.get('return_id') || sp.get('id');
+    const goLogs = sp.get('view') === 'logs' || sp.get('log') === '1';
+    if (!rid) return;
+    if (goLogs) this.irParaLogs(rid);
+    else this.abrirEditorPagina(rid); // sempre página completa
   }
 
   // ---------------- Infra ----------------
@@ -72,30 +85,26 @@ class DevolucoesFeed {
 
   toggleSkeleton(show) {
     const sk = document.getElementById('loading-skeleton');
-    if (sk) sk.style.display = show ? 'block' : 'none';
+    if (sk) sk.hidden = !show;
     const list = document.getElementById('container-devolucoes');
     if (list) list.style.display = show ? 'none' : 'flex';
+    const vazio = document.getElementById('mensagem-vazia');
+    if (vazio && !show) vazio.hidden = true;
   }
 
   // --------------- Carregamento ---------------
   async carregar() {
     this.toggleSkeleton(true);
     try {
-      const today = new Date();
-      const to   = today.toISOString().slice(0,10);
-      const from = new Date(today.getTime() - this.RANGE_DIAS*24*60*60*1000).toISOString().slice(0,10);
-
-      // tenta /search
       const q = new URLSearchParams({
-        page: '1', pageSize: '500', orderBy: 'created_at', orderDir: 'desc', from, to
+        page: '1',
+        pageSize: '500',
+        orderBy: 'created_at',
+        orderDir: 'desc'
       });
-      let rows = [];
-      try {
-        const data = await this.getJSON(`/api/returns/search?${q.toString()}`);
-        rows = Array.isArray(data?.items) ? data.items : [];
-      } catch {}
+      const data = await this.getJSON(`/api/returns?${q.toString()}`).catch(() => null);
+      let rows = Array.isArray(data?.items) ? data.items : [];
 
-      // fallback por status
       if (!rows.length) rows = await this._fallbackPorStatus();
 
       this.items = rows.map((r) => this._mapRow(r));
@@ -110,7 +119,7 @@ class DevolucoesFeed {
 
   _mapRow(r) {
     return {
-      id: Number(r.id),
+      id: r?.id ?? null, // evita NaN
       id_venda: r.id_venda ?? null,
       cliente_nome: r.cliente_nome ?? null,
       loja_nome: r.loja_nome ?? null,
@@ -132,7 +141,7 @@ class DevolucoesFeed {
     const results = await Promise.all(reqs);
     const rows = results.flatMap(r => Array.isArray(r?.items) ? r.items : (Array.isArray(r) ? r : []));
     const uniq = new Map();
-    for (const r of rows) { const id = Number(r.id); if (!uniq.has(id)) uniq.set(id, r); }
+    for (const r of rows) { const id = r?.id; if (id != null && !uniq.has(id)) uniq.set(id, r); }
     return Array.from(uniq.values()).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
   }
 
@@ -212,42 +221,23 @@ class DevolucoesFeed {
       });
     }
 
-    // Clique: card abre modal; botão com data-action="log" vai para Logs
+    // Clique na lista (delegação)
     const container = document.getElementById('container-devolucoes');
     if (container) {
       container.addEventListener('click', (e) => {
-        const logBtn = e.target.closest?.('[data-action="log"]');
-        if (logBtn) {
-          const id = logBtn.closest('[data-return-id]')?.getAttribute('data-return-id');
-          if (id) this.irParaLogs(id);
+        const card = e.target.closest?.('[data-return-id]');
+        if (!card) return;
+        const id = card.getAttribute('data-return-id');
+
+        if (e.target.closest?.('[data-action="log"]')) {
+          this.irParaLogs(id);
           return;
         }
-        const card = e.target.closest?.('[data-return-id]');
-        if (card) {
-          const id = card.getAttribute('data-return-id');
-          this.abrirDetalhes(id);
+        // olho OU card → página completa
+        if (e.target.closest?.('[data-action="open"]') || card) {
+          this.abrirEditorPagina(id);
         }
       });
-    }
-
-    // Controles do modal
-    if (this.md.fechar) this.md.fechar.addEventListener('click', () => this.fecharModal());
-    if (this.md.cancelar) this.md.cancelar.addEventListener('click', () => this.fecharModal());
-    if (this.md.editar) this.md.editar.addEventListener('click', () => this.setEditMode(true));
-    if (this.md.salvar) this.md.salvar.addEventListener('click', (e) => { e.preventDefault(); this.salvarEdicao(); });
-    if (this.md.excluir) this.md.excluir.addEventListener('click', () => this.excluirAtual());
-
-    // Tabs do modal
-    this.md?.tabs?.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const tab = btn.getAttribute('data-tab');
-        this.alternarAba(tab);
-      });
-    });
-
-    // Adicionar nota ao histórico
-    if (this.md.btnAddNote) {
-      this.md.btnAddNote.addEventListener('click', () => this.adicionarNota());
     }
   }
 
@@ -257,7 +247,7 @@ class DevolucoesFeed {
     window.location.href = url.toString();
   }
 
-  // --------------- SSE (tempo real) ---------------
+  // --------------- SSE ---------------
   escutarEventos() {
     try {
       if (!('EventSource' in window)) return;
@@ -279,175 +269,9 @@ class DevolucoesFeed {
     }
   }
 
-  // --------------- Modal Detalhes ---------------
-  async abrirDetalhes(id) {
-    try {
-      const data = await this.getJSON(`/api/returns/${id}`).catch(() => null);
-      const d = data && (data.item || data) ? (data.item || data) : null;
-      if (!d) throw new Error('Registro não encontrado');
-
-      // Preenche
-      this.md.id.value = d.id ?? id;
-      this.md.numero.value = d.id_venda ?? d.pedido ?? '';
-      this.md.loja.value = d.loja_nome ?? '';
-      this.md.status.value = (d.status || 'pendente').toLowerCase();
-      this.md.vprod.value = d.valor_produto ?? '';
-      this.md.vfrete.value = d.valor_frete ?? '';
-      this.md.desc.value = d.motivo || d.descricao || d.observacao || '';
-
-      this.setEditMode(false);
-      this.alternarAba('detalhes');
-      this.modal?.removeAttribute('hidden');
-
-      // carrega histórico de forma tolerante
-      this.carregarHistorico(id);
-    } catch (e) {
-      this.toast('Erro', 'Falha ao recarregar registro.', 'erro');
-      console.warn('abrirDetalhes:', e.message);
-    }
-  }
-
-  fecharModal() {
-    if (!this.modal) return;
-    this.modal.setAttribute('hidden', 'true');
-    this.setEditMode(false);
-  }
-
-  setEditMode(on) {
-    this.editando = !!on;
-    const des = !on;
-    ['status','vprod','vfrete','desc'].forEach((k) => {
-      const el = this.md[k];
-      if (el) el.disabled = des;
-    });
-    if (this.md.editar) this.md.editar.style.display = on ? 'none' : '';
-    if (this.md.salvar) this.md.salvar.style.display = on ? '' : 'none';
-  }
-
-  async salvarEdicao() {
-    const id = this.md.id.value;
-    const payload = {
-      status: this.md.status.value,
-      valor_produto: this.md.vprod.value ? Number(this.md.vprod.value) : null,
-      valor_frete: this.md.vfrete.value ? Number(this.md.vfrete.value) : null,
-      descricao: this.md.desc.value || null
-    };
-    try {
-      await this.getJSON(`/api/returns/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      this.toast('Salvo', 'Alterações registradas.', 'sucesso');
-      this.setEditMode(false);
-      await this.carregar(); this.atualizarKpis(); this.renderizar();
-    } catch (e) {
-      this.toast('Erro', e?.message || 'Não foi possível salvar.', 'erro');
-    }
-  }
-
-  async excluirAtual() {
-    const id = this.md.id.value;
-    if (!id) return;
-    if (!confirm('Tem certeza que deseja excluir esta devolução?')) return;
-    try {
-      await this.getJSON(`/api/returns/${id}`, { method: 'DELETE' });
-      this.toast('Excluída', 'Devolução removida.', 'sucesso');
-      this.fecharModal();
-      await this.carregar(); this.atualizarKpis(); this.renderizar();
-    } catch (e) {
-      this.toast('Erro', e?.message || 'Falha ao excluir.', 'erro');
-    }
-  }
-
-  alternarAba(tab) {
-    if (!this.md.abaDet || !this.md.abaHist) return;
-    const det = tab === 'detalhes';
-    this.md.abaDet.hidden = !det;
-    this.md.abaHist.hidden = det;
-    this.md.tabs?.forEach((b) => {
-      const ok = b.getAttribute('data-tab') === tab;
-      b.setAttribute('aria-selected', ok ? 'true' : 'false');
-    });
-  }
-
-  async carregarHistorico(id) {
-    try {
-      let logs = [];
-      // tenta endpoints possíveis
-      const tryUrls = [
-        `/api/returns/${id}/events`,
-        `/api/returns/${id}/logs`,
-        `/api/returns/${id}/notes`
-      ];
-      for (const u of tryUrls) {
-        try {
-          const r = await this.getJSON(u);
-          if (Array.isArray(r)) { logs = r; break; }
-          if (Array.isArray(r?.items)) { logs = r.items; break; }
-        } catch { /* segue o próximo */ }
-      }
-      this.renderTimeline(logs);
-    } catch {
-      this.renderTimeline([]);
-    }
-  }
-
-  renderTimeline(items) {
-    if (!this.md.timelineList) return;
-    this.md.timelineList.innerHTML = '';
-    if (!items?.length) return;
-
-    items.forEach((ev) => {
-      const li = document.createElement('li');
-      li.className = 'timeline-item';
-      const t = ev.title || ev.titulo || 'Evento';
-      const m = ev.message || ev.mensagem || ev.descricao || '';
-      const dt = ev.created_at || ev.data || '';
-      li.innerHTML = `
-        <div class="timeline-dot"></div>
-        <div class="timeline-content">
-          <div class="timeline-head">
-            <strong>${this.esc(t)}</strong>
-            <span class="muted">${this.dataBr(dt)}</span>
-          </div>
-          <p>${this.esc(m)}</p>
-        </div>
-      `;
-      this.md.timelineList.appendChild(li);
-    });
-  }
-
-  async adicionarNota() {
-    const id = this.md.id?.value;
-    const title = (this.md.evTitle?.value || '').trim();
-    const message = (this.md.evMessage?.value || '').strip;
-    const msg = (this.md.evMessage?.value || '').trim();
-    if (!id || !msg) return;
-
-    const payload = { title: title || 'Nota', message: msg };
-    const tryUrls = [
-      `/api/returns/${id}/events`,
-      `/api/returns/${id}/notes`
-    ];
-    let ok = false;
-    for (const u of tryUrls) {
-      try {
-        await this.getJSON(u, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        ok = true; break;
-      } catch {}
-    }
-    if (ok) {
-      this.toast('Adicionado', 'Nota registrada.', 'sucesso');
-      this.md.evTitle.value = ''; this.md.evMessage.value = '';
-      this.carregarHistorico(id);
-    } else {
-      this.toast('Erro', 'Não foi possível adicionar a nota.', 'erro');
-    }
+  // --------------- Navegação para página de edição ---------------
+  abrirEditorPagina(id) {
+    window.location.href = `devolucao-editar.html?id=${encodeURIComponent(id)}`;
   }
 
   // --------------- Render ---------------
@@ -480,7 +304,14 @@ class DevolucoesFeed {
     container.style.display = 'flex';
     if (vazio) vazio.style.display = 'none';
     container.innerHTML = '';
-    filtrados.forEach((d, idx) => container.appendChild(this.card(d, idx)));
+
+    filtrados.forEach((d, idx) => {
+      try {
+        container.appendChild(this.card(d, idx));
+      } catch (err) {
+        console.warn('Falha ao montar card do ID', d?.id, err);
+      }
+    });
   }
 
   card(d, index = 0) {
@@ -505,8 +336,11 @@ class DevolucoesFeed {
         </div>
         <div class="devolucao-acoes">
           ${this.badgeStatus(d)}
-          <button class="botao botao-outline" data-action="log" style="padding:0.5rem" title="Abrir log">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+          <button class="botao botao-outline" data-action="open" style="padding:0.5rem" title="Abrir detalhes">
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/>
+              <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/>
+            </svg>
           </button>
         </div>
       </div>
@@ -557,8 +391,10 @@ class DevolucoesFeed {
 
     let eta = '';
     if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) {
-      const d0 = new Date(d.created_at);
-      eta = new Date(d0.getTime() + 7 * 24 * 3600 * 1000).toLocaleDateString('pt-BR');
+      const t0 = Date.parse(d.created_at);
+      if (Number.isFinite(t0)) {
+        eta = new Date(t0 + 7 * 24 * 3600 * 1000).toLocaleDateString('pt-BR');
+      }
     }
 
     return `
@@ -567,6 +403,31 @@ class DevolucoesFeed {
         <p class="motivo-texto">${this.esc(etapa)}${eta ? ` • Chegada estimada: ${eta}` : ''}</p>
       </div>
     `;
+  }
+
+  badgeStatus(d) {
+    const grp = this.grupoStatus(d.status);
+    const s = String(d.status || '').toLowerCase();
+    const l = String(d.log_status || '').toLowerCase();
+
+    const especiais = {
+      recebido_cd: '<div class="badge badge-info">Recebido no CD</div>',
+      'recebido no cd': '<div class="badge badge-info">Recebido no CD</div>',
+      em_inspecao: '<div class="badge badge-info">Em inspeção</div>',
+      'em inspeção': '<div class="badge badge-info">Em inspeção</div>',
+    };
+
+    if (/(disputa|claim)/.test(s) || /(disputa)/.test(l)) return '<div class="badge badge-info">Em disputa</div>';
+    if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) return '<div class="badge badge-info">Em envio</div>';
+
+    const map = {
+      pendente : '<div class="badge badge-pendente">Pendente</div>',
+      aprovado : '<div class="badge badge-aprovado">Aprovado</div>',
+      rejeitado: '<div class="badge badge-rejeitado">Rejeitado</div>',
+      finalizado: '<div class="badge badge">Finalizado</div>'
+    };
+
+    return especiais[l] || especiais[s] || map[grp] || `<div class="badge">${this.esc(d.status || '—')}</div>`;
   }
 
   // --------------- KPIs / helpers ---------------
@@ -615,7 +476,10 @@ class DevolucoesFeed {
   }
 
   // --------------- Util ---------------
-  dataBr(s) { try { return new Date(s).toLocaleDateString('pt-BR'); } catch { return '—'; } }
+  dataBr(s) {
+    const t = Date.parse(s);
+    return Number.isFinite(t) ? new Date(t).toLocaleDateString('pt-BR') : '—';
+  }
   setTxt(id, val) { const el = document.getElementById(id); if (el) el.textContent = String(val); }
   esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
 

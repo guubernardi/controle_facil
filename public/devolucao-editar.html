@@ -3,22 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Devolução — Controle Fácil</title>
+  <title>Devolução — Retorno Fácil</title>
   <meta name="description" content="Editar dados, valores e histórico de uma devolução." />
 
   <link rel="icon" href="assets/img/logo_rf.png" type="image/png" />
 
-  <!-- Fontes (únicas) -->
+  <!-- Fontes -->
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet"/>
 
-  <!-- Estilos da página -->
+  <!-- Estilos -->
   <link rel="stylesheet" href="css/devolucao.css">
 </head>
 <body class="devolucao-page">
 
-  <!-- Auth guard (bloqueia se não logado) -->
+  <!-- Auth guard -->
   <script src="/js/auth-guard.js"></script>
 
   <!-- Topbar mínima -->
@@ -47,7 +47,7 @@
           </svg>
           <span>Inspeção: Aprovar</span>
         </button>
-        
+
         <button id="btn-insp-reprova" class="btn btn--danger btn--lg" type="button" title="Inspeção reprovada">
           <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path d="M18 6L6 18M6 6l12 12"/>
@@ -72,7 +72,7 @@
 
         <div class="dialog-grid">
           <label for="rcd-resp">Responsável</label>
-          <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)">
+          <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" autocomplete="off">
 
           <label for="rcd-when">Data/Hora</label>
           <input id="rcd-when" type="datetime-local">
@@ -255,9 +255,23 @@
     </div>
   </main>
 
+  <!-- Toast simples (o JS desta página controla o conteúdo) -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <!-- Scripts da página -->
+  <!-- Fallback simples para <dialog> (Safari/iOS antigos) -->
+  <script>
+    (function () {
+      if (typeof HTMLDialogElement === 'undefined') {
+        document.querySelectorAll('dialog').forEach(d => {
+          d.setAttribute('hidden','');
+          d.showModal = () => d.removeAttribute('hidden');
+          d.close = () => d.setAttribute('hidden','');
+        });
+      }
+    })();
+  </script>
+
+  <!-- Scripts -->
   <script src="js/labels.js"></script>
   <script src="js/devolucao-editar.js"></script>
 </body>

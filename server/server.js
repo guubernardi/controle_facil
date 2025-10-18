@@ -122,19 +122,10 @@ app.use('/api', (req, res, next) => {
 app.use('/api/csv', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __, next) => next()));
 app.use('/api/settings', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __, next) => next()));
 
-/** Rotas utilitárias */
-try {
-  const utilsRoutes = require('./routes/utils');
-  app.use(utilsRoutes);
-  console.log('[BOOT] Rotas /utils carregadas');
-} catch (e) {
-  console.warn('[BOOT] Falha ao carregar rotas /utils:', e?.message || e);
-}
-
 /* ===========================
- *  CHECK DE VARIÁVEIS (aviso)
+ *  HELPERS / UTIL
  * =========================== */
-[
+[ // check vars
   'BLING_AUTHORIZE_URL',
   'BLING_TOKEN_URL',
   'BLING_API_BASE',
@@ -149,7 +140,6 @@ try {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
-/* Helpers */
 function safeParseJson(s) {
   if (s == null) return null;
   if (typeof s === 'object') return s;
@@ -208,7 +198,16 @@ async function addReturnEvent({
   }
 }
 
-/* ========= ROTAS CSV ========= */
+/* ========= Rotas utilitárias ========= */
+try {
+  const utilsRoutes = require('./routes/utils');
+  app.use(utilsRoutes);
+  console.log('[BOOT] Rotas /utils carregadas');
+} catch (e) {
+  console.warn('[BOOT] Falha ao carregar rotas /utils:', e?.message || e);
+}
+
+/* ========= CSV (upload estendido) ========= */
 try {
   const registerCsvUploadExtended = require('./routes/csv-upload-extended');
   registerCsvUploadExtended(app, { addReturnEvent });
@@ -227,7 +226,6 @@ try {
 } catch (e) {
   console.warn('[BOOT] Rotas Central não carregadas (opcional):', e?.message || e);
 }
-
 
 /* ========= Returns (listagem genérica) ========= */
 try {
@@ -271,6 +269,20 @@ try {
   }
 } catch (e) {
   console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
+}
+
+/* ========= Importador Mercado Livre (Sync Claims -> devolucoes) ========= */
+/*  >>> ESTE BLOCO É O QUE PERMITE O FEED "PUXAR DO ML" AO CLICAR EM "Sincronizar com ML"
+    Registra GET /api/ml/claims/import, criando/atualizando devoluções reais. */
+try {
+  const registerMlSync = require('./routes/ml-sync'); // <— precisa existir no seu projeto
+  if (typeof registerMlSync === 'function') {
+    // passamos addReturnEvent para auditoria idempotente
+    registerMlSync(app, { addReturnEvent });
+    console.log('[BOOT] Importador ML registrado (/api/ml/claims/import)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Importador ML não carregado (opcional):', e?.message || e);
 }
 
 /* ------------------------------------------------------------
