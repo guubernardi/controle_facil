@@ -14,7 +14,7 @@
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
-        <span class="sidebar-logo-text">Retorno Fácil</span>
+        <span class="sidebar-logo-text">Controle Fácil</span>
       </div>
       <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar sidebar">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -86,7 +86,6 @@
         <div class="sidebar-user-info">
           <div class="sidebar-user-name" id="sidebarUserName">—</div>
           <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
-          <!-- sem ML aqui -->
         </div>
       </div>
       <button class="sidebar-logout" id="btnLogout" aria-label="Sair">
@@ -127,7 +126,27 @@
             <p class="card-desc">Por marketplace</p>
           </div>
         </div>
-        <div id="mk-cards" class="mk-grid" aria-live="polite"></div>
+
+        <!-- Conteúdo com placeholder inicial -->
+        <div id="mk-cards" class="mk-grid" aria-live="polite">
+          <div class="mk-loading" aria-hidden="true" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:8px 4px;">
+            <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--border,#e5e7eb);border-radius:10px;padding:12px;background:var(--card,#fff);">
+              <div data-rp data-indeterminate="true" data-size="56"></div>
+              <div style="flex:1;min-width:0">
+                <div style="height:10px;background:var(--muted,#f3f4f6);border-radius:6px;width:70%"></div>
+                <div style="height:10px;background:var(--muted,#f3f4f6);border-radius:6px;width:45%;margin-top:8px"></div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;border:1px solid var(--border,#e5e7eb);border-radius:10px;padding:12px;background:var(--card,#fff);">
+              <div data-rp data-indeterminate="true" data-size="56"></div>
+              <div style="flex:1;min-width:0">
+                <div style="height:10px;background:var(--muted,#f3f4f6);border-radius:6px;width:60%"></div>
+                <div style="height:10px;background:var(--muted,#f3f4f6);border-radius:6px;width:40%;margin-top:8px"></div>
+              </div>
+            </div>
+          </div>
+          <noscript>Carregando…</noscript>
+        </div>
       </article>
 
       <article class="card card-caminho">
@@ -145,7 +164,17 @@
             <p class="card-desc">Últimas atualizações</p>
           </div>
         </div>
-        <ul id="a-caminho" class="list" aria-live="polite"></ul>
+
+        <!-- Conteúdo com placeholder inicial -->
+        <ul id="a-caminho" class="list" aria-live="polite">
+          <li class="mk-loading" style="display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px dashed var(--border,#e5e7eb);border-radius:10px;background:var(--card,#fff);" aria-hidden="true">
+            <div data-rp data-indeterminate="true" data-size="40"></div>
+            <div style="flex:1;min-width:0">
+              <div style="height:10px;background:var(--muted,#f3f4f6);border-radius:6px;width:60%"></div>
+              <div style="height:10px;background:var(--muted,#f3f4f6);border-radius:6px;width:40%;margin-top:8px"></div>
+            </div>
+          </li>
+        </ul>
       </article>
     </section>
   </main>
@@ -159,9 +188,9 @@
   <!-- Navegação -->
   <script src="js/navigation.js" defer></script>
 
-  <!-- Script da Central (use o seu arquivo real) -->
-  <!-- se o seu arquivo é public/js/cental.js: -->
+  <script src="/js/radial-progress.js" defer></script>
+  <script src="/js/central-loading.js" defer></script>
   <script src="/js/central.js" defer></script>
-  <!-- se você renomeou para central.js, troque a linha acima para /js/central.js -->
+
 </body>
 </html>

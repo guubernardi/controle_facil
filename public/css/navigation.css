@@ -585,6 +585,25 @@ a {
   background: hsl(220, 13%, 69%);
 }
 
+.sidebar-footer {
+  border-top: 1px solid var(--border, #e5e7eb);
+  padding: 12px 16px;
+  font-size: 0.85rem;
+  color: var(--muted-foreground, #475569);
+  background: var(--muted, #f8fafc);
+}
+
+.sidebar-user strong {
+  display: block;
+  color: var(--fg, #0f172a);
+}
+
+.sidebar-user small {
+  color: var(--muted-foreground, #64748b);
+  font-size: 0.78rem;
+}
+
+
 /* Responsive */
 @media (max-width: 1024px) {
   .main-content {

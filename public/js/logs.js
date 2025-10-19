@@ -204,6 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       $$("th[data-col]").forEach((h) => h.setAttribute("aria-sort", "none"))
       th.setAttribute("aria-sort", state.orderDir === "asc" ? "ascending" : "descending")
+      state.page = 1;            // <-- ajuste: ao ordenar, volta para a primeira página
       loadLogs()
     })
   })

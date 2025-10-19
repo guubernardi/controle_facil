@@ -101,6 +101,17 @@ app.use('/api', (_req, res, next) => {
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
+/* ========= Auth - Registro de usuário (cadastro) ========= */
+try {
+  const registerAuthRegister = require('./routes/auth-register');
+  if (typeof registerAuthRegister === 'function') {
+    registerAuthRegister(app);
+    console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
+}
+
 /** Compatibilidade: front antigo que POSTava em /login */
 app.post('/login', (req, res) => res.redirect(307, '/api/auth/login'));
 
@@ -114,6 +125,14 @@ app.use('/api', (req, res, next) => {
   ) {
     return next();
   }
+
+  // Exceção segura: permite o job interno chamar /api/ml/claims/import com token
+  const jobHeader = req.get('x-job-token');
+  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
+  if (p === '/ml/claims/import' && jobHeader && jobToken && jobHeader === jobToken) {
+    return next();
+  }
+
   if (req.session?.user) return next();
   return res.status(401).json({ error: 'Não autorizado' });
 });
@@ -125,7 +144,7 @@ app.use('/api/settings', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __
 /* ===========================
  *  HELPERS / UTIL
  * =========================== */
-[ // check vars
+[
   'BLING_AUTHORIZE_URL',
   'BLING_TOKEN_URL',
   'BLING_API_BASE',
@@ -272,13 +291,12 @@ try {
 }
 
 /* ========= Importador Mercado Livre (Sync Claims -> devolucoes) ========= */
-/*  >>> ESTE BLOCO É O QUE PERMITE O FEED "PUXAR DO ML" AO CLICAR EM "Sincronizar com ML"
-    Registra GET /api/ml/claims/import, criando/atualizando devoluções reais. */
+let _mlSyncRegistered = false;
 try {
-  const registerMlSync = require('./routes/ml-sync'); // <— precisa existir no seu projeto
+  const registerMlSync = require('./routes/ml-sync'); // deve expor /api/ml/claims/import
   if (typeof registerMlSync === 'function') {
-    // passamos addReturnEvent para auditoria idempotente
     registerMlSync(app, { addReturnEvent });
+    _mlSyncRegistered = true;
     console.log('[BOOT] Importador ML registrado (/api/ml/claims/import)');
   }
 } catch (e) {
@@ -309,7 +327,6 @@ app.get('/api/returns/:id/events', async (req, res) => {
     if (!Number.isInteger(returnId)) {
       return res.status(400).json({ error: 'return_id inválido' });
     }
-
     const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '50', 10), 200));
     const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
 
@@ -771,7 +788,94 @@ const host = '0.0.0.0';
 
 const server = app.listen(port, host, () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`);
+  // Inicia o AutoSync do ML após o servidor subir
+  setupMlAutoSync();
 });
+
+/* ===========================
+ *  AUTO SYNC (ML) — JOB PERIÓDICO
+ * =========================== */
+let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
+
+function setupMlAutoSync() {
+  if (!_mlSyncRegistered) {
+    console.warn('[ML AUTO] Importador ML não está registrado; AutoSync desabilitado.');
+    return;
+  }
+
+  // Habilitado por padrão — pode ser desativado via env
+  const enabled = String(process.env.ML_AUTO_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
+  if (!enabled) {
+    console.log('[ML AUTO] Desabilitado por ML_AUTO_SYNC_ENABLED=false');
+    return;
+  }
+
+  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_SYNC_INTERVAL_MS || '600000', 10) || 600_000); // 10 min
+  const windowDays = Math.max(1, parseInt(process.env.ML_AUTO_SYNC_WINDOW_DAYS || '14', 10) || 14);
+  const runOnStart = String(process.env.ML_AUTO_SYNC_ON_START ?? 'true').toLowerCase() === 'true';
+  const jobToken   = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN || 'dev-job';
+
+  let running = false;
+
+  const run = async (reason = 'timer') => {
+    if (running) {
+      console.log('[ML AUTO] Já existe uma execução em andamento; pulando.');
+      return;
+    }
+    running = true;
+    const t0 = Date.now();
+    const url = `http://127.0.0.1:${port}/api/ml/claims/import?days=${encodeURIComponent(windowDays)}&silent=1`;
+
+    try {
+      // Node 18+ possui fetch global
+      const r = await fetch(url, { headers: { 'x-job-token': jobToken } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || r.statusText || 'Falha no import');
+
+      _mlAuto_lastRun = {
+        when: new Date().toISOString(),
+        reason,
+        ok: true,
+        tookMs: Date.now() - t0,
+        result: j
+      };
+      console.log(`[ML AUTO] Import OK (${reason}) em ${_mlAuto_lastRun.tookMs}ms`, j);
+    } catch (e) {
+      _mlAuto_lastRun = {
+        when: new Date().toISOString(),
+        reason,
+        ok: false,
+        tookMs: Date.now() - t0,
+        error: String(e?.message || e)
+      };
+      console.error('[ML AUTO] Falha no import:', _mlAuto_lastRun.error);
+    } finally {
+      running = false;
+    }
+  };
+
+  // Primeiro disparo
+  if (runOnStart) setTimeout(() => run('boot'), 2000);
+
+  // Intervalo fixo
+  const handle = setInterval(run, intervalMs);
+  process.on('SIGINT',  () => clearInterval(handle));
+  process.on('SIGTERM', () => clearInterval(handle));
+
+  // Endpoint de diagnóstico do AutoSync (requer sessão)
+  app.get('/api/ml/claims/last-run', (_req, res) => {
+    res.json({
+      enabled,
+      intervalMs,
+      windowDays,
+      runOnStart,
+      registered: _mlSyncRegistered,
+      lastRun: _mlAuto_lastRun
+    });
+  });
+
+  console.log(`[BOOT] ML AutoSync habilitado: intervalo=${intervalMs}ms, janela=${windowDays}d`);
+}
 
 /* ===========================
  *  ERROS NÃO TRATADOS

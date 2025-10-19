@@ -39,6 +39,9 @@
     // Botão "Nova Devolução" (se existir)
     setupNovaDevolucaoButton();
 
+    // Renderiza usuário no rodapé + botão sair
+    renderSidebarUser();
+
     // ---------- Helpers ----------
     const isDesktop = () => window.innerWidth > 768;
     const setAria = (el, expanded) => el && el.setAttribute('aria-expanded', String(!!expanded));
@@ -172,6 +175,59 @@
 
     // Remove elementos com marcas “ml” legadas
     footer.querySelectorAll("[class*='ml'],[id*='ml'],[data-ml]").forEach((el) => el.remove());
+  }
+
+  // Escapa HTML seguro
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Exibe nome/e-mail + botão sair no rodapé da sidebar (usando classes do CSS)
+  async function renderSidebarUser() {
+    const footer = document.querySelector('.sidebar-footer');
+    if (!footer) return;
+
+    try {
+      const r = await fetch('/api/auth/me');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.user) return;
+
+      const { name, email, role } = j.user;
+      const roleLabel = role === 'admin' ? 'Administrador' : (role === 'gestor' ? 'Gestor' : 'Usuário');
+
+      // SVG inline com classe .icon (casa com seu CSS)
+      const logoutSvg = `
+        <svg class="icon" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+          <polyline points="16 17 21 12 16 7"></polyline>
+          <line x1="21" y1="12" x2="9" y2="12"></line>
+        </svg>`;
+
+      // Monta estrutura com as classes já definidas no seu CSS
+      footer.innerHTML = `
+        <div class="sidebar-user">
+          <!-- avatar opcional: remanesce vazio para não quebrar layout -->
+          <!-- <img class="sidebar-user-avatar" src="/img/avatar.png" alt="" /> -->
+          <div class="sidebar-user-info">
+            <div class="sidebar-user-name" title="${esc(roleLabel)}">${esc(roleLabel)}</div>
+            <div class="sidebar-user-email" title="${esc(email || '')}">${esc(email || '')}</div>
+          </div>
+          <button id="sidebar-logout" class="sidebar-logout" type="button" title="Sair" aria-label="Sair">
+            ${logoutSvg}
+          </button>
+        </div>
+      `;
+
+      // Ação de logout
+      const logoutBtn = footer.querySelector('#sidebar-logout');
+      logoutBtn?.addEventListener('click', async () => {
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+        window.location.href = '/login.html';
+      });
+    } catch (e) {
+      console.warn('Falha ao carregar /api/auth/me:', e);
+    }
   }
 
   // Integra o botão "Nova Devolução"
