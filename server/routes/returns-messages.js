@@ -5,7 +5,7 @@ const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
 
-// usa a conexão do middleware de tenant se existir
+// Usa a conexão do middleware de tenant se existir
 const qOf = (req) => (req?.q || query);
 
 /* -------------------- helpers -------------------- */
@@ -40,12 +40,16 @@ async function columnTypes(table, cols, req) {
 const isNumericType = (t) => /int|numeric|decimal|real|double/i.test(String(t || ''));
 const isUuidType    = (t) => /uuid/i.test(String(t || ''));
 
-/** resolve contexto do tenant de forma ampla */
+function safeParseJson(s) {
+  if (s == null) return null;
+  if (typeof s === 'object') return s;
+  try { return JSON.parse(String(s)); } catch { return null; }
+}
+
+/** resolve contexto do tenant (id numérico e/ou slug/texto) */
 function resolveTenantCtx(req) {
   const t = req.tenant || {};
   const user = req.session?.user || {};
-
-  // valores possíveis
   const id_num   = (t.id ?? user.tenant_id);
   const slug     = t.slug || user.company || user.email || '';
   const text     = String(slug || '').split('@')[0] || null;
@@ -53,40 +57,13 @@ function resolveTenantCtx(req) {
     const onlyDigits = (text || '').replace(/\D/g, '');
     return onlyDigits ? Number(onlyDigits) : null;
   })();
-
   return { id_num, text, num_hint };
-}
-
-/** monta cláusulas WHERE para tenant_id com cast correto */
-function whereForTenant(tenantColType, retTenant, paramIndexStart = 2) {
-  const where = [];
-  const params = [];
-
-  if (isNumericType(tenantColType)) {
-    // preferir id_num, depois num_hint, depois fallback 1
-    const val = (retTenant.id_num != null)
-      ? retTenant.id_num
-      : (retTenant.num_hint != null ? retTenant.num_hint : 1);
-    where.push(`tenant_id = $${paramIndexStart}::bigint`);
-    params.push(val);
-  } else if (isUuidType(tenantColType)) {
-    // se não tiver, cai para um UUID impossível
-    where.push(`tenant_id::text = $${paramIndexStart}`);
-    params.push(retTenant.text || '00000000-0000-0000-0000-000000000000');
-  } else {
-    // texto
-    where.push(`tenant_id::text = $${paramIndexStart}`);
-    params.push(retTenant.text || 'default');
-  }
-
-  return { where, params };
 }
 
 /* -------------------- rotas -------------------- */
 
 /**
  * GET /api/returns/:id/messages
- * Retorna as mensagens do chat da devolução
  */
 router.get('/api/returns/:id/messages', async (req, res) => {
   try {
@@ -96,44 +73,65 @@ router.get('/api/returns/:id/messages', async (req, res) => {
       return res.status(400).json({ error: 'return_id inválido' });
     }
 
-    const has = await tableHasColumns('return_messages',
-      ['tenant_id', 'created_by', 'attachments', 'metadata'], req);
+    const has = await tableHasColumns(
+      'return_messages',
+      ['tenant_id','parent_id','conversation_id','created_by','attachments','metadata','channel'],
+      req
+    );
     const types = await columnTypes('return_messages', ['tenant_id'], req);
     const retTenant = resolveTenantCtx(req);
 
-    const baseWhere = [`return_id = $1`];
+    const whereParts = [`return_id = $1`];
     const params = [returnId];
 
     if (has.tenant_id) {
-      const { where, params: tParams } = whereForTenant(types['tenant_id'], retTenant, 2);
-      baseWhere.push(where[0]);
-      params.push(tParams[0]);
+      if (isNumericType(types['tenant_id'])) {
+        const val = (retTenant.id_num != null)
+          ? retTenant.id_num
+          : (retTenant.num_hint != null ? retTenant.num_hint : 1);
+        whereParts.push(`tenant_id = $${params.length + 1}::bigint`);
+        params.push(val);
+      } else if (isUuidType(types['tenant_id'])) {
+        whereParts.push(`tenant_id::text = $${params.length + 1}`);
+        params.push(retTenant.text || '00000000-0000-0000-0000-000000000000');
+      } else {
+        whereParts.push(`tenant_id::text = $${params.length + 1}`);
+        params.push(retTenant.text || 'default');
+      }
     }
 
+    const selectCols = [
+      'id',
+      `return_id  AS "returnId"`,
+      has.parent_id       ? `parent_id AS "parentId"`               : `NULL::int   AS "parentId"`,
+      has.conversation_id ? `conversation_id AS "conversationId"`   : `NULL::int   AS "conversationId"`,
+      has.channel         ? `channel`                                : `'internal'::text AS channel`,
+      `direction`,
+      `sender_name AS "senderName"`,
+      `sender_role AS "senderRole"`,
+      `body`,
+      has.attachments ? `attachments` : `'[]'::jsonb AS attachments`,
+      has.metadata    ? `metadata`    : `NULL::jsonb AS metadata`,
+      `created_at AS "createdAt"`,
+      has.created_by  ? `created_by AS "createdBy"` : `NULL::int AS "createdBy"`
+    ];
+
     const sql = `
-      SELECT
-        id,
-        return_id  AS "returnId",
-        parent_id  AS "parentId",
-        direction,
-        sender_name AS "senderName",
-        sender_role AS "senderRole",
-        body,
-        ${has.attachments ? 'attachments' : `'[]'::jsonb AS attachments`},
-        ${has.metadata    ? 'metadata'    : 'NULL::jsonb AS metadata'},
-        created_at AS "createdAt",
-        ${has.created_by ? 'created_by AS "createdBy"' : 'NULL::int AS "createdBy"'}
-      FROM return_messages
-      WHERE ${baseWhere.join(' AND ')}
-      ORDER BY created_at ASC, id ASC
+      SELECT ${selectCols.join(',\n             ')}
+        FROM return_messages
+       WHERE ${whereParts.join(' AND ')}
+       ORDER BY created_at ASC, id ASC
     `;
 
     const { rows } = await q(sql, params);
-    // normaliza JSON caso venha string
     const items = rows.map(r => ({
       ...r,
-      attachments: typeof r.attachments === 'string' ? safeParseJson(r.attachments) || [] : (r.attachments || []),
-      metadata: typeof r.metadata === 'string' ? safeParseJson(r.metadata) : r.metadata
+      attachments: Array.isArray(r.attachments)
+        ? r.attachments
+        : (safeParseJson(r.attachments) || []),
+      metadata: (typeof r.metadata === 'string')
+        ? safeParseJson(r.metadata)
+        : r.metadata
     }));
 
     return res.json({ items });
@@ -143,13 +141,8 @@ router.get('/api/returns/:id/messages', async (req, res) => {
   }
 });
 
-function safeParseJson(s) {
-  try { return JSON.parse(s); } catch { return null; }
-}
-
 /**
  * POST /api/returns/:id/messages
- * Envia uma mensagem para o chat da devolução
  */
 router.post('/api/returns/:id/messages', async (req, res) => {
   try {
@@ -158,61 +151,76 @@ router.post('/api/returns/:id/messages', async (req, res) => {
     if (!Number.isInteger(returnId)) {
       return res.status(400).json({ error: 'return_id inválido' });
     }
-    const body = String(req.body?.body || '').trim();
-    if (!body) return res.status(400).json({ error: 'body vazio' });
 
-    const has   = await tableHasColumns('return_messages',
-      ['tenant_id','created_by','attachments','metadata'], req);
+    const bodyText = String(req.body?.body || '').trim();
+    if (!bodyText) return res.status(400).json({ error: 'body vazio' });
+
+    const channelReq = String(req.body?.channel || 'internal');
+
+    const has = await tableHasColumns(
+      'return_messages',
+      ['tenant_id','parent_id','conversation_id','created_by','attachments','metadata','channel'],
+      req
+    );
     const types = await columnTypes('return_messages', ['tenant_id'], req);
     const retTenant = resolveTenantCtx(req);
     const user = req.session?.user || {};
 
-    // monta lista de colunas/valores dinamicamente
-    const cols = ['return_id', 'parent_id', 'direction', 'sender_name', 'sender_role', 'body', 'attachments', 'metadata', 'created_at'];
-    const ph   = ['$1',        '$2',        '$3',        '$4',          '$5',          '$6',   '$7::jsonb', '$8::jsonb', 'now()'];
-    const args = [returnId, null, 'out', user.name || 'Você', user.role || 'operador', body, JSON.stringify([]), JSON.stringify(null)];
+    // builder de INSERT seguro
+    const cols = [];
+    const vals = [];
+    const args = [];
+    const add = (col, val, cast = '') => {
+      cols.push(col);
+      args.push(val);
+      vals.push(`$${args.length}${cast}`);
+    };
 
-    let next = 9; // próximo placeholder
-
-    // tenant_id primeiro (se existir)
+    // tenant_id (se existir na tabela)
     if (has.tenant_id) {
-      cols.unshift('tenant_id'); // adiciona no início
       if (isNumericType(types['tenant_id'])) {
         const val = (retTenant.id_num != null)
           ? retTenant.id_num
           : (retTenant.num_hint != null ? retTenant.num_hint : 1);
-        ph.unshift(`$${next}::bigint`);
-        args.push(val);
+        add('tenant_id', val, '::bigint');
       } else if (isUuidType(types['tenant_id'])) {
-        ph.unshift(`$${next}`);
-        args.push(retTenant.text || '00000000-0000-0000-0000-000000000000');
+        add('tenant_id', retTenant.text || '00000000-0000-0000-0000-000000000000');
       } else {
-        ph.unshift(`$${next}`);
-        args.push(retTenant.text || 'default');
+        add('tenant_id', retTenant.text || 'default');
       }
-      next++;
     }
 
-    // created_by se existir
-    if (has.created_by) {
-      cols.push('created_by');
-      ph.push(`$${next}::int`);
-      args.push(user.id || null);
-      next++;
-    }
+    add('return_id', returnId);
+    if (has.parent_id)       add('parent_id', null);              // raiz (thread opcional)
+    if (has.conversation_id) add('conversation_id', null);        // compat
+    if (has.channel)         add('channel', channelReq);          // NOT NULL na sua tabela
+    add('direction', 'out');
+    add('sender_name', user.name || 'Você');
+    add('sender_role', user.role || 'operador');
+    add('body', bodyText);
+    add('attachments', JSON.stringify(req.body?.attachments ?? []), '::jsonb');
+    add('metadata',    JSON.stringify(req.body?.metadata ?? null),  '::jsonb');
+    if (has.created_by) add('created_by', user.id ?? null, '::int');
+
+    // created_at = now()
+    cols.push('created_at');
+    vals.push('now()');
 
     const sql = `
       INSERT INTO return_messages (${cols.join(', ')})
-      VALUES (${ph.join(', ')})
-      RETURNING id,
+      VALUES (${vals.join(', ')})
+      RETURNING
+        id,
         return_id  AS "returnId",
-        parent_id  AS "parentId",
+        ${has.parent_id       ? 'parent_id AS "parentId"'           : 'NULL::int AS "parentId"'},
+        ${has.conversation_id ? 'conversation_id AS "conversationId"' : 'NULL::int AS "conversationId"'},
+        ${has.channel         ? 'channel'                           : `'internal'::text AS channel`},
         direction,
         sender_name AS "senderName",
         sender_role AS "senderRole",
         body,
         ${has.attachments ? 'attachments' : `'[]'::jsonb AS attachments`},
-        ${has.metadata    ? 'metadata'    : 'NULL::jsonb AS metadata'},
+        ${has.metadata    ? 'metadata'    : `NULL::jsonb AS metadata`},
         created_at AS "createdAt",
         ${has.created_by ? 'created_by AS "createdBy"' : 'NULL::int AS "createdBy"'}
     `;
