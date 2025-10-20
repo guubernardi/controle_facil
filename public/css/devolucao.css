@@ -171,7 +171,7 @@ body {
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
-  padding: 1.5rem 1.75rem;
+  padding: 1.5rem 0.5rem;
   border: 1px solid var(--border);
   transition: var(--transition-smooth);
   animation: slideUp 0.5s ease-out;
@@ -195,7 +195,7 @@ body {
 =========================== */
 .row {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 90px minmax(0, 1fr);
   gap: 0.5rem 1rem;
   align-items: center;
   margin: 1rem 0;
@@ -203,7 +203,7 @@ body {
 
 .row label {
   font-size: 0.9rem;
-  color: var(--muted-foreground);
+  color: black;
   font-weight: 600;
 }
 
@@ -212,7 +212,7 @@ body {
 .row input[type="date"],
 .row select,
 .row textarea {
-  width: 100%;
+  width: 80%;
   box-sizing: border-box;
   padding: 0.7rem 0.9rem;
   border: 2px solid var(--border);

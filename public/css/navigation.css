@@ -590,7 +590,7 @@ a {
   padding: 12px 16px;
   font-size: 0.85rem;
   color: var(--muted-foreground, #475569);
-  background: var(--muted, #f8fafc);
+  background: #f8fafc;
 }
 
 .sidebar-user strong {

@@ -423,6 +423,56 @@ body {
   font-size: 12px;
 }
 
+/* ===== Banners da faixa de avisos ===== */
+.banner-carousel {
+  display: grid;
+  gap: 16px;
+}
+
+.banner-card {
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 16px;
+  overflow: hidden;
+  display: block;
+}
+
+.banner-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 16px;
+}
+
+banner-carousel{
+      display:grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap:16px;
+    }
+    .banner-card{
+      padding:0;
+      background:transparent;
+      box-shadow:none;
+      border-radius:16px;
+      overflow:hidden;
+      display:block;
+      width:100%;
+    }
+    .banner-img{
+      display:block;
+      width:100%;
+      height:auto;
+      border-radius:16px;
+    }
+
+/* Layout opcional em telas maiores */
+@media (min-width: 960px) {
+  .banner-carousel {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .container {

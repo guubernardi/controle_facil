@@ -9,7 +9,6 @@
 
 try {
   if (process.env.NODE_ENV !== 'production') {
-    // override: true = .env SOBRESCREVE variáveis já existentes
     require('dotenv').config({ override: true });
     console.log('[BOOT] dotenv carregado (.env) [override]');
   }
@@ -17,28 +16,20 @@ try {
   console.log('[BOOT] dotenv não carregado (ok em produção)');
 }
 
-const express = require('express');
-const path = require('path');
-const { query } = require('./db');
-
-/* === Sessão === */
-const session = require('express-session');
+const express   = require('express');
+const path      = require('path');
+const { query } = require('./db'); // fallback
+const session   = require('express-session');
 const ConnectPg = require('connect-pg-simple')(session);
 
 const app = express();
 app.disable('x-powered-by');
 
-// após registrar os middlewares estáticos
-app.get('/', (req, res) => {
-  if (req.session?.user) return res.redirect('/home.html');
-  return res.redirect('/login.html');
-});
-
 /** Parsers globais (ANTES das rotas) */
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Tratador de JSON inválido (evita 500)
+// Tratador de JSON inválido (tem que vir logo após os parsers)
 app.use((err, _req, res, next) => {
   if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
     return res.status(400).json({ ok: false, error: 'invalid_json' });
@@ -62,7 +53,7 @@ app.use(session({
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
-    maxAge: 12 * 60 * 60 * 1000 // 12h (sobrescrito pelo "remember me")
+    maxAge: 12 * 60 * 60 * 1000
   }
 }));
 
@@ -78,6 +69,12 @@ app.get('/docs/:slug', (req, res) => {
   res.redirect(`/docs/index.html?g=${slug}`);
 });
 
+/** Página raiz (depois da sessão) */
+app.get('/', (req, res) => {
+  if (req.session?.user) return res.redirect('/home.html');
+  return res.redirect('/login.html');
+});
+
 /** SSE (opcional) */
 try {
   const events = require('./events');
@@ -91,13 +88,16 @@ try {
   console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
 }
 
-/** Cabeçalho de resposta JSON nas rotas /api */
+/** Cabeçalho de resposta JSON nas rotas /api (ANTES de montar rotas) */
 app.use('/api', (_req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-/** Rotas de autenticação */
+/** Helper para usar a conexão do middleware (req.q) com fallback */
+const qOf = (req) => (req?.q || query);
+
+/** Rotas de autenticação (ABERTAS) */
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
@@ -113,20 +113,14 @@ try {
 }
 
 /** Compatibilidade: front antigo que POSTava em /login */
-app.post('/login', (req, res) => res.redirect(307, '/api/auth/login'));
+app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
 
-/** Guard de autenticação para /api (exceto rotas abertas) */
+/** Guard de autenticação para /api (exceto rotas abertas) — ANTES do tenant */
 app.use('/api', (req, res, next) => {
-  const p = req.path; // '/health', '/db/ping', '/auth/login', etc.
-  if (
-    p === '/health' ||        // GET /api/health
-    p === '/db/ping' ||       // GET /api/db/ping
-    p.startsWith('/auth/')    // /api/auth/*
-  ) {
-    return next();
-  }
+  const p = req.path;
+  if (p === '/health' || p === '/db/ping' || p.startsWith('/auth/')) return next();
 
-  // Exceção segura: permite o job interno chamar /api/ml/claims/import com token
+  // Exceção segura: job interno chama /api/ml/claims/import com token
   const jobHeader = req.get('x-job-token');
   const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   if (p === '/ml/claims/import' && jobHeader && jobToken && jobHeader === jobToken) {
@@ -137,9 +131,14 @@ app.use('/api', (req, res, next) => {
   return res.status(401).json({ error: 'Não autorizado' });
 });
 
-/** RBAC por prefixo */
-app.use('/api/csv', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __, next) => next()));
-app.use('/api/settings', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __, next) => next()));
+/** --------- MULTI-TENANT (RLS) --------- */
+try {
+  const tenantMw = require('./middleware/tenant-mw');
+  app.use('/api', tenantMw());
+  console.log('[BOOT] Tenant RLS habilitado em /api');
+} catch (e) {
+  console.warn('[BOOT] Tenant RLS não carregado (./middleware/tenant-mw):', e?.message || e);
+}
 
 /* ===========================
  *  HELPERS / UTIL
@@ -155,6 +154,7 @@ app.use('/api/settings', authRoutes.roleRequired?.('admin', 'gestor') || ((_, __
   'ML_CLIENT_ID',
   'ML_CLIENT_SECRET',
   'ML_REDIRECT_URI',
+  'MELI_OWNER_TOKEN'
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
@@ -165,8 +165,9 @@ function safeParseJson(s) {
   try { return JSON.parse(String(s)); } catch { return null; }
 }
 
-async function tableHasColumns(table, columns) {
-  const { rows } = await query(
+async function tableHasColumns(table, columns, req) {
+  const q = qOf(req);
+  const { rows } = await q(
     `SELECT column_name FROM information_schema.columns
        WHERE table_schema='public' AND table_name=$1`,
     [table]
@@ -177,7 +178,7 @@ async function tableHasColumns(table, columns) {
   return out;
 }
 
-/** addReturnEvent (idempotente) */
+/** addReturnEvent (idempotente) — usa fallback global */
 async function addReturnEvent({
   returnId, type, title = null, message = null, meta = null,
   createdBy = 'system', idempKey = null
@@ -257,6 +258,17 @@ try {
   console.warn('[BOOT] Rotas Returns não carregadas (opcional):', e?.message || e);
 }
 
+/* ========= Chat por Devolução (mensagens) =========
+   Montamos em /api E na raiz para cobrir ambos os estilos de router. */
+try {
+  const returnsMessages = require('./routes/returns-messages');
+  app.use('/api', returnsMessages); // se o router declarar '/returns/:id/messages'
+  app.use('/',    returnsMessages); // se o router declarar '/api/returns/:id/messages'
+  console.log('[BOOT] Rotas Chat por Devolução registradas (/api/returns/:id/messages)');
+} catch (e) {
+  console.warn('[BOOT] Rotas Chat por Devolução não carregadas (opcional):', e?.message || e);
+}
+
 /* ========= Webhook Mercado Livre ========= */
 try {
   const registerMlWebhook = require('./routes/ml-webhook');
@@ -290,10 +302,21 @@ try {
   console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
 }
 
+/* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
+try {
+  const mlChatRoutes = require('./routes/ml-chat');
+  if (mlChatRoutes) {
+    app.use('/api/ml', mlChatRoutes);
+    console.log('[BOOT] Rotas ML Chat registradas (/api/ml/...)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas ML Chat não carregadas (opcional):', e?.message || e);
+}
+
 /* ========= Importador Mercado Livre (Sync Claims -> devolucoes) ========= */
 let _mlSyncRegistered = false;
 try {
-  const registerMlSync = require('./routes/ml-sync'); // deve expor /api/ml/claims/import
+  const registerMlSync = require('./routes/ml-sync'); // expõe /api/ml/claims/import
   if (typeof registerMlSync === 'function') {
     registerMlSync(app, { addReturnEvent });
     _mlSyncRegistered = true;
@@ -306,11 +329,11 @@ try {
 /* ------------------------------------------------------------
  *  Healthchecks
  * ------------------------------------------------------------ */
-app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
 app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
-app.get('/api/db/ping', async (_req, res) => {
+app.get('/api/db/ping', async (req, res) => {
   try {
-    const r = await query('select now() as now');
+    const q = qOf(req);
+    const r = await q('select now() as now');
     res.json({ ok: true, now: r.rows[0].now });
   } catch (e) {
     console.error('DB PING ERRO:', e);
@@ -323,6 +346,7 @@ app.get('/api/db/ping', async (_req, res) => {
  * ------------------------------------------------------------ */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
+    const q = qOf(req);
     const returnId = parseInt(req.params.id, 10);
     if (!Number.isInteger(returnId)) {
       return res.status(400).json({ error: 'return_id inválido' });
@@ -345,7 +369,7 @@ app.get('/api/returns/:id/events', async (req, res) => {
       ORDER BY created_at ASC, id ASC
       LIMIT $2 OFFSET $3
     `;
-    const { rows } = await query(sql, [returnId, limit, offset]);
+    const { rows } = await q(sql, [returnId, limit, offset]);
     const items = rows.map(r => ({ ...r, meta: safeParseJson(r.meta) }));
     res.json({ items, limit, offset });
   } catch (err) {
@@ -359,8 +383,9 @@ app.get('/api/returns/:id/events', async (req, res) => {
  * ------------------------------------------------------------ */
 app.get('/api/returns/logs', async (req, res) => {
   try {
+    const q = qOf(req);
     const {
-      from, to, status, log_status, responsavel, loja, q,
+      from, to, status, log_status, responsavel, loja, q: qstr,
       return_id,
       page = '1', pageSize = '50',
       orderBy = 'event_at', orderDir = 'desc'
@@ -376,8 +401,8 @@ app.get('/api/returns/logs', async (req, res) => {
     if (responsavel){ params.push(String(responsavel).toLowerCase());where.push(`LOWER(responsavel_custo) = $${params.length}`); }
     if (loja)       { params.push(`%${loja}%`);                        where.push(`loja_nome ILIKE $${params.length}`); }
     if (return_id)  { params.push(parseInt(return_id,10));             where.push(`return_id = $${params.length}`); }
-    if (q) {
-      const like = `%${q}%`;
+    if (qstr) {
+      const like = `%${qstr}%`;
       params.push(like, like, like, like);
       where.push(`(
         numero_pedido ILIKE $${params.length - 3} OR
@@ -400,7 +425,7 @@ app.get('/api/returns/logs', async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const offset  = (pageNum - 1) * limit;
 
-    const hasViewCols = await tableHasColumns('v_return_cost_log', ['return_id','event_at','total']);
+    const hasViewCols = await tableHasColumns('v_return_cost_log', ['return_id','event_at','total'], req);
 
     let sqlItems, sqlCount, sqlSum, paramsItems, paramsCount;
 
@@ -445,9 +470,9 @@ app.get('/api/returns/logs', async (req, res) => {
     }
 
     const [itemsQ, countQ, sumQ] = await Promise.all([
-      query(sqlItems, paramsItems),
-      query(sqlCount, paramsCount),
-      query(sqlSum,   paramsCount),
+      q(sqlItems, paramsItems),
+      q(sqlCount, paramsCount),
+      q(sqlSum,   paramsCount),
     ]);
 
     res.json({
@@ -494,6 +519,7 @@ app.get('/api/dashboard', async (req, res) => {
   };
 
   try {
+    const q = qOf(req);
     const { from, to, limitTop = '5' } = req.query;
     const lim = Math.max(1, Math.min(parseInt(limitTop, 10) || 5, 20));
 
@@ -504,7 +530,7 @@ app.get('/api/dashboard', async (req, res) => {
     const pFrom = from || defaultFrom;
     const pTo   = to   || defaultTo;
 
-    const cols = await tableHasColumns('devolucoes', ['tipo_reclamacao','reclamacao','log_status','valor_produto','valor_frete','status','created_at','sku']);
+    const cols = await tableHasColumns('devolucoes', ['tipo_reclamacao','reclamacao','log_status','valor_produto','valor_frete','status','created_at','sku'], req);
 
     if (!cols.created_at) {
       return res.json(mock());
@@ -512,7 +538,7 @@ app.get('/api/dashboard', async (req, res) => {
 
     const params = [pFrom, pTo];
 
-    const qDaily = await query(
+    const qDaily = await q(
       `
       WITH base AS (
         SELECT
@@ -543,7 +569,7 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    const qMonthly = await query(
+    const qMonthly = await q(
       `
       WITH base AS (
         SELECT
@@ -574,7 +600,7 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    const qStatus = await query(
+    const qStatus = await q(
       `
       WITH base AS (
         SELECT LOWER(COALESCE(status,'')) AS st
@@ -590,7 +616,7 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    const qTotals = await query(
+    const qTotals = await q(
       `
       WITH base AS (
         SELECT
@@ -623,7 +649,7 @@ app.get('/api/dashboard', async (req, res) => {
       params
     );
 
-    const qTop = await query(
+    const qTop = await q(
       `
       WITH base AS (
         SELECT
@@ -667,7 +693,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND A.sku <> ''
+      WHERE a.sku IS NOT NULL AND a.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
@@ -689,94 +715,15 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------
- *  KPIs / Pendências / Integrações (Home)
- * ------------------------------------------------------------ */
-app.get('/api/home/kpis', async (req, res) => {
-  try {
-    const { from, to } = req.query;
-    const where = [];
-    const params = [];
-    if (from) { params.push(from); where.push(`created_at >= $${params.length}`); }
-    if (to)   { params.push(to);   where.push(`created_at <  $${params.length}`); }
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-
-    const cols = await tableHasColumns('devolucoes', ['conciliado_em']);
-    const sql = `
-      WITH base AS (
-        SELECT
-          LOWER(COALESCE(status,'')) AS st,
-          ${cols.conciliado_em ? 'conciliado_em' : 'NULL::timestamp'} AS conciliado_em
-        FROM devolucoes
-        ${whereSql}
-      )
-      SELECT
-        COUNT(*)::int                                                        AS total,
-        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int              AS pendentes,
-        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int             AS aprovadas,
-        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitadas,
-        SUM(CASE WHEN conciliado_em IS NULL THEN 1 ELSE 0 END)::int         AS a_conciliar
-      FROM base`;
-    const r = await query(sql, params);
-    res.json(r.rows[0] || { total:0, pendentes:0, aprovadas:0, rejeitadas:0, a_conciliar:0 });
-  } catch (e) {
-    console.error('GET /api/home/kpis erro:', e);
-    res.status(500).json({ error: 'Falha ao calcular KPIs.' });
-  }
-});
-
-app.get('/api/home/pending', async (_req, res) => {
-  try {
-    const cols = await tableHasColumns('devolucoes', ['log_status','cd_inspecionado_em','conciliado_em']);
-    const whereSemInspecao = [];
-    if (cols.log_status) whereSemInspecao.push(`log_status IN ('recebido_cd','em_inspecao')`);
-    if (cols.cd_inspecionado_em) whereSemInspecao.push(`cd_inspecionado_em IS NULL`);
-    const sql1 = `
-      SELECT id, id_venda, loja_nome, sku
-      FROM devolucoes
-      ${whereSemInspecao.length ? 'WHERE ' + whereSemInspecao.join(' AND ') : 'WHERE 1=0'}
-      ORDER BY id DESC LIMIT 20
-    `;
-    const sql2 = `
-      SELECT id, id_venda, loja_nome, sku
-      FROM devolucoes
-      ${cols.conciliado_em ? 'WHERE conciliado_em IS NULL' : ''}
-      ORDER BY id DESC LIMIT 20
-    `;
-    const [r1, r2] = await Promise.all([ query(sql1), query(sql2) ]);
-    res.json({
-      recebidos_sem_inspecao: r1.rows || [],
-      sem_conciliacao_csv: (cols.conciliado_em ? r2.rows : []) || [],
-      csv_pendente: []
-    });
-  } catch (e) {
-    console.error('GET /api/home/pending erro:', e);
-    res.status(500).json({ error: 'Falha ao listar pendências.' });
-  }
-});
-
-app.get('/api/home/announcements', (_req, res) => {
-  res.json({
-    items: [
-      'Conciliação por CSV do Mercado Livre disponível.',
-      'Integração direta com ML em breve (fase beta).'
-    ]
-  });
-});
-
-app.get('/api/integrations/health', async (_req, res) => {
-  try {
-    const q = await query(`select count(*)::int as n from bling_accounts`);
-    const blingOk = (q.rows[0]?.n || 0) > 0;
-    res.json({
-      bling: { ok: blingOk, mode: 'oauth' },
-      mercado_livre: { ok: false, mode: 'csv' }
-    });
-  } catch {
-    res.json({
-      bling: { ok: false, error: 'indisponível' },
-      mercado_livre: { ok: false, mode: 'csv' }
-    });
+/** ----- Handler de erro final (respeita REVEAL_ERRORS=true) ----- */
+app.use((err, req, res, _next) => {
+  console.error('[API ERROR]', err);
+  const reveal = String(process.env.REVEAL_ERRORS ?? 'false').toLowerCase() === 'true';
+  const msg = reveal ? (err?.detail || err?.message || String(err)) : 'Erro interno';
+  if (req.path?.startsWith('/api')) {
+    res.status(500).json({ error: msg });
+  } else {
+    res.status(500).send('Erro interno');
   }
 });
 
@@ -788,7 +735,6 @@ const host = '0.0.0.0';
 
 const server = app.listen(port, host, () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`);
-  // Inicia o AutoSync do ML após o servidor subir
   setupMlAutoSync();
 });
 
@@ -803,14 +749,13 @@ function setupMlAutoSync() {
     return;
   }
 
-  // Habilitado por padrão — pode ser desativado via env
   const enabled = String(process.env.ML_AUTO_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
   if (!enabled) {
     console.log('[ML AUTO] Desabilitado por ML_AUTO_SYNC_ENABLED=false');
     return;
   }
 
-  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_SYNC_INTERVAL_MS || '600000', 10) || 600_000); // 10 min
+  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_SYNC_INTERVAL_MS || '600000', 10) || 600_000);
   const windowDays = Math.max(1, parseInt(process.env.ML_AUTO_SYNC_WINDOW_DAYS || '14', 10) || 14);
   const runOnStart = String(process.env.ML_AUTO_SYNC_ON_START ?? 'true').toLowerCase() === 'true';
   const jobToken   = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN || 'dev-job';
@@ -827,7 +772,6 @@ function setupMlAutoSync() {
     const url = `http://127.0.0.1:${port}/api/ml/claims/import?days=${encodeURIComponent(windowDays)}&silent=1`;
 
     try {
-      // Node 18+ possui fetch global
       const r = await fetch(url, { headers: { 'x-job-token': jobToken } });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j?.error || r.statusText || 'Falha no import');
@@ -854,15 +798,11 @@ function setupMlAutoSync() {
     }
   };
 
-  // Primeiro disparo
   if (runOnStart) setTimeout(() => run('boot'), 2000);
-
-  // Intervalo fixo
   const handle = setInterval(run, intervalMs);
   process.on('SIGINT',  () => clearInterval(handle));
   process.on('SIGTERM', () => clearInterval(handle));
 
-  // Endpoint de diagnóstico do AutoSync (requer sessão)
   app.get('/api/ml/claims/last-run', (_req, res) => {
     res.json({
       enabled,

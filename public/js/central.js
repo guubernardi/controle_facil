@@ -1,32 +1,25 @@
-// Central de Monitoramento
-// -------------------------------------------------------------
-// - Cards por marketplace (reclamações pendentes)
-// - Lista "Devoluções a caminho"
-// - Toast quando surgir uma NOVA reclamação (evita spam no 1º load)
-// - Polling leve + pausa quando a aba estiver oculta
-// -------------------------------------------------------------
+// central.js
 
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TOAST_BOX = $("#toastContainer");
-const POLL_MS = 30000; // 30s
+const POLL_MS = 50000;        // 50s
+const LOADER_MIN_MS = 6000;  // tempo mínimo do overlay fullscreen (6s)
 
 // IDs já vistos para não repetir toast
 const seen = new Set();
-
 // Evitar toasts no primeiro carregamento
 let firstRun = true;
-
 // Pausa o polling quando a aba não está visível
 let pollingOn = true;
 document.addEventListener("visibilitychange", () => {
   pollingOn = document.visibilityState === "visible";
 });
 
-// Helpers de URL (sempre relativizando para a raiz atual)
+// Helpers de URL
 const openUrlForId = (id) => `index.html?return_id=${encodeURIComponent(id)}`;
-const logsUrlForId = (id) => `index.html?view=logs&return_id=${encodeURIComponent(id)}`;
+const logsUrlForId  = (id) => `index.html?view=logs&return_id=${encodeURIComponent(id)}`;
 
 // Ícones inline
 function iconSvg(name) {
@@ -79,19 +72,24 @@ async function api(url) {
   return j;
 }
 
-// Reclamações pendentes (cards por marketplace)
-async function carregarReclamacoesAbertas() {
+/* =========================
+ *  Dados + Renderização
+ * ========================= */
+
+// Reclamações pendentes (dados)
+async function fetchReclamacoesAbertas() {
   const res  = await api("/api/returns?status=pendente&page=1&pageSize=500");
   const rows = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
-
-  // Agrupa por marketplace
   const agg = {};
   for (const r of rows) {
     const mk = lojaToMarketplace(r.loja_nome || "");
     agg[mk] = (agg[mk] || 0) + 1;
   }
+  return { rows, agg };
+}
 
-  // Render
+// Reclamações pendentes (render)
+function renderReclamacoesAbertas(agg) {
   const cont  = $("#mk-cards");
   const ordem = ["Shopee", "Mercado Livre", "Magalu", "Outros"];
   cont.innerHTML = "";
@@ -105,12 +103,14 @@ async function carregarReclamacoesAbertas() {
     `;
     cont.appendChild(card);
   });
+}
 
-  // Toasts para IDs novos (após 1º load)
+// Toasts para novas reclamações
+function handleNewReclamacoes(rows) {
   rows.forEach((r) => {
     const id = String(r.id);
     if (firstRun) {
-      seen.add(id); // semear para não “spammar” no 1º load
+      seen.add(id); // semear no 1º load
       return;
     }
     if (!seen.has(id)) {
@@ -118,17 +118,16 @@ async function carregarReclamacoesAbertas() {
       showToast({
         title: "Nova reclamação aberta",
         desc: "Clique para abrir",
-        href: openUrlForId(id) // abre index.html e o modal
+        href: openUrlForId(id)
       });
     }
   });
 }
 
-// “Devoluções a caminho” (recebido_cd → em_inspecao → pendente)
-async function carregarACaminho() {
+// “Devoluções a caminho” (dados)
+async function fetchACaminho() {
   let res  = await api("/api/returns?status=recebido_cd&page=1&pageSize=20").catch(() => null);
   let rows = Array.isArray(res?.items) ? res.items : [];
-
   if (!rows.length) {
     res  = await api("/api/returns?status=em_inspecao&page=1&pageSize=20").catch(() => null);
     rows = Array.isArray(res?.items) ? res.items : [];
@@ -137,23 +136,21 @@ async function carregarACaminho() {
     res  = await api("/api/returns?status=pendente&page=1&pageSize=20").catch(() => null);
     rows = Array.isArray(res?.items) ? res.items : [];
   }
+  return rows.slice(0, 6);
+}
 
+// “Devoluções a caminho” (render)
+function renderACaminho(rows) {
   const ul = $("#a-caminho");
   ul.innerHTML = "";
-
-  rows.slice(0, 6).forEach((r) => {
+  rows.forEach((r) => {
     const li     = document.createElement("li");
     const pedido = r.id_venda || r.id || "—";
     const quando = r.updated_at || r.created_at || null;
     const dt     = quando ? new Date(quando).toLocaleDateString("pt-BR") : "—";
-
-    const stRaw = String(r.status || "").replaceAll("_", " ");
-    const statusTxt = stRaw ? stRaw.charAt(0).toUpperCase() + stRaw.slice(1) : "—";
-
     li.className = "item";
-    // onde monta o "abrir"
     li.innerHTML = `
-      <span class="pill">${(r.status || "").replaceAll("_", " ")}</span>
+      <span class="pill">${String(r.status || "").replaceAll("_", " ")}</span>
       <span class="id">pacote ${pedido}</span>
       <span class="muted">• ${dt}</span>
       <a href="devolucao-editar.html?id=${encodeURIComponent(r.id)}">abrir</a>
@@ -162,21 +159,53 @@ async function carregarACaminho() {
   });
 }
 
-// Boot: carrega dados e inicia o polling
+/* =========================
+ *  Boot + Polling
+ * ========================= */
+
 async function boot() {
-  await Promise.all([carregarReclamacoesAbertas(), carregarACaminho()]);
+  const hasLoader = !!window.PageLoader;
+  if (hasLoader) {
+    // segura o overlay de tela cheia por ~13s no 1º load
+    window.PageLoader.hold(LOADER_MIN_MS);
+  }
+
+  try {
+    // Busca dados em paralelo; se não houver PageLoader, impõe atraso mínimo via sleep
+    const results = await Promise.all([
+      fetchReclamacoesAbertas(),
+      fetchACaminho(),
+      hasLoader ? Promise.resolve() : sleep(LOADER_MIN_MS)
+    ]);
+
+    const abertas = results[0];
+    const caminho = results[1];
+
+    renderReclamacoesAbertas(abertas.agg);
+    handleNewReclamacoes(abertas.rows);
+    renderACaminho(caminho);
+  } catch (e) {
+    // Em caso de erro inicial, deixamos os skeletons e seguimos para o polling
+    console.warn("initial load fail:", e?.message || e);
+  } finally {
+    if (hasLoader) window.PageLoader.done();
+  }
+
   firstRun = false; // a partir daqui, novos IDs disparam toast
 
-  // Loop de polling leve
+  // Polling leve
   while (true) {
     await sleep(POLL_MS);
-    if (!pollingOn) continue; // pausa quando a aba não está visível
+    if (!pollingOn) continue;
     try {
-      await carregarReclamacoesAbertas();
-      await carregarACaminho();
+      const [ab, cam] = await Promise.all([fetchReclamacoesAbertas(), fetchACaminho()]);
+      renderReclamacoesAbertas(ab.agg);
+      handleNewReclamacoes(ab.rows);
+      renderACaminho(cam);
     } catch (e) {
       console.warn("poll fail", e.message);
     }
   }
 }
+
 boot();

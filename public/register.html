@@ -4,107 +4,71 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Controle Fácil — Cadastre-se</title>
-  <link rel="stylesheet" href="/css/styles.css">
-  <style>
-    /* estilos mínimos para a página, respeitando tokens existentes */
-    :root { 
-      --card-bg: #fff; 
-      --muted: #6b7280; 
-      --ring: #0b5fff; 
-    }
-    body { 
-      min-height: 100vh; 
-      display: grid; 
-      place-items: center; 
-      background: var(--background, #f7f7f8); 
-    }
-    .card { 
-      width: 100%; 
-      max-width: 440px; 
-      background: var(--card, var(--card-bg)); 
-      border: 1px solid var(--border, #e5e7eb); 
-      border-radius: 12px; 
-      box-shadow: var(--shadow, 0 2px 10px rgba(0,0,0,.04)); 
-    }
-    .card header { padding: 20px 20px 0 20px; }
-    .card h1 { margin: 0 0 6px; font-size: 1.35rem; }
-    .card p { margin: 0 0 8px; color: var(--muted-foreground, #6b7280); font-size: .92rem; }
-    .card form { padding: 20px; display: grid; gap: 12px; }
-    label { font-size: .9rem; color: var(--foreground, #111827); display:block; margin-bottom: 6px; }
-    input[type="text"], input[type="email"], input[type="password"] {
-      width: 100%; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; outline: none;
-      background: var(--input, #fff);
-    }
-    input:focus { border-color: var(--ring, #0b5fff); box-shadow: 0 0 0 3px rgba(11,95,255,.12); }
-    .actions { display: grid; gap: 10px; margin-top: 4px; }
-    .btn { display:inline-flex; justify-content:center; align-items:center; gap:8px; padding:10px 12px; border-radius:10px; border:1px solid transparent; cursor:pointer; }
-    .btn.-primary { background: var(--primary, #0b5fff); color: #fff; }
-    .btn:disabled { opacity: .6; cursor: not-allowed; }
-    .muted { color: var(--muted-foreground, #6b7280); font-size: .9rem; text-align:center; }
-    .row { display:grid; gap:8px; }
-    .grid-2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .hint { font-size: .8rem; color: var(--muted-foreground, #6b7280); margin-top: 2px; }
-    .error { color: #b91c1c; font-size: .85rem; display:none; }
-    .error.is-visible { display:block; }
-    .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #111827; color: #fff; padding: 10px 14px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events:none; }
-    .toast.is-visible { opacity: 1; }
-  </style>
+  <meta name="description" content="Sistema profissional de gerenciamento e controle empresarial. Cadastre-se e organize sua empresa com facilidade." />
+  <link rel="stylesheet" href="/css/register.css">
 </head>
 <body>
-  <div class="card" role="region" aria-labelledby="cad-title">
-    <header>
-      <h1 id="cad-title">Criar conta</h1>
-      <p>Cadastre-se para acessar o Controle Fácil.</p>
-    </header>
+  <!-- Loader global -->
+  <div id="pageLoader" class="global-loader" aria-hidden="true">
+    <div class="spinner" role="status" aria-label="Carregando"></div>
+  </div>
 
-    <form id="form-register" novalidate>
-      <div class="grid-2">
-        <div class="row">
-          <label for="first_name">Nome</label>
-          <input id="first_name" name="first_name" type="text" autocomplete="given-name" required />
-          <div class="error" id="err-first">Informe seu nome.</div>
+  <div class="container">
+    <div class="card" role="region" aria-labelledby="cad-title">
+      <header class="card-header">
+        <h1 id="cad-title">Criar conta</h1>
+        <p>Cadastre-se para acessar o Controle Fácil.</p>
+      </header>
+
+      <form id="form-register" novalidate>
+        <div class="grid-2">
+          <div class="row">
+            <label for="first_name">Nome</label>
+            <input id="first_name" name="first_name" type="text" autocomplete="given-name" required />
+            <div class="error" id="err-first"></div>
+          </div>
+          <div class="row">
+            <label for="last_name">Sobrenome</label>
+            <input id="last_name" name="last_name" type="text" autocomplete="family-name" required />
+            <div class="error" id="err-last"></div>
+          </div>
         </div>
+
         <div class="row">
-          <label for="last_name">Sobrenome</label>
-          <input id="last_name" name="last_name" type="text" autocomplete="family-name" required />
-          <div class="error" id="err-last">Informe seu sobrenome.</div>
+          <label for="company">Empresa</label>
+          <input id="company" name="company" type="text" autocomplete="organization" required />
+          <div class="error" id="err-company"></div>
         </div>
-      </div>
 
-      <div class="row">
-        <label for="company">Empresa</label>
-        <input id="company" name="company" type="text" autocomplete="organization" required />
-        <div class="error" id="err-company">Informe o nome da empresa.</div>
-      </div>
+        <div class="row">
+          <label for="email">E-mail</label>
+          <input id="email" name="email" type="email" autocomplete="email" required inputmode="email" />
+          <div class="hint" id="hint-email" aria-live="polite"></div>
+          <div class="error" id="err-email"></div>
+        </div>
 
-      <div class="row">
-        <label for="email">E-mail</label>
-        <input id="email" name="email" type="email" autocomplete="email" required />
-        <div class="hint" id="hint-email"></div>
-        <div class="error" id="err-email">Informe um e-mail válido.</div>
-      </div>
+        <div class="row">
+          <label for="password">Senha</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" minlength="6" required />
+          <div class="hint">Mínimo de 6 caracteres.</div>
+        </div>
 
-      <div class="row">
-        <label for="password">Senha</label>
-        <input id="password" name="password" type="password" autocomplete="new-password" minlength="6" required />
-        <div class="hint">Mínimo de 6 caracteres.</div>
-      </div>
+        <div class="row">
+          <label for="confirm">Confirmar senha</label>
+          <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="6" required />
+          <div class="error" id="err-confirm"></div>
+        </div>
 
-      <div class="row">
-        <label for="confirm">Confirmar senha</label>
-        <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="6" required />
-        <div class="error" id="err-confirm">As senhas não coincidem.</div>
-      </div>
-
-      <div class="actions">
-        <button class="btn -primary" id="btn-submit" type="submit">Criar conta</button>
-        <div class="muted">Já tem conta? <a href="/login.html">Entrar</a></div>
-      </div>
-    </form>
+        <div class="actions">
+          <button class="btn -primary" id="btn-submit" type="submit">Criar conta</button>
+          <div class="muted">Já tem conta? <a href="/login.html">Entrar</a></div>
+        </div>
+      </form>
+    </div>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="/js/register.js"></script>
+  <script type="module" src="/js/register.js" defer></script>
 </body>
 </html>

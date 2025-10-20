@@ -1,101 +1,183 @@
-// public/js/register.js
-const $ = (s) => document.querySelector(s);
+// Helpers
+const $  = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
 
-function showToast(msg) {
-  const t = $('#toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add('is-visible');
+// Toast
+function showToast(message, duration = 3000) {
+  const toast = $('#toast');
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add('is-visible');
   clearTimeout(showToast._t);
-  showToast._t = setTimeout(() => t.classList.remove('is-visible'), 3000);
+  showToast._t = setTimeout(() => toast.classList.remove('is-visible'), duration);
 }
 
-function emailValid(e) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').toLowerCase());
-}
+// Inline errors
+function showError(el, msg){ if(!el) return; el.textContent = msg; el.classList.add('is-visible'); }
+function hideError(el){ if(!el) return; el.textContent = ''; el.classList.remove('is-visible'); }
+function setInputError(input, has){ if(!input) return; input.classList.toggle('error-state', !!has); }
 
-async function checkEmailExists(email) {
-  try {
-    const r = await fetch(`/api/auth/check-email?email=${encodeURIComponent(email)}`);
-    const j = await r.json().catch(() => ({}));
-    return Boolean(j?.exists);
-  } catch {
-    return false;
+// Loading (overlay + botão)
+function setLoading(on){
+  // se existir o page-loader global, usa ele
+  if (typeof window.pageLoaderShow === 'function' && typeof window.pageLoaderDone === 'function') {
+    if (on) window.pageLoaderShow(); else window.pageLoaderDone();
+    return;
   }
+  // fallback: tenta alternar #pageLoader (se existir)
+  const el = document.getElementById('pageLoader');
+  if (!el) return;
+  if (on) el.classList.remove('hidden'); else el.classList.add('hidden');
 }
 
+// Email validator
+const emailValid = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||'').toLowerCase());
+
+// API helpers
+async function apiCheckEmail(email){
+  const url = `/api/auth/check-email?email=${encodeURIComponent(email)}`;
+  const r = await fetch(url, { headers: { 'Accept':'application/json' } });
+  if(!r.ok) throw new Error('Falha ao verificar e-mail.');
+  const j = await r.json().catch(()=> ({}));
+  // aceita {exists:true}, {ok:true, exists:true} ou {data:{exists:true}}
+  return Boolean(j.exists ?? j?.data?.exists);
+}
+
+async function apiRegister(payload){
+  const r = await fetch('/api/auth/register', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
+    credentials:'same-origin',
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json().catch(()=> ({}));
+  if(!r.ok){
+    const msg = j?.error || j?.message || 'Falha ao criar conta.';
+    throw new Error(msg);
+  }
+  return j;
+}
+
+// Init
 document.addEventListener('DOMContentLoaded', () => {
   const form = $('#form-register');
   const btn  = $('#btn-submit');
 
-  const firstEl   = $('#first_name');
-  const lastEl    = $('#last_name');
-  const companyEl = $('#company');
-  const emailEl   = $('#email');
-  const passEl    = $('#password');
-  const confEl    = $('#confirm');
+  // inputs
+  const firstNameInput = $('#first_name');
+  const lastNameInput  = $('#last_name');
+  const companyInput   = $('#company');
+  const emailInput     = $('#email');
+  const passwordInput  = $('#password');
+  const confirmInput   = $('#confirm');
 
+  // errors
   const errFirst   = $('#err-first');
   const errLast    = $('#err-last');
   const errCompany = $('#err-company');
   const errEmail   = $('#err-email');
-  const errConf    = $('#err-confirm');
+  const errConfirm = $('#err-confirm');
   const hintEmail  = $('#hint-email');
 
-  emailEl?.addEventListener('blur', async () => {
-    const e = emailEl.value.trim();
-    if (!emailValid(e)) { hintEmail.textContent = ''; return; }
-    const exists = await checkEmailExists(e);
-    hintEmail.textContent = exists ? 'Este e-mail já está cadastrado.' : 'E-mail disponível.';
-    hintEmail.style.color = exists ? '#b91c1c' : 'var(--muted-foreground,#6b7280)';
+  if (!form || !btn) return;
+
+  const inputs = [firstNameInput,lastNameInput,companyInput,emailInput,passwordInput,confirmInput];
+  const errs   = [errFirst,errLast,errCompany,errEmail,null,errConfirm];
+
+  // limpar erro ao digitar
+  inputs.forEach((input, i) => {
+    input?.addEventListener('input', () => {
+      if (errs[i]) hideError(errs[i]);
+      setInputError(input, false);
+    });
   });
 
-  form?.addEventListener('submit', async (ev) => {
-    ev.preventDefault();
-    [errFirst, errLast, errCompany, errEmail, errConf].forEach(el => el?.classList.remove('is-visible'));
+  // checagem de e-mail
+  emailInput?.addEventListener('blur', async () => {
+    const email = emailInput.value.trim();
+    if(!hintEmail) return;
 
-    const first    = (firstEl.value || '').trim();
-    const last     = (lastEl.value || '').trim();
-    const company  = (companyEl.value || '').trim();
-    const email    = (emailEl.value || '').trim();
-    const password = passEl.value;
-    const confirm  = confEl.value;
+    hintEmail.className = 'hint';
+    hintEmail.textContent = '';
+    if(!email || !emailValid(email)) return;
 
-    let ok = true;
-    if (first.length < 2)   { errFirst.classList.add('is-visible');   ok = false; }
-    if (last.length  < 2)   { errLast.classList.add('is-visible');    ok = false; }
-    if (company.length < 2) { errCompany.classList.add('is-visible'); ok = false; }
-    if (!emailValid(email)) { errEmail.classList.add('is-visible');   ok = false; }
-    if (password.length < 6 || password !== confirm) {
-      errConf.classList.add('is-visible'); ok = false;
+    try{
+      hintEmail.textContent = 'Verificando...';
+      const exists = await apiCheckEmail(email);
+      hintEmail.textContent = exists ? 'Este e-mail já está cadastrado.' : 'E-mail disponível.';
+      hintEmail.classList.add(exists ? 'warning' : 'success');
+    }catch{
+      hintEmail.textContent = '';
     }
-    if (!ok) return;
+  });
 
-    const name = [first, last].filter(Boolean).join(' ');
+  emailInput?.addEventListener('input', () => {
+    if (!hintEmail) return;
+    hintEmail.className = 'hint';
+    hintEmail.textContent = '';
+  });
 
+  // validação
+  function validate(){
+    let ok = true;
+    [errFirst,errLast,errCompany,errEmail,errConfirm].forEach(hideError);
+    inputs.forEach(i => setInputError(i,false));
+
+    const first = firstNameInput?.value.trim() || '';
+    const last  = lastNameInput?.value.trim() || '';
+    const comp  = companyInput?.value.trim() || '';
+    const email = emailInput?.value.trim() || '';
+    const pass  = passwordInput?.value || '';
+    const conf  = confirmInput?.value || '';
+
+    if(first.length < 2){ showError(errFirst,'Informe seu nome.'); setInputError(firstNameInput,true); ok = false; }
+    if(last.length  < 2){ showError(errLast,'Informe seu sobrenome.'); setInputError(lastNameInput,true); ok = false; }
+    if(comp.length  < 2){ showError(errCompany,'Informe o nome da empresa.'); setInputError(companyInput,true); ok = false; }
+    if(!emailValid(email)){ showError(errEmail,'Informe um e-mail válido.'); setInputError(emailInput,true); ok = false; }
+    if(pass.length  < 6){ showError(errConfirm,'A senha deve ter no mínimo 6 caracteres.'); setInputError(passwordInput,true); ok = false; }
+    if(pass !== conf){   showError(errConfirm,'As senhas não coincidem.'); setInputError(confirmInput,true); ok = false; }
+
+    return ok;
+  }
+
+  // submit
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if(!validate()){
+      showToast('Por favor, corrija os erros no formulário.');
+      return;
+    }
+
+    const payload = {
+      first_name: firstNameInput.value.trim(),
+      last_name : lastNameInput.value.trim(),
+      company   : companyInput.value.trim(),
+      email     : emailInput.value.trim(),
+      password  : passwordInput.value
+    };
+
+    // estados de loading
     btn.disabled = true;
+    btn.classList.add('loading');
     btn.textContent = 'Criando…';
-    try {
-      const r = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, company })
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        const msg = j?.error || 'Falha ao cadastrar';
-        if (String(msg).toLowerCase().includes('email')) errEmail.classList.add('is-visible');
-        showToast(msg);
-        return;
-      }
-      // sucesso: sessão já criada no backend
+    setLoading(true);
+
+    try{
+      await apiRegister(payload);
       showToast('Conta criada com sucesso!');
-      setTimeout(() => { window.location.href = '/home.html'; }, 600);
-    } catch (e) {
-      showToast(e?.message || 'Erro de rede');
-    } finally {
+      setTimeout(() => { window.location.href = '/login.html'; }, 700);
+    }catch(err){
+      const msg = err?.message || 'Erro ao criar conta. Tente novamente.';
+      showToast(msg);
+      // feedback específico se a API retornar algo como "email já cadastrado"
+      if (/mail|email/i.test(msg)) {
+        showError(errEmail, msg);
+        setInputError(emailInput, true);
+      }
       btn.disabled = false;
+      btn.classList.remove('loading');
       btn.textContent = 'Criar conta';
+      setLoading(false);
     }
   });
 });

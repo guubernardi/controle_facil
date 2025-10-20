@@ -1,190 +1,124 @@
-function trocarAba(nome) {
-  // Atualiza botões
-  document.querySelectorAll(".aba").forEach((b) => {
-    const ativa = b.dataset.tab === nome
-    b.classList.toggle("ativa", ativa)
-    b.setAttribute("aria-selected", ativa ? "true" : "false")
-  })
-  document.querySelectorAll(".tab").forEach((p) => {
-    p.classList.toggle("ativo", p.id === `tab_${nome}`)
-  })
-}
+'use strict';
+const express = require('express');
+const router = express.Router();
+const { query } = require('../db');
+const qOf = (req) => (req?.q || query);
 
-async function carregarKpis() {
+async function hasColumn(req, table, col) {
+  const q = qOf(req);
+  const { rows } = await q(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema='public' AND table_name=$1 AND column_name=$2 LIMIT 1`,
+    [table, col]
+  );
+  return !!rows[0];
+}
+async function getTenantId(req) {
   try {
-    const r = await fetch("/api/home/kpis")
-    const j = await r.json()
-
-    const kpiTotal = document.getElementById("kpi_total")
-    const kpiPendentes = document.getElementById("kpi_pendentes")
-    const kpiAprovadas = document.getElementById("kpi_aprovadas")
-    const kpiRejeitadas = document.getElementById("kpi_rejeitadas")
-    const kpiConciliar = document.getElementById("kpi_conciliar")
-
-    if (kpiTotal) kpiTotal.textContent = j.total ?? 0
-    if (kpiPendentes) kpiPendentes.textContent = j.pendentes ?? 0
-    if (kpiAprovadas) kpiAprovadas.textContent = j.aprovadas ?? 0
-    if (kpiRejeitadas) kpiRejeitadas.textContent = j.rejeitadas ?? 0
-    if (kpiConciliar) kpiConciliar.textContent = j.a_conciliar ?? 0
-  } catch (e) {
-    console.warn("KPIs erro:", e)
-  }
+    if (req?.tenant?.id) return req.tenant.id;
+    const q = qOf(req);
+    const { rows } = await q(`SELECT current_setting('app.tenant_id', true) AS tid`);
+    const tid = rows?.[0]?.tid;
+    return tid ? parseInt(tid, 10) : null;
+  } catch { return null; }
 }
 
-async function carregarPendencias() {
+router.get('/returns/:id/messages', async (req, res) => {
   try {
-    const r = await fetch("/api/home/pending")
-    const j = await r.json()
+    const q = qOf(req);
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) return res.status(400).json({ error: 'return_id inválido' });
 
-    const qtdRcd = document.getElementById("qtd_rcd")
-    const qtdSemcsv = document.getElementById("qtd_semcsv")
-    const qtdCsvpend = document.getElementById("qtd_csvpend")
+    const colTenant     = await hasColumn(req, 'return_messages', 'tenant_id');
+    const colDirection  = await hasColumn(req, 'return_messages', 'direction');
+    const colSenderName = await hasColumn(req, 'return_messages', 'sender_name');
+    const colSenderRole = await hasColumn(req, 'return_messages', 'sender_role');
+    const colCreatedBy  = await hasColumn(req, 'return_messages', 'created_by');
+    const colCreatedAt  = await hasColumn(req, 'return_messages', 'created_at');
 
-    if (qtdRcd) qtdRcd.textContent = j.recebidos_sem_inspecao?.length ?? 0
-    if (qtdSemcsv) qtdSemcsv.textContent = j.sem_conciliacao_csv?.length ?? 0
-    if (qtdCsvpend) qtdCsvpend.textContent = j.csv_pendente?.length ?? 0
+    const params = [returnId];
+    let where = 'return_id = $1';
+    if (colTenant) {
+      const tid = await getTenantId(req);
+      if (tid != null) { params.push(tid); where += ` AND tenant_id = $${params.length}`; }
+    }
+
+    const fields = `
+      id,
+      return_id AS "returnId",
+      ${colDirection  ? 'direction'    : `'out'`}        AS direction,
+      body,
+      ${colSenderName ? 'sender_name'  : 'NULL'}         AS "senderName",
+      ${colSenderRole ? 'sender_role'  : 'NULL'}         AS "senderRole",
+      ${colCreatedBy  ? 'created_by'   : 'NULL'}         AS "createdBy",
+      ${colCreatedAt  ? 'created_at'   : 'now()'}        AS "createdAt"
+    `;
+    const sql = `
+      SELECT ${fields}
+        FROM public.return_messages
+       WHERE ${where}
+       ORDER BY "createdAt" ASC, id ASC
+    `;
+    const { rows } = await q(sql, params);
+    res.json({ items: rows });
   } catch (e) {
-    console.warn("Pending erro:", e)
+    console.error('GET /returns/:id/messages ERRO:', e);
+    res.status(500).json({ error: 'Falha ao listar mensagens' });
   }
-}
+});
 
-async function carregarIntegracoes() {
+router.post('/returns/:id/messages', async (req, res) => {
   try {
-    const r = await fetch("/api/integrations/health")
-    const j = await r.json()
+    const q = qOf(req);
+    const returnId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(returnId)) return res.status(400).json({ error: 'return_id inválido' });
 
-    const intBling = document.getElementById("int_bling")
-    const intMl = document.getElementById("int_ml")
+    const text = String(req.body?.body || '').trim();
+    if (!text) return res.status(400).json({ error: 'body obrigatório' });
 
-    if (intBling) {
-      intBling.textContent = j.bling?.ok ? "OK" : "configurar"
-      intBling.className = "tag " + (j.bling?.ok ? "-ok" : "-warn")
+    const user = req.session?.user || { id: null, name: 'Usuário' };
+
+    const colTenant     = await hasColumn(req, 'return_messages', 'tenant_id');
+    const colDirection  = await hasColumn(req, 'return_messages', 'direction');
+    const colSenderName = await hasColumn(req, 'return_messages', 'sender_name');
+    const colSenderRole = await hasColumn(req, 'return_messages', 'sender_role');
+    const colCreatedBy  = await hasColumn(req, 'return_messages', 'created_by');
+
+    const cols = ['return_id', 'body'];
+    const vals = [returnId, text];
+    const ph   = ['$1', '$2'];
+
+    if (colDirection)  { vals.push('out');                  cols.push('direction');   ph.push(`$${vals.length}`); }
+    if (colSenderName) { vals.push(user.name || 'Usuário'); cols.push('sender_name'); ph.push(`$${vals.length}`); }
+    if (colSenderRole) { vals.push('seller');               cols.push('sender_role'); ph.push(`$${vals.length}`); }
+    if (colCreatedBy)  { vals.push(user.id || null);        cols.push('created_by');  ph.push(`$${vals.length}`); }
+    if (colTenant) {
+      const tid = await getTenantId(req);
+      vals.push(tid); cols.push('tenant_id'); ph.push(`$${vals.length}`);
     }
 
-    if (intMl) {
-      intMl.textContent = j.mercado_livre?.ok ? "OK" : "usar CSV"
-      intMl.className = "tag " + (j.mercado_livre?.ok ? "-ok" : "-warn")
-    }
+    const sql = `
+      INSERT INTO public.return_messages (${cols.join(',')})
+      VALUES (${ph.join(',')})
+      RETURNING
+        id,
+        return_id  AS "returnId",
+        ${colDirection  ? 'direction'  : `'out'`}      AS direction,
+        body,
+        ${colSenderName ? 'sender_name' : 'NULL'}      AS "senderName",
+        ${colSenderRole ? 'sender_role' : 'NULL'}      AS "senderRole",
+        ${colCreatedBy  ? 'created_by'  : 'NULL'}      AS "createdBy",
+        now()                                          AS "createdAt"
+    `;
+    const { rows } = await q(sql, vals);
+    res.status(201).json(rows[0]);
   } catch (e) {
-    console.warn("Health erro:", e)
+    console.error('POST /returns/:id/messages ERRO:', e);
+    // sempre revelar o erro em dev; para forçar, defina REVEAL_ERRORS=true
+    const reveal = String(process.env.REVEAL_ERRORS ?? 'true').toLowerCase() === 'true';
+    const errMsg = (e && (e.detail || e.message)) ? (e.detail || e.message) : String(e || 'Falha');
+    res.status(500).json({ error: reveal ? errMsg : 'Falha ao enviar mensagem' });
   }
-}
+});
 
-async function carregarAvisos() {
-  try {
-    const r = await fetch("/api/home/announcements")
-    const j = await r.json()
-    const ul = document.getElementById("ann_list")
-
-    if (!ul) return
-
-    ul.innerHTML = ""
-    ;(j.items || []).forEach((txt) => {
-      const li = document.createElement("li")
-      li.className = "lista-item announcement"
-      li.innerHTML = `
-        <svg class="announcement-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        ${txt}
-      `
-      ul.appendChild(li)
-    })
-
-    // Se não houver avisos, mostra mensagem padrão
-    if (!j.items || j.items.length === 0) {
-      const li = document.createElement("li")
-      li.className = "lista-item announcement"
-      li.innerHTML = `
-        <svg class="announcement-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        Novos recursos em desenvolvimento...
-      `
-      ul.appendChild(li)
-    }
-  } catch (e) {
-    console.warn("Announcements erro:", e)
-  }
-}
-
-// Links na setas
-document.querySelectorAll(".lista-item .seta")?.forEach((btn, i) => {
-  const destinos = ["/index.html#f=recebido_cd", "/index.html#f=sem_csv", "/logs.html"]
-  btn.addEventListener("click", () => (location.href = destinos[i] || "/index.html"))
-})
-
-async function carregarEventosRecentes() {
-  try {
-    // Pega últimos 50 returns para extrair eventos
-    const r2 = await fetch("/api/returns?page=1&pageSize=50")
-    const { items = [] } = await r2.json()
-
-    const feed = document.getElementById("event_feed")
-    if (!feed) return
-
-    feed.innerHTML = ""
-
-    const ultimas = []
-    for (const it of items) {
-      try {
-        const evr = await fetch(`/api/returns/${it.id}/events?limit=1&offset=0`)
-        const { items: evs = [] } = await evr.json()
-        if (evs[0]) ultimas.push({ ...evs[0], loja_nome: it.loja_nome, id: it.id })
-      } catch (err) {
-        // Ignora erros individuais
-      }
-    }
-
-    // Ordena por createdAt desc
-    ultimas.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-
-    if (!ultimas.length) {
-      feed.innerHTML = '<li class="lista-item">Sem eventos recentes.</li>'
-      return
-    }
-
-    ultimas.slice(0, 50).forEach((ev) => {
-      const li = document.createElement("li")
-      li.className = "lista-item"
-      const dt = new Date(ev.createdAt).toLocaleString("pt-BR")
-      const msg = ev.message || ev.title || ev.type || "(sem mensagem)"
-      li.innerHTML = `
-        <div>
-          <b>#${ev.id}</b> — ${dt}
-          <br/><small>${ev.loja_nome || ""}</small>
-          <br/>${msg}
-        </div>
-      `
-      feed.appendChild(li)
-    })
-  } catch (e) {
-    console.warn("Eventos erro:", e)
-    const feed = document.getElementById("event_feed")
-    if (feed) {
-      feed.innerHTML = '<li class="lista-item">Não foi possível carregar eventos.</li>'
-    }
-  }
-}
-
-// Inicialização
-document.addEventListener("DOMContentLoaded", () => {
-  // Configura listeners de abas
-  document.querySelectorAll(".aba").forEach((b) => {
-    b.addEventListener("click", () => trocarAba(b.dataset.tab))
-  })
-
-  // Mostra aba inicial
-  trocarAba("visao")
-
-  // Carrega dados
-  carregarKpis()
-  carregarPendencias()
-  carregarIntegracoes()
-  carregarAvisos()
-  carregarEventosRecentes()
-})
+module.exports = router;
