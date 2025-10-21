@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/register.css">
 </head>
 <body>
-  <!-- Loader global -->
+  <!-- Loader global (opcional, usado pelo register.js se existir) -->
   <div id="pageLoader" class="global-loader" aria-hidden="true">
     <div class="spinner" role="status" aria-label="Carregando"></div>
   </div>
@@ -67,8 +67,12 @@
     </div>
   </div>
 
+  <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <!-- Auth-guard seguro: trata /register.html como público e redireciona pra Home se já logado -->
+  <script src="/js/auth-guard.js" defer></script>
+  <!-- Lógica do formulário de cadastro (compatível com /api/auth/register) -->
   <script type="module" src="/js/register.js" defer></script>
 </body>
 </html>
