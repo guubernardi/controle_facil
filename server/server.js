@@ -109,19 +109,16 @@ const qOf = (req) => (req?.q || query);
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
-/* ========= Auth - Registro de usuário (cadastro) =========
-   DESABILITADO para evitar conflito com schema/tabela do módulo oficial.
-   Se precisar reativar (ambiente de teste apenas), remova os comentários abaixo.
-*/
-// try {
-//   const registerAuthRegister = require('./routes/auth-register');
-//   if (typeof registerAuthRegister === 'function') {
-//     registerAuthRegister(app);
-//     console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
-//   }
-// } catch (e) {
-//   console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
-// }
+/* ========= Auth - Registro de usuário (cadastro) ========= */
+try {
+  const registerAuthRegister = require('./routes/auth-register');
+  if (typeof registerAuthRegister === 'function') {
+    registerAuthRegister(app);
+    console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
+}
 
 /** Compatibilidade: front antigo que POSTava em /login */
 app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
@@ -151,11 +148,7 @@ try {
   console.warn('[BOOT] Tenant RLS não carregado (./middleware/tenant-mw):', e?.message || e);
 }
 
-/** --------- Fallback de Tenant (DEV/seguro) ---------
- * Garante req.tenant.slug/id quando ausentes, evitando erros em rotas como /returns/:id/messages
- * Ordem slug: TENANT_TEXT_FALLBACK -> user.company -> prefixo do e-mail -> 'default'
- * Cobre id: user.tenant_id quando existir.
- */
+/** --------- Fallback de Tenant (DEV/seguro) --------- */
 app.use('/api', (req, _res, next) => {
   try {
     const user = req.session?.user || {};
@@ -190,7 +183,7 @@ app.use('/api', (req, _res, next) => {
   'ML_CLIENT_SECRET',
   'ML_REDIRECT_URI',
   'MELI_OWNER_TOKEN',
-  'TENANT_TEXT_FALLBACK' // avisar se não tiver setada (opcional)
+  'TENANT_TEXT_FALLBACK'
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
@@ -294,8 +287,7 @@ try {
   console.warn('[BOOT] Rotas Returns não carregadas (opcional):', e?.message || e);
 }
 
-/* ========= Chat por Devolução (mensagens) =========
-   Montamos apenas em /api porque o router usa caminhos relativos (/returns/:id/messages). */
+/* ========= Chat por Devolução (mensagens) ========= */
 try {
   const returnsMessages = require('./routes/returns-messages');
   app.use('/api', returnsMessages);
