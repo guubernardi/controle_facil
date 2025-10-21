@@ -1,7 +1,17 @@
 // public/js/auth-guard.js
 (async function () {
+  // caminho normalizado
+  const PATH = location.pathname.toLowerCase();
+
+  // páginas públicas (exatas) + prefixos públicos (ex.: /docs/*)
+  const PUBLIC_EXACT = new Set([
+    '/', '/login.html', '/register.html', '/reset.html'
+  ]);
+  const PUBLIC_PREFIXES = ['/docs'];
+
+  const isPublic = PUBLIC_EXACT.has(PATH) || PUBLIC_PREFIXES.some(p => PATH.startsWith(p));
+
   const DEFAULT_NEXT = location.pathname + location.search + location.hash;
-  const PUBLIC_PAGES = new Set(['/login.html', '/reset.html', '/']);
 
   async function getMe() {
     try {
@@ -9,30 +19,33 @@
       if (r.status === 401) return null;
       const j = await r.json().catch(() => null);
       return j?.user || null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   function goLogin() {
     const url = new URL('/login.html', location.origin);
-    url.searchParams.set('next', DEFAULT_NEXT);
+    // preserva next existente se já veio por query
+    const curr = new URL(location.href);
+    const next = curr.searchParams.get('next') || DEFAULT_NEXT;
+    url.searchParams.set('next', next);
     location.href = url.toString();
   }
 
   function setText(el, val) { if (el) el.textContent = val; }
 
   function wireHeaderAndSidebar(user) {
-    // Alvos possíveis (usa o que existir na página)
     setText(document.getElementById('userInfo'), `${user.name} (${user.role})`);
     setText(document.getElementById('sidebarUserName'), user.name);
     setText(document.getElementById('sidebarUserEmail'), user.email);
 
-    // Fallback por classe (se não houver IDs)
     const n = document.querySelector('.sidebar-user-name');
     const e = document.querySelector('.sidebar-user-email');
     if (n && !n.id) n.textContent = user.name;
     if (e && !e.id) e.textContent = user.email;
 
-    // Mercado Livre (se houver um espaço para isso)
+    // Mercado Livre (opcional)
     fetch('/api/ml/status', { credentials: 'include' })
       .then(r => r.json())
       .then(ml => {
@@ -40,12 +53,12 @@
         if (mlEl) mlEl.textContent = ml?.connected ? `ML: ${ml.nickname}` : 'ML: desconectado';
       }).catch(() => {});
 
-    // Logout (por id OU por classe)
+    // Logout
     const btn = document.getElementById('btnLogout') || document.querySelector('.sidebar-logout');
     if (btn && !btn.__wired) {
       btn.__wired = true;
       btn.addEventListener('click', async () => {
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+        try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch {}
         goLogin();
       });
     }
@@ -62,11 +75,23 @@
     });
   }
 
-  // Protege páginas (exceto públicas)
+  // Busca usuário
   const user = await getMe();
-  if (!user && !PUBLIC_PAGES.has(location.pathname.toLowerCase())) return goLogin();
 
-  // Expõe e preenche UI
+  // 1) Se a página é protegida e não há usuário -> login
+  if (!user && !isPublic) return goLogin();
+
+  // 2) Se a página é pública de autenticação e já está logado -> manda pra home (ou "next")
+  if (user && (PATH === '/login.html' || PATH === '/register.html' || PATH === '/reset.html' || PATH === '/')) {
+    const curr = new URL(location.href);
+    const next = curr.searchParams.get('next') || '/home.html';
+    if (location.pathname + location.search !== next) {
+      location.replace(next);
+      return;
+    }
+  }
+
+  // 3) Expõe e preenche UI quando logado
   window.__currentUser = user;
   if (user) {
     wireHeaderAndSidebar(user);
