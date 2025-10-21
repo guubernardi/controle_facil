@@ -800,13 +800,22 @@
   }
 }
 /* container mais estreito e com respiro inferior */
-.chat-wrap { max-width: 1280px; padding-bottom: 24px; }
+.chat-wrap { 
+  max-width: 1280px; 
+  padding-bottom: 24px; 
+}
 
 /* não force altura mínima e não estique os itens do grid */
-.chat-grid { min-height: auto; align-items: start; }
+.chat-grid { 
+  min-height: auto; 
+  align-items: start; 
+}
 
 /* a sala deixa de esticar e passa a ter altura máx. relativa à viewport */
-.room { align-self: start; max-height: calc(100vh - 220px); }
+.room { 
+  align-self: start; 
+  max-height: calc(100vh - 220px); 
+}
 
 /* mensagens rolam dentro da sala sem grudar no rodapé */
 .messages {
@@ -815,9 +824,9 @@
      Ajuste se seu header/composer forem maiores/menores. */
   max-height: calc(100vh - 220px - 64px); 
 }
+
 /* ===== Altura fixa dos cartões (threads + sala) ===== */
-:root {
-  /* ajuste à vontade: 640px, 600px, etc */
+:root { 
   --chat-fixed-h: 640px;
 }
 

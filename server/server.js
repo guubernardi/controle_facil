@@ -37,8 +37,21 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 
-/** Sessão (antes do static e de qualquer rota) */
+/** Sessão (antes do static e de qualquer rota)
+ *  SESSION_RELOGIN_ON_CLOSE=true (padrão) => cookie de sessão (sem maxAge)
+ *  SESSION_RELOGIN_ON_CLOSE=false         => persiste 12h (maxAge)
+ */
 app.set('trust proxy', 1);
+
+const reloginOnClose = /^true|1|yes$/i.test(process.env.SESSION_RELOGIN_ON_CLOSE || 'true');
+
+const sessCookie = {
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }) // sem maxAge => expira ao fechar o navegador
+};
+
 app.use(session({
   store: new ConnectPg({
     conString: process.env.DATABASE_URL,
@@ -49,12 +62,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-change-me',
   resave: false,
   saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 12 * 60 * 60 * 1000
-  }
+  cookie: sessCookie
 }));
 
 /** Static (raiz /public) */
