@@ -1,10 +1,11 @@
+// public/js/register.js
+
 // Helpers
 const $  = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
 
-// Toast
+// Toast simples
 function showToast(message, duration = 3000) {
-  const toast = $('#toast');
+  const toast = document.getElementById('toast');
   if (!toast) return;
   toast.textContent = message;
   toast.classList.add('is-visible');
@@ -12,30 +13,14 @@ function showToast(message, duration = 3000) {
   showToast._t = setTimeout(() => toast.classList.remove('is-visible'), duration);
 }
 
-// Inline errors
-function showError(el, msg){ if(!el) return; el.textContent = msg; el.classList.add('is-visible'); }
-function hideError(el){ if(!el) return; el.textContent = ''; el.classList.remove('is-visible'); }
-function setInputError(input, has){ if(!input) return; input.classList.toggle('error-state', !!has); }
-
-// Loading (overlay + botão)
-function setLoading(on){
-  if (typeof window.pageLoaderShow === 'function' && typeof window.pageLoaderDone === 'function') {
-    if (on) window.pageLoaderShow(); else window.pageLoaderDone();
-    return;
-  }
-  const el = document.getElementById('pageLoader');
-  if (!el) return;
-  if (on) el.classList.remove('hidden'); else el.classList.add('hidden');
-}
-
-// Email validator
+// Validação de e-mail
 const emailValid = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||'').toLowerCase());
 
 // API helpers
 async function apiCheckEmail(email){
   const url = `/api/auth/check-email?email=${encodeURIComponent(email)}`;
-  const r = await fetch(url, { headers: { 'Accept':'application/json' }, credentials:'same-origin' });
-  if(!r.ok) throw new Error('Falha ao verificar e-mail.');
+  const r = await fetch(url, { headers: { 'Accept':'application/json' }, credentials:'include' });
+  if(!r.ok) return false;
   const j = await r.json().catch(()=> ({}));
   return Boolean(j.exists ?? j?.data?.exists);
 }
@@ -44,23 +29,20 @@ async function apiRegister(payload){
   const r = await fetch('/api/auth/register', {
     method:'POST',
     headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-    credentials:'same-origin',
+    credentials:'include',
     body: JSON.stringify(payload)
   });
   const j = await r.json().catch(()=> ({}));
   if(!r.ok){
-    const msg = j?.error || j?.message || 'Falha ao criar conta.';
-    throw new Error(msg);
+    throw new Error(j?.error || j?.message || 'Falha ao criar conta.');
   }
   return j;
 }
 
-// Init
 document.addEventListener('DOMContentLoaded', () => {
   const form = $('#form-register');
   const btn  = $('#btn-submit');
 
-  // inputs
   const firstNameInput = $('#first_name');
   const lastNameInput  = $('#last_name');
   const companyInput   = $('#company');
@@ -68,7 +50,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const passwordInput  = $('#password');
   const confirmInput   = $('#confirm');
 
-  // errors
   const errFirst   = $('#err-first');
   const errLast    = $('#err-last');
   const errCompany = $('#err-company');
@@ -76,49 +57,39 @@ document.addEventListener('DOMContentLoaded', () => {
   const errConfirm = $('#err-confirm');
   const hintEmail  = $('#hint-email');
 
+  const setInputError = (input, has) => input && input.classList.toggle('error-state', !!has);
+  const showError = (el, msg) => { if(el){ el.textContent = msg; el.classList.add('is-visible'); } };
+  const hideError = (el) => { if(el){ el.textContent = ''; el.classList.remove('is-visible'); } };
+
   if (!form || !btn) return;
 
-  const inputs = [firstNameInput,lastNameInput,companyInput,emailInput,passwordInput,confirmInput];
-  const errs   = [errFirst,errLast,errCompany,errEmail,null,errConfirm];
-
-  // limpar erro ao digitar
-  inputs.forEach((input, i) => {
+  // limpa erros ao digitar
+  [firstNameInput,lastNameInput,companyInput,emailInput,passwordInput,confirmInput].forEach((input) => {
     input?.addEventListener('input', () => {
-      if (errs[i]) hideError(errs[i]);
+      [errFirst,errLast,errCompany,errEmail,errConfirm].forEach(hideError);
       setInputError(input, false);
+      if (input === emailInput && hintEmail) { hintEmail.className = 'hint'; hintEmail.textContent = ''; }
     });
   });
 
-  // checagem de e-mail
+  // checagem de e-mail (disponível/ocupado)
   emailInput?.addEventListener('blur', async () => {
     const email = emailInput.value.trim();
-    if(!hintEmail) return;
-
+    if (!hintEmail) return;
     hintEmail.className = 'hint';
     hintEmail.textContent = '';
-    if(!email || !emailValid(email)) return;
-
+    if (!email || !emailValid(email)) return;
     try{
       hintEmail.textContent = 'Verificando...';
       const exists = await apiCheckEmail(email);
       hintEmail.textContent = exists ? 'Este e-mail já está cadastrado.' : 'E-mail disponível.';
       hintEmail.classList.add(exists ? 'warning' : 'success');
-    }catch{
-      hintEmail.textContent = '';
-    }
+    }catch{ hintEmail.textContent = ''; }
   });
 
-  emailInput?.addEventListener('input', () => {
-    if (!hintEmail) return;
-    hintEmail.className = 'hint';
-    hintEmail.textContent = '';
-  });
-
-  // validação
   function validate(){
     let ok = true;
     [errFirst,errLast,errCompany,errEmail,errConfirm].forEach(hideError);
-    inputs.forEach(i => setInputError(i,false));
 
     const first = firstNameInput?.value.trim() || '';
     const last  = lastNameInput?.value.trim() || '';
@@ -137,7 +108,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return ok;
   }
 
-  // submit
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if(!validate()){
@@ -145,37 +115,33 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    const name = `${firstNameInput.value.trim()} ${lastNameInput.value.trim()}`.trim().replace(/\s+/g,' ');
+    // MONTA O PAYLOAD QUE O BACK-END ESPERA
+    const name = `${firstNameInput.value.trim()} ${lastNameInput.value.trim()}`.replace(/\s+/g, ' ').trim();
     const payload = {
-      // o backend usa só estes campos:
-      name,
-      email: emailInput.value.trim(),
-      password: passwordInput.value
-      // company é ignorado pela API atual; mantemos apenas no frontend
+      name,                                // << esperado pela rota
+      email: emailInput.value.trim(),      // << esperado pela rota
+      password: passwordInput.value,       // << esperado pela rota
+      // opcional: ainda enviamos company se quiser registrar depois (servidor ignora)
+      company: companyInput.value.trim()
     };
 
-    // estados de loading
     btn.disabled = true;
     btn.classList.add('loading');
+    const originalText = btn.textContent;
     btn.textContent = 'Criando…';
-    setLoading(true);
 
     try{
       await apiRegister(payload);
+      // sessão já é criada no servidor; pode ir direto pra home
       showToast('Conta criada com sucesso!');
-      // já loga e cria sessão no servidor -> manda direto pra home
       setTimeout(() => { window.location.href = '/home.html'; }, 600);
     }catch(err){
       const msg = err?.message || 'Erro ao criar conta. Tente novamente.';
       showToast(msg);
-      if (/mail|email/i.test(msg)) {
-        showError(errEmail, msg);
-        setInputError(emailInput, true);
-      }
+      if (/mail|email/i.test(msg)) { showError(errEmail, msg); setInputError(emailInput, true); }
       btn.disabled = false;
       btn.classList.remove('loading');
-      btn.textContent = 'Criar conta';
-      setLoading(false);
+      btn.textContent = originalText;
     }
   });
 });
