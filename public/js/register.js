@@ -19,12 +19,10 @@ function setInputError(input, has){ if(!input) return; input.classList.toggle('e
 
 // Loading (overlay + botão)
 function setLoading(on){
-  // se existir o page-loader global, usa ele
   if (typeof window.pageLoaderShow === 'function' && typeof window.pageLoaderDone === 'function') {
     if (on) window.pageLoaderShow(); else window.pageLoaderDone();
     return;
   }
-  // fallback: tenta alternar #pageLoader (se existir)
   const el = document.getElementById('pageLoader');
   if (!el) return;
   if (on) el.classList.remove('hidden'); else el.classList.add('hidden');
@@ -36,10 +34,9 @@ const emailValid = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||'').toLowe
 // API helpers
 async function apiCheckEmail(email){
   const url = `/api/auth/check-email?email=${encodeURIComponent(email)}`;
-  const r = await fetch(url, { headers: { 'Accept':'application/json' } });
+  const r = await fetch(url, { headers: { 'Accept':'application/json' }, credentials:'same-origin' });
   if(!r.ok) throw new Error('Falha ao verificar e-mail.');
   const j = await r.json().catch(()=> ({}));
-  // aceita {exists:true}, {ok:true, exists:true} ou {data:{exists:true}}
   return Boolean(j.exists ?? j?.data?.exists);
 }
 
@@ -148,12 +145,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    const name = `${firstNameInput.value.trim()} ${lastNameInput.value.trim()}`.trim().replace(/\s+/g,' ');
     const payload = {
-      first_name: firstNameInput.value.trim(),
-      last_name : lastNameInput.value.trim(),
-      company   : companyInput.value.trim(),
-      email     : emailInput.value.trim(),
-      password  : passwordInput.value
+      // o backend usa só estes campos:
+      name,
+      email: emailInput.value.trim(),
+      password: passwordInput.value
+      // company é ignorado pela API atual; mantemos apenas no frontend
     };
 
     // estados de loading
@@ -165,11 +163,11 @@ document.addEventListener('DOMContentLoaded', () => {
     try{
       await apiRegister(payload);
       showToast('Conta criada com sucesso!');
-      setTimeout(() => { window.location.href = '/login.html'; }, 700);
+      // já loga e cria sessão no servidor -> manda direto pra home
+      setTimeout(() => { window.location.href = '/home.html'; }, 600);
     }catch(err){
       const msg = err?.message || 'Erro ao criar conta. Tente novamente.';
       showToast(msg);
-      // feedback específico se a API retornar algo como "email já cadastrado"
       if (/mail|email/i.test(msg)) {
         showError(errEmail, msg);
         setInputError(emailInput, true);
