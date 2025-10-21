@@ -2,18 +2,18 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Chat de Devoluções - Controle Fácil</title>
   <link rel="shortcut icon" href="assets/img/logo_rf.png" type="image/png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <!-- mesmos estilos do app -->
+  <!-- estilos do app -->
   <link rel="stylesheet" href="css/navigation.css">
   <link rel="stylesheet" href="css/chat.css">
 </head>
 <body class="chat-page" data-page="chat">
-  <!-- ==== SIDEBAR PADRÃO ==== -->
+  <!-- ==== SIDEBAR ==== -->
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
@@ -73,8 +73,7 @@
         <span class="sidebar-nav-text">Logs</span>
       </a>
 
-      <!-- ITEM PADRÃO PARA O CHAT (ATIVO NESTA PÁGINA) -->
-      <a href="chat.html" class="sidebar-nav-item" data-page="chat">
+      <a href="chat.html" class="sidebar-nav-item active" data-page="chat" aria-current="page">
         <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
         </svg>
@@ -116,49 +115,99 @@
       <path d="M3 12h18M3 6h18M3 18h18"/>
     </svg>
   </button>
-  <!-- ==== /SIDEBAR PADRÃO ==== -->
 
-  <!-- CONTEÚDO -->
+  <!-- ===== CONTEÚDO ===== -->
   <main class="chat-wrap">
+    <!-- Header -->
     <header class="chat-header">
-      <h1>Chat de Devoluções</h1>
-      <p>Converse com os clientes diretamente nas reclamações</p>
+      <div class="chat-header-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Chat de Devoluções</h1>
+        <p>Converse com os clientes diretamente</p>
+      </div>
     </header>
 
+    <!-- Grid -->
     <section class="chat-grid">
-      <aside class="threads">
+      <!-- THREADS -->
+      <aside class="threads" aria-label="Lista de conversas">
         <div class="threads-search">
-          <input id="threadSearch" type="search" placeholder="Buscar por pedido, loja ou ID…">
+          <div class="search-wrapper">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input id="threadSearch" type="search" placeholder="Buscar conversas..." aria-label="Buscar conversas">
+          </div>
         </div>
-        <ul id="threadList" class="threads-list" aria-live="polite"></ul>
+
+        <ul id="threadList" class="threads-list" aria-live="polite">
+          <!-- itens via JS -->
+        </ul>
+
+        <!-- Pager -->
+        <div id="threadsPager" class="threads-pager" aria-label="Paginação"></div>
       </aside>
 
-      <section class="room">
+      <!-- ROOM -->
+      <section class="room" aria-label="Sala de conversa">
         <div class="room-header">
           <div>
             <div id="roomTitle" class="room-title">Selecione uma devolução</div>
             <div id="roomSub" class="room-sub">—</div>
           </div>
-          <a id="roomOpenLink" class="room-open" href="#" target="_blank" rel="noopener" hidden>abrir devolução</a>
+          <a id="roomOpenLink" class="room-open" href="#" target="_blank" rel="noopener" hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            Abrir devolução
+          </a>
         </div>
 
         <div id="messages" class="messages" aria-live="polite">
-          <div class="placeholder">Escolha uma conversa na lista ao lado.</div>
+          <div class="placeholder">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
+            </svg>
+            <p>Escolha uma conversa na lista ao lado</p>
+          </div>
         </div>
 
+        <!-- previews de anexos (imagens) -->
+        <div id="attachPreviews" class="attach-previews" hidden></div>
+
+        <!-- Composer -->
         <form id="composer" class="composer" autocomplete="off">
-          <textarea id="msgBody" rows="1" placeholder="Escreva uma mensagem…" disabled></textarea>
-          <button id="btnSend" type="submit" class="send" disabled>Enviar</button>
+          <button type="button" id="btnAttach" class="btn-attach" aria-label="Anexar arquivo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <input type="file" id="fileInput" accept="image/*" multiple hidden>
+
+          <label class="sr-only" for="msgBody">Mensagem</label>
+          <textarea id="msgBody" rows="1" placeholder="Digite sua mensagem..." disabled></textarea>
+
+          <button id="btnSend" type="submit" class="send" disabled>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
         </form>
       </section>
     </section>
   </main>
 
-  <!-- scripts padrão do app -->
+  <!-- scripts -->
   <script src="/js/auth-guard.js" defer></script>
   <script src="js/navigation.js" defer></script>
-
-  <!-- chat -->
-  <script src="/js/chat.js" defer></script>
+  <script src="js/chat.js" defer></script>
 </body>
 </html>

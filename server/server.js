@@ -101,16 +101,19 @@ const qOf = (req) => (req?.q || query);
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
-/* ========= Auth - Registro de usuário (cadastro) ========= */
-try {
-  const registerAuthRegister = require('./routes/auth-register');
-  if (typeof registerAuthRegister === 'function') {
-    registerAuthRegister(app);
-    console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
-}
+/* ========= Auth - Registro de usuário (cadastro) =========
+   DESABILITADO para evitar conflito com schema/tabela do módulo oficial.
+   Se precisar reativar (ambiente de teste apenas), remova os comentários abaixo.
+*/
+// try {
+//   const registerAuthRegister = require('./routes/auth-register');
+//   if (typeof registerAuthRegister === 'function') {
+//     registerAuthRegister(app);
+//     console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
+//   }
+// } catch (e) {
+//   console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
+// }
 
 /** Compatibilidade: front antigo que POSTava em /login */
 app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
@@ -140,6 +143,30 @@ try {
   console.warn('[BOOT] Tenant RLS não carregado (./middleware/tenant-mw):', e?.message || e);
 }
 
+/** --------- Fallback de Tenant (DEV/seguro) ---------
+ * Garante req.tenant.slug/id quando ausentes, evitando erros em rotas como /returns/:id/messages
+ * Ordem slug: TENANT_TEXT_FALLBACK -> user.company -> prefixo do e-mail -> 'default'
+ * Cobre id: user.tenant_id quando existir.
+ */
+app.use('/api', (req, _res, next) => {
+  try {
+    const user = req.session?.user || {};
+    req.tenant = req.tenant || {};
+    const emailPrefix = (user.email || '').split('@')[0] || null;
+
+    if (!req.tenant.slug) {
+      req.tenant.slug = process.env.TENANT_TEXT_FALLBACK || user.company || emailPrefix || 'default';
+    }
+    if (req.tenant.id == null && user.tenant_id != null) {
+      req.tenant.id = user.tenant_id;
+    }
+
+    next();
+  } catch {
+    next();
+  }
+});
+
 /* ===========================
  *  HELPERS / UTIL
  * =========================== */
@@ -154,7 +181,8 @@ try {
   'ML_CLIENT_ID',
   'ML_CLIENT_SECRET',
   'ML_REDIRECT_URI',
-  'MELI_OWNER_TOKEN'
+  'MELI_OWNER_TOKEN',
+  'TENANT_TEXT_FALLBACK' // avisar se não tiver setada (opcional)
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
@@ -259,14 +287,22 @@ try {
 }
 
 /* ========= Chat por Devolução (mensagens) =========
-   Montamos em /api E na raiz para cobrir ambos os estilos de router. */
+   Montamos apenas em /api porque o router usa caminhos relativos (/returns/:id/messages). */
 try {
   const returnsMessages = require('./routes/returns-messages');
-  app.use('/api', returnsMessages); // se o router declarar '/returns/:id/messages'
-  app.use('/',    returnsMessages); // se o router declarar '/api/returns/:id/messages'
+  app.use('/api', returnsMessages);
   console.log('[BOOT] Rotas Chat por Devolução registradas (/api/returns/:id/messages)');
 } catch (e) {
   console.warn('[BOOT] Rotas Chat por Devolução não carregadas (opcional):', e?.message || e);
+}
+
+/* ========= Uploads (imagens) ========= */
+try {
+  const uploadsRoutes = require('./routes/uploads');
+  app.use('/api/uploads', uploadsRoutes);
+  console.log('[BOOT] Rotas Uploads registradas (/api/uploads)');
+} catch (e) {
+  console.warn('[BOOT] Rotas Uploads não carregadas (opcional):', e?.message || e);
 }
 
 /* ========= Webhook Mercado Livre ========= */

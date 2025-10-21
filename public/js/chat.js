@@ -1,23 +1,32 @@
-// /public/js/chat.js — Chat de Devoluções (MVP estável)
+// /public/js/chat.js — Chat de Devoluções (MVP estável + paginação threads)
 
 (() => {
-  const $ = (s) => document.querySelector(s);
+  const $  = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const listEl  = $("#threadList");
-  const searchEl = $("#threadSearch");
-  const msgsEl  = $("#messages");
-  const titleEl = $("#roomTitle");
-  const subEl   = $("#roomSub");
-  const openEl  = $("#roomOpenLink");
-  const formEl  = $("#composer");
-  const bodyEl  = $("#msgBody");
-  const btnSend = $("#btnSend");
+  const listEl    = $("#threadList");
+  const pagerEl   = $("#threadsPager");
+  const searchEl  = $("#threadSearch");
+  const msgsEl    = $("#messages");
+  const titleEl   = $("#roomTitle");
+  const subEl     = $("#roomSub");
+  const openEl    = $("#roomOpenLink");
+  const formEl    = $("#composer");
+  const bodyEl    = $("#msgBody");
+  const btnSend   = $("#btnSend");
 
-  let currentId = null;   // return_id selecionado
-  let threads   = [];     // lista de devoluções
+  let currentId = null;     // return_id selecionado
+  let threads   = [];       // lista de devoluções da página atual
   let polling   = true;
+
+  // estado de paginação (threads)
+  const state = {
+    page: 1,
+    pageSize: 12,           // quantas conversas por página
+    total: 0,
+    pages: 1
+  };
 
   document.addEventListener("visibilitychange", () => {
     polling = document.visibilityState === "visible";
@@ -66,20 +75,75 @@
     } catch {}
   }
 
-  // -------------------- Threads --------------------
-  // Tenta buscar threads com mensagens; se não existir, pega últimas devoluções
-  async function fetchThreads() {
+  // -------------------- Threads (com paginação) --------------------
+  // Busca paginação direto da API de returns (page/pageSize). Mantém fallback.
+  async function fetchThreads(page = 1) {
+    const ps = state.pageSize;
+    // tenta primeiro com ordering por updated_at
     try {
-      const j = await api("/api/returns?with_messages=1&page=1&pageSize=50&orderDir=desc");
-      if (Array.isArray(j.items) && j.items.length) return j.items;
-    } catch {}
-    const j = await api("/api/returns?page=1&pageSize=50&orderBy=updated_at&orderDir=desc");
-    return Array.isArray(j.items) ? j.items : Array.isArray(j) ? j : [];
+      const j = await api(`/api/returns?page=${page}&pageSize=${ps}&orderBy=updated_at&orderDir=desc`);
+      const items = Array.isArray(j.items) ? j.items : (Array.isArray(j) ? j : []);
+      state.total = Number(j.total ?? items.length);
+      state.page  = Number(j.page ?? page);
+      state.pages = Math.max(1, Math.ceil(state.total / ps));
+      return items;
+    } catch {
+      // fallback: endpoint simples sem paginação — vamos simular páginas no front
+      const j = await api("/api/returns?orderDir=desc");
+      const all = Array.isArray(j.items) ? j.items : (Array.isArray(j) ? j : []);
+      state.total = all.length;
+      state.pages = Math.max(1, Math.ceil(state.total / ps));
+      state.page  = Math.min(page, state.pages);
+      const start = (state.page - 1) * ps;
+      return all.slice(start, start + ps);
+    }
+  }
+
+  function renderPager() {
+    if (!pagerEl) return;
+    const { page, pages } = state;
+
+    // máximo de 7 botões numéricos (com elipses quando necessário)
+    const maxBtns = 7;
+    let start = Math.max(1, page - Math.floor(maxBtns / 2));
+    let end   = Math.min(pages, start + maxBtns - 1);
+    start     = Math.max(1, Math.min(start, Math.max(1, end - maxBtns + 1)));
+
+    const btn = (label, p, opts = {}) => {
+      const disabled = !!opts.disabled;
+      const active   = !!opts.active;
+      return `<button class="btn${active ? " is-active": ""}" ${disabled ? "disabled": ""} data-page="${p}">${label}</button>`;
+    };
+
+    let html = "";
+    html += btn("‹", Math.max(1, page - 1), { disabled: page <= 1 });
+    if (start > 1) {
+      html += btn("1", 1, { active: page === 1 });
+      if (start > 2) html += `<span class="btn" disabled style="pointer-events:none;">…</span>`;
+    }
+    for (let p = start; p <= end; p++) {
+      html += btn(String(p), p, { active: p === page });
+    }
+    if (end < pages) {
+      if (end < pages - 1) html += `<span class="btn" disabled style="pointer-events:none;">…</span>`;
+      html += btn(String(pages), pages, { active: page === pages });
+    }
+    html += btn("›", Math.min(pages, page + 1), { disabled: page >= pages });
+
+    pagerEl.innerHTML = html;
+
+    // eventos
+    pagerEl.querySelectorAll(".btn[data-page]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const p = Number(b.dataset.page);
+        await goToPage(p);
+      });
+    });
   }
 
   function renderThreads(items) {
     threads = items;
-    const q = (searchEl.value || "").trim().toLowerCase();
+    const q = (searchEl?.value || "").trim().toLowerCase();
     listEl.innerHTML = "";
 
     items.forEach((r) => {
@@ -109,6 +173,22 @@
     if (!currentId && items.length) {
       listEl.querySelector(".thread")?.click();
     }
+
+    renderPager();
+  }
+
+  async function goToPage(p) {
+    setLoading(true);
+    try {
+      const items = await fetchThreads(p);
+      renderThreads(items);
+    } catch (e) {
+      listEl.innerHTML = `<li class="thread"><div class="sub">Falha ao carregar conversas: ${htmlEscape(e.message)}</div></li>`;
+      state.page = 1; state.pages = 1; state.total = 0;
+      renderPager();
+    } finally {
+      setLoading(false);
+    }
   }
 
   function setActive(id) {
@@ -117,14 +197,12 @@
   }
 
   function scrollBottom(force = false) {
-    // se o usuário estiver a <120px do rodapé, ancorar; senão manter
     const nearBottom = msgsEl.scrollTop + msgsEl.clientHeight >= msgsEl.scrollHeight - 120;
     if (force || nearBottom) msgsEl.scrollTop = msgsEl.scrollHeight;
   }
 
   // -------------------- Messages --------------------
   function mapDirectionFromRole(role) {
-    // ML: complainant(buyer) | respondent(seller) | mediator
     const r = String(role || "").toLowerCase();
     if (r === "respondent") return "out";
     return "in";
@@ -143,8 +221,7 @@
     const hasAtt = Array.isArray(attachments) && attachments.length;
     const attHtml = hasAtt
       ? `<div class="atts">${attachments
-          .map((a) => `<span class="att" title="${htmlEscape(a.original_filename || a.filename || a)}">${htmlEscape(a.original_filename || a.filename || a)}</span>`)
-          .join("")}</div>`
+          .map((a) => `<span class="att" title="${htmlEscape(a.original_filename || a.filename || a)}">${htmlEscape(a.original_filename || a.filename || a)}</span>`).join("")}</div>`
       : "";
     el.innerHTML = `
       <div class="bubble">${nl2br(body || "")}${attHtml}</div>
@@ -165,7 +242,7 @@
       } else {
         items.forEach((m) => {
           const body = m.body ?? m.message ?? "";
-          const when = m.created_at || m.date_created || m.message_date;
+          const when = m.created_at || m.date_created || m.message_date || m.createdAt;
           const dir  = m.direction || mapDirectionFromRole(m.sender_role);
           const sender = m.sender_name || (m.direction === "out" ? "Você" : senderLabel(m.sender_role));
           msgsEl.appendChild(msgBubble({ direction: dir, body, when, sender, attachments: m.attachments }));
@@ -215,7 +292,6 @@
         body: JSON.stringify({ body: text })
       });
       temp.classList.remove("pending");
-      // recarrega do servidor para fixar ordering/horário/ids
       await loadMessages(currentId);
     } catch (e) {
       const b = temp.querySelector(".bubble");
@@ -231,15 +307,16 @@
   async function boot() {
     setLoading(true);
     try {
-      const items = await fetchThreads();
+      const items = await fetchThreads(1);
       renderThreads(items);
     } catch (e) {
       listEl.innerHTML = `<li class="thread"><div class="sub">Falha ao carregar conversas: ${htmlEscape(e.message)}</div></li>`;
+      renderPager();
     } finally {
       setLoading(false);
     }
 
-    // Poll para refrescar mensagens da conversa aberta (a cada 20s)
+    // Refresh mensagens da conversa aberta (20s)
     (async function loopMsgs() {
       while (true) {
         await sleep(20000);
@@ -248,19 +325,19 @@
       }
     })();
 
-    // Poll leve da lista (a cada 60s)
+    // Refresh leve da lista (60s) mantendo página atual
     (async function loopThreads() {
       while (true) {
         await sleep(60000);
         if (!polling) continue;
         try {
-          const items = await fetchThreads();
+          const items = await fetchThreads(state.page);
           renderThreads(items);
         } catch {}
       }
     })();
 
-    // SSE opcional para novas mensagens (se o backend publicar 'message:new')
+    // SSE opcional
     try {
       if ("EventSource" in window) {
         const es = new EventSource("/events");
@@ -283,10 +360,14 @@
   }
 
   // -------------------- Listeners --------------------
-  searchEl?.addEventListener("input", () => renderThreads(threads));
+  searchEl?.addEventListener("input", async () => {
+    // Como a busca é client-side, apenas re-renderizamos os itens atuais.
+    // Se quiser busca server-side, implemente ?q= no backend e chame fetchThreads(1) passando o termo.
+    renderThreads(threads);
+  });
+
   formEl?.addEventListener("submit", sendMessage);
 
-  // Enter = enviar | Shift+Enter = nova linha
   bodyEl?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
