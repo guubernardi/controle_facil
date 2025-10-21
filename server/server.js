@@ -29,7 +29,7 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Tratador de JSON inválido (tem que vir logo após os parsers)
+// Tratador de JSON inválido (logo após os parsers)
 app.use((err, _req, res, next) => {
   if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
     return res.status(400).json({ ok: false, error: 'invalid_json' });
@@ -37,9 +37,10 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 
-/** Sessão (antes do static e de qualquer rota)
- *  SESSION_RELOGIN_ON_CLOSE=true (padrão) => cookie de sessão (sem maxAge)
- *  SESSION_RELOGIN_ON_CLOSE=false         => persiste 12h (maxAge)
+/**
+ * Sessão (antes do static e de qualquer rota)
+ * SESSION_RELOGIN_ON_CLOSE=true  => cookie de sessão (sem maxAge) ⇒ expira ao fechar o navegador
+ * SESSION_RELOGIN_ON_CLOSE=false => cookie persistente por 12h (maxAge)
  */
 app.set('trust proxy', 1);
 
@@ -49,7 +50,7 @@ const sessCookie = {
   httpOnly: true,
   sameSite: 'lax',
   secure: process.env.NODE_ENV === 'production',
-  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }) // sem maxAge => expira ao fechar o navegador
+  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }) // sem maxAge => session cookie
 };
 
 app.use(session({
@@ -102,6 +103,27 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
+/** Guard /api (allowlist p/ auth/health + job-token) — vem antes das rotas protegidas */
+app.use('/api', (req, res, next) => {
+  const p = req.path || '';
+
+  const isOpen =
+    p === '/health' ||
+    p === '/db/ping' ||
+    p === '/auth' ||         // cobre "/api/auth"
+    p.startsWith('/auth/');  // cobre "/api/auth/*" (login, register, check-email, me, logout)
+
+  // Exceção segura: job interno chama /api/ml/claims/import com token
+  const jobHeader = req.get('x-job-token');
+  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
+  const isJob = (p === '/ml/claims/import' && jobHeader && jobToken && jobHeader === jobToken);
+
+  if (isOpen || isJob) return next();
+  if (req.session?.user) return next();
+
+  return res.status(401).json({ error: 'Não autorizado' });
+});
+
 /** Helper para usar a conexão do middleware (req.q) com fallback */
 const qOf = (req) => (req?.q || query);
 
@@ -120,24 +142,8 @@ try {
   console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
 }
 
-/** Compatibilidade: front antigo que POSTava em /login */
+/** Compat: front antigo que POSTava em /login */
 app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
-
-/** Guard de autenticação para /api (exceto rotas abertas) — ANTES do tenant */
-app.use('/api', (req, res, next) => {
-  const p = req.path;
-  if (p === '/health' || p === '/db/ping' || p.startsWith('/auth/')) return next();
-
-  // Exceção segura: job interno chama /api/ml/claims/import com token
-  const jobHeader = req.get('x-job-token');
-  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
-  if (p === '/ml/claims/import' && jobHeader && jobToken && jobHeader === jobToken) {
-    return next();
-  }
-
-  if (req.session?.user) return next();
-  return res.status(401).json({ error: 'Não autorizado' });
-});
 
 /** --------- MULTI-TENANT (RLS) --------- */
 try {
@@ -161,7 +167,6 @@ app.use('/api', (req, _res, next) => {
     if (req.tenant.id == null && user.tenant_id != null) {
       req.tenant.id = user.tenant_id;
     }
-
     next();
   } catch {
     next();
@@ -729,7 +734,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      WHERE a.sku IS NOT NULL AND A.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
