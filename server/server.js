@@ -103,27 +103,6 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
-/** Guard /api (allowlist p/ auth/health + job-token) — vem antes das rotas protegidas */
-app.use('/api', (req, res, next) => {
-  const p = req.path || '';
-
-  const isOpen =
-    p === '/health' ||
-    p === '/db/ping' ||
-    p === '/auth' ||         // cobre "/api/auth"
-    p.startsWith('/auth/');  // cobre "/api/auth/*" (login, register, check-email, me, logout)
-
-  // Exceção segura: job interno chama /api/ml/claims/import com token
-  const jobHeader = req.get('x-job-token');
-  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
-  const isJob = (p === '/ml/claims/import' && jobHeader && jobToken && jobHeader === jobToken);
-
-  if (isOpen || isJob) return next();
-  if (req.session?.user) return next();
-
-  return res.status(401).json({ error: 'Não autorizado' });
-});
-
 /** Helper para usar a conexão do middleware (req.q) com fallback */
 const qOf = (req) => (req?.q || query);
 
@@ -144,6 +123,26 @@ try {
 
 /** Compat: front antigo que POSTava em /login */
 app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
+
+/** Guard /api (allowlist p/ auth/health + job-token) — vem ANTES das rotas protegidas */
+app.use('/api', (req, res, next) => {
+  const orig = req.originalUrl || '';
+
+  // Endpoints públicos da API
+  if (/^\/api\/(health|db\/ping|auth(?:\/|$))/i.test(orig)) {
+    return next();
+  }
+
+  // Exceção segura: job interno chama /api/ml/claims/import com token
+  const jobHeader = req.get('x-job-token');
+  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
+  if (/^\/api\/ml\/claims\/import(?:\?|$)/i.test(orig) && jobHeader && jobToken && jobHeader === jobToken) {
+    return next();
+  }
+
+  if (req.session?.user) return next();
+  return res.status(401).json({ error: 'Não autorizado' });
+});
 
 /** --------- MULTI-TENANT (RLS) --------- */
 try {
@@ -734,7 +733,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND A.sku <> ''
+      WHERE a.sku IS NOT NULL AND a.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
