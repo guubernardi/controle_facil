@@ -6,7 +6,7 @@ const dayjs = require('dayjs');
 const { query } = require('../db');
 const { getAuthedAxios } = require('../mlClient');
 
-const isTrue = v => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
+const isTrue = v => ['1', 'true', 'yes', 'on', 'y'].includes(String(v || '').toLowerCase());
 const qOf = (req) => (req?.q || query);
 
 module.exports = function registerMlSync(app, opts = {}) {
@@ -15,36 +15,16 @@ module.exports = function registerMlSync(app, opts = {}) {
 
   /* ----------------------------- helpers ----------------------------- */
 
-  // cache em memória para saber se existe a coluna idemp_key
-  let HAS_IDEMP_KEY_COL;
-
-  async function hasIdempKeyColumn(req) {
-    if (HAS_IDEMP_KEY_COL !== undefined) return HAS_IDEMP_KEY_COL;
-    try {
-      const r = await qOf(req)(`
-        SELECT 1
-          FROM information_schema.columns
-         WHERE table_schema='public'
-           AND table_name='return_events'
-           AND column_name='idemp_key'
-         LIMIT 1
-      `);
-      HAS_IDEMP_KEY_COL = !!r.rows[0];
-    } catch {
-      HAS_IDEMP_KEY_COL = false;
-    }
-    return HAS_IDEMP_KEY_COL;
-  }
-
   // Alguns payloads do ML podem trazer o "resource_id" como objeto (ex.: { id: 123 })
   function normalizeOrderId(v) {
     if (v == null) return null;
     if (typeof v === 'number' || typeof v === 'string') return String(v);
     if (typeof v === 'object') {
-      if (v.id != null)         return String(v.id);
-      if (v.order_id != null)   return String(v.order_id);
-      if (v.resource_id != null)return String(v.resource_id);
-      if (v.number != null)     return String(v.number);
+      if (v.id != null)          return String(v.id);
+      if (v.number != null)      return String(v.number);
+      if (v.order_id != null)    return String(v.order_id);
+      if (v.resource_id != null) return String(v.resource_id);
+      return null;
     }
     return null;
   }
@@ -63,34 +43,22 @@ module.exports = function registerMlSync(app, opts = {}) {
     returnId, type, title = null, message = null, meta = null,
     created_by = 'ml-sync', idemp_key = null
   }) {
-    // Se o server.js injetou a função oficial, usa ela
     if (typeof externalAddReturnEvent === 'function') {
       return externalAddReturnEvent({
         returnId, type, title, message, meta,
         createdBy: created_by, idempKey: idemp_key
       });
     }
-
     const q = qOf(req);
     const metaStr = meta ? JSON.stringify(meta) : null;
-    const hasIdemp = await hasIdempKeyColumn(req);
-
     try {
-      if (hasIdemp) {
-        await q(`
-          INSERT INTO return_events
-            (return_id, type, title, message, meta, created_by, created_at, idemp_key)
-          VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
-        `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
-      } else {
-        await q(`
-          INSERT INTO return_events
-            (return_id, type, title, message, meta, created_by, created_at)
-          VALUES ($1,$2,$3,$4,$5,$6, now())
-        `, [returnId, type, title, message, metaStr, created_by]);
-      }
+      await q(`
+        INSERT INTO return_events
+          (return_id, type, title, message, meta, created_by, created_at, idemp_key)
+        VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
+      `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
     } catch (e) {
-      // 23505 = conflito de unicidade (se existir unique em idemp_key)
+      // ignorar conflito idempotente
       if (String(e?.code) !== '23505') throw e;
     }
   }
@@ -98,19 +66,17 @@ module.exports = function registerMlSync(app, opts = {}) {
   // Garante a devolução pelo id_venda; id_venda pode ser BIGINT
   async function ensureReturnByOrder(req, { order_id, sku = null, created_by = 'ml-sync' }) {
     const q = qOf(req);
-    const idTxt = String(order_id);
-
-    const got = await q(
+    const { rows } = await q(
       `SELECT id FROM devolucoes WHERE id_venda::text = $1 LIMIT 1`,
-      [idTxt]
+      [String(order_id)]
     );
-    if (got.rows[0]?.id) return got.rows[0].id;
+    if (rows[0]?.id) return rows[0].id;
 
     const ins = await q(`
       INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
       VALUES ($1, $2, 'Mercado Livre', $3)
       RETURNING id
-    `, [idTxt, sku || null, created_by]);
+    `, [String(order_id), sku || null, created_by]);
 
     const id = ins.rows[0].id;
 
@@ -118,9 +84,9 @@ module.exports = function registerMlSync(app, opts = {}) {
       returnId: id,
       type: 'ml-sync',
       title: 'Criação por ML Sync',
-      message: `Stub criado a partir da API do Mercado Livre (order ${idTxt})`,
-      meta: { order_id: idTxt },
-      idemp_key: `ml-sync:create:${idTxt}`
+      message: `Stub criado a partir da API do Mercado Livre (order ${order_id})`,
+      meta: { order_id },
+      idemp_key: `ml-sync:create:${order_id}`
     });
 
     return id;
@@ -132,7 +98,7 @@ module.exports = function registerMlSync(app, opts = {}) {
   router.get('/api/ml/ping', async (req, res) => {
     try {
       const { http, account } = await getAuthedAxios(req);
-      const { data: me } = await http.get('/users/me'); // endpoint simples autenticado
+      const { data: me } = await http.get('/users/me'); // endpoint simples protegido
       return res.json({
         ok: true,
         account: { user_id: account.user_id, nickname: account.nickname, expires_at: account.expires_at },
@@ -141,6 +107,51 @@ module.exports = function registerMlSync(app, opts = {}) {
     } catch (e) {
       const detail = e?.response?.data || e?.message || String(e);
       return res.status(500).json({ ok: false, error: detail });
+    }
+  });
+
+  // DEBUG: retorna a busca crua de claims do ML
+  // Uso: GET /api/ml/claims/search-debug?days=60  (ou ?from=YYYY-MM-DD&to=YYYY-MM-DD)
+  router.get('/api/ml/claims/search-debug', async (req, res) => {
+    try {
+      const now = dayjs();
+      const days = Math.max(1, parseInt(req.query.days || '7', 10) || 7);
+      const fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(days, 'day').toISOString();
+      const toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
+
+      const { http, account } = await getAuthedAxios(req);
+
+      const { data } = await http.get('/post-purchase/v1/claims/search', {
+        params: {
+          'seller.id': account.user_id,
+          'date_created.from': fromIso,
+          'date_created.to'  : toIso,
+          limit: 100
+        }
+      });
+
+      res.json({
+        ok: true,
+        account: { user_id: account.user_id, nickname: account.nickname },
+        from: fromIso, to: toIso,
+        raw: data
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
+    }
+  });
+
+  // DEBUG: detalhes de um claim específico
+  // Uso: GET /api/ml/claims/claim-debug?id=123456
+  router.get('/api/ml/claims/claim-debug', async (req, res) => {
+    try {
+      const id = req.query.id;
+      if (!id) return res.status(400).json({ ok: false, error: 'missing id' });
+      const { http } = await getAuthedAxios(req);
+      const { data } = await http.get(`/post-purchase/v1/claims/${id}`);
+      res.json({ ok: true, raw: data });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
     }
   });
 
@@ -198,8 +209,8 @@ module.exports = function registerMlSync(app, opts = {}) {
       for (const it of raw) {
         try {
           // Tipo do claim — mantemos só retornos
-          const type = String(it?.type || it?.claim_type || '').toLowerCase();
-          if (type && !type.includes('return')) continue;
+          const t = String(it?.type || it?.claim_type || '').toLowerCase();
+          if (t && !t.includes('return')) continue;
 
           const claimId = it?.id || it?.claim_id;
           if (!claimId) continue;
