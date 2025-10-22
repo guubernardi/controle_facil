@@ -15,17 +15,36 @@ module.exports = function registerMlSync(app, opts = {}) {
 
   /* ----------------------------- helpers ----------------------------- */
 
+  // cache em memória para saber se existe a coluna idemp_key
+  let HAS_IDEMP_KEY_COL;
+
+  async function hasIdempKeyColumn(req) {
+    if (HAS_IDEMP_KEY_COL !== undefined) return HAS_IDEMP_KEY_COL;
+    try {
+      const r = await qOf(req)(`
+        SELECT 1
+          FROM information_schema.columns
+         WHERE table_schema='public'
+           AND table_name='return_events'
+           AND column_name='idemp_key'
+         LIMIT 1
+      `);
+      HAS_IDEMP_KEY_COL = !!r.rows[0];
+    } catch {
+      HAS_IDEMP_KEY_COL = false;
+    }
+    return HAS_IDEMP_KEY_COL;
+  }
+
   // Alguns payloads do ML podem trazer o "resource_id" como objeto (ex.: { id: 123 })
   function normalizeOrderId(v) {
     if (v == null) return null;
     if (typeof v === 'number' || typeof v === 'string') return String(v);
     if (typeof v === 'object') {
-      if (v.id != null)      return String(v.id);
-      if (v.number != null)  return String(v.number);
-      if (v.order_id != null) return String(v.order_id);
-      if (v.resource_id != null) return String(v.resource_id);
-      // nada útil dentro
-      return null;
+      if (v.id != null)         return String(v.id);
+      if (v.order_id != null)   return String(v.order_id);
+      if (v.resource_id != null)return String(v.resource_id);
+      if (v.number != null)     return String(v.number);
     }
     return null;
   }
@@ -44,23 +63,34 @@ module.exports = function registerMlSync(app, opts = {}) {
     returnId, type, title = null, message = null, meta = null,
     created_by = 'ml-sync', idemp_key = null
   }) {
+    // Se o server.js injetou a função oficial, usa ela
     if (typeof externalAddReturnEvent === 'function') {
-      // respeita assinatura do server.js
       return externalAddReturnEvent({
         returnId, type, title, message, meta,
         createdBy: created_by, idempKey: idemp_key
       });
     }
+
     const q = qOf(req);
     const metaStr = meta ? JSON.stringify(meta) : null;
+    const hasIdemp = await hasIdempKeyColumn(req);
+
     try {
-      await q(`
-        INSERT INTO return_events
-          (return_id, type, title, message, meta, created_by, created_at, idemp_key)
-        VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
-      `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
+      if (hasIdemp) {
+        await q(`
+          INSERT INTO return_events
+            (return_id, type, title, message, meta, created_by, created_at, idemp_key)
+          VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
+        `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
+      } else {
+        await q(`
+          INSERT INTO return_events
+            (return_id, type, title, message, meta, created_by, created_at)
+          VALUES ($1,$2,$3,$4,$5,$6, now())
+        `, [returnId, type, title, message, metaStr, created_by]);
+      }
     } catch (e) {
-      // ignorar conflito idempotente
+      // 23505 = conflito de unicidade (se existir unique em idemp_key)
       if (String(e?.code) !== '23505') throw e;
     }
   }
@@ -68,17 +98,19 @@ module.exports = function registerMlSync(app, opts = {}) {
   // Garante a devolução pelo id_venda; id_venda pode ser BIGINT
   async function ensureReturnByOrder(req, { order_id, sku = null, created_by = 'ml-sync' }) {
     const q = qOf(req);
-    const { rows } = await q(
+    const idTxt = String(order_id);
+
+    const got = await q(
       `SELECT id FROM devolucoes WHERE id_venda::text = $1 LIMIT 1`,
-      [String(order_id)]
+      [idTxt]
     );
-    if (rows[0]?.id) return rows[0].id;
+    if (got.rows[0]?.id) return got.rows[0].id;
 
     const ins = await q(`
       INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
       VALUES ($1, $2, 'Mercado Livre', $3)
       RETURNING id
-    `, [String(order_id), sku || null, created_by]);
+    `, [idTxt, sku || null, created_by]);
 
     const id = ins.rows[0].id;
 
@@ -86,9 +118,9 @@ module.exports = function registerMlSync(app, opts = {}) {
       returnId: id,
       type: 'ml-sync',
       title: 'Criação por ML Sync',
-      message: `Stub criado a partir da API do Mercado Livre (order ${order_id})`,
-      meta: { order_id },
-      idemp_key: `ml-sync:create:${order_id}`
+      message: `Stub criado a partir da API do Mercado Livre (order ${idTxt})`,
+      meta: { order_id: idTxt },
+      idemp_key: `ml-sync:create:${idTxt}`
     });
 
     return id;
@@ -100,8 +132,7 @@ module.exports = function registerMlSync(app, opts = {}) {
   router.get('/api/ml/ping', async (req, res) => {
     try {
       const { http, account } = await getAuthedAxios(req);
-      // endpoint simples para validar token (qualquer GET protegido do ML serve)
-      const { data: me } = await http.get('/users/me');
+      const { data: me } = await http.get('/users/me'); // endpoint simples autenticado
       return res.json({
         ok: true,
         account: { user_id: account.user_id, nickname: account.nickname, expires_at: account.expires_at },
@@ -187,8 +218,8 @@ module.exports = function registerMlSync(app, opts = {}) {
 
           const statusRaw = String(det?.status || it?.status || '').toLowerCase();
           const status =
-            /closed|finalized/.test(statusRaw)        ? 'encerrado' :
-            /approved|accepted|authorized/.test(statusRaw) ? 'aprovado' :
+            /closed|finalized/.test(statusRaw)             ? 'encerrado' :
+            /approved|accepted|authorized/.test(statusRaw) ? 'aprovado'  :
             'pendente';
 
           const sku = normalizeSku(it, det);
