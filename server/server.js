@@ -39,18 +39,15 @@ app.use((err, _req, res, next) => {
 
 /**
  * Sessão (antes do static e de qualquer rota)
- * SESSION_RELOGIN_ON_CLOSE=true  => cookie de sessão (sem maxAge) ⇒ expira ao fechar o navegador
- * SESSION_RELOGIN_ON_CLOSE=false => cookie persistente por 12h (maxAge)
  */
 app.set('trust proxy', 1);
 
 const reloginOnClose = /^true|1|yes$/i.test(process.env.SESSION_RELOGIN_ON_CLOSE || 'true');
-
 const sessCookie = {
   httpOnly: true,
   sameSite: 'lax',
   secure: process.env.NODE_ENV === 'production',
-  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }) // sem maxAge => session cookie
+  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }),
 };
 
 app.use(session({
@@ -97,19 +94,15 @@ try {
   console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
 }
 
-/** Cabeçalho de resposta JSON nas rotas /api (ANTES de montar rotas) */
+/** Cabeçalho JSON nas rotas /api (ANTES de montar rotas) */
 app.use('/api', (_req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-/** Rotas de autenticação (ABERTAS) */
-const authRoutes = require('./routes/auth');
-app.use('/api/auth', authRoutes);
-
-/* ========= Auth - Registro de usuário (cadastro) [ABERTA] ========= */
+/* ========= Auth - Registro (rotas PÚBLICAS) — MONTE PRIMEIRO ========= */
 try {
-  const registerAuthRegister = require('./routes/auth-register');
+  const registerAuthRegister = require('./routes/auth-register'); // expõe /api/auth/check-email e /api/auth/register
   if (typeof registerAuthRegister === 'function') {
     registerAuthRegister(app);
     console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
@@ -118,20 +111,21 @@ try {
   console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
 }
 
+/** Rotas de autenticação gerais (podem ter guard interno) — MONTE DEPOIS */
+const authRoutes = require('./routes/auth');
+app.use('/api/auth', authRoutes);
+
 /** -----------------------------------------------------------------
- *  Guard /api — vem DEPOIS das rotas abertas (auth)
- *  - usa originalUrl em minúsculas para liberar /api/auth/*
- *  - mantém exceção segura do job-token
+ *  Guard /api — DEPOIS das rotas abertas
  * ----------------------------------------------------------------- */
 app.use('/api', (req, res, next) => {
-  const p          = String(req.path || '');
-  const orig       = String(req.originalUrl || '');
-  const origLower  = orig.toLowerCase();
+  const p         = String(req.path || '');
+  const origLower = String(req.originalUrl || '').toLowerCase();
 
   const isOpen =
     p === '/health' ||
     p === '/db/ping' ||
-    origLower.startsWith('/api/auth/'); // /api/auth/* (register, check-email, login, me, logout)
+    origLower.startsWith('/api/auth/'); // libera /api/auth/* (register, check-email, login, me, logout)
 
   // Exceção segura: job interno chama /api/ml/claims/import com token
   const jobHeader = req.get('x-job-token');
@@ -158,7 +152,6 @@ try {
 }
 
 /** --------- Helpers --------- */
-/** Helper para usar a conexão do middleware (req.q) com fallback */
 const qOf = (req) => (req?.q || query);
 
 function safeParseJson(s) {
@@ -764,7 +757,7 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
-/** ----- Handler de erro final (respeita REVEAL_ERRORS=true) ----- */
+/** ----- Handler de erro final ----- */
 app.use((err, req, res, _next) => {
   console.error('[API ERROR]', err);
   const reveal = String(process.env.REVEAL_ERRORS ?? 'false').toLowerCase() === 'true';
@@ -812,10 +805,7 @@ function setupMlAutoSync() {
   let running = false;
 
   const run = async (reason = 'timer') => {
-    if (running) {
-      console.log('[ML AUTO] Já existe uma execução em andamento; pulando.');
-      return;
-    }
+    if (running) return;
     running = true;
     const t0 = Date.now();
     const url = `http://127.0.0.1:${port}/api/ml/claims/import?days=${encodeURIComponent(windowDays)}&silent=1`;
