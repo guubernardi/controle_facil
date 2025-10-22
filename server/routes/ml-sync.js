@@ -6,7 +6,7 @@ const dayjs = require('dayjs');
 const { query } = require('../db');
 const { getAuthedAxios } = require('../mlClient');
 
-const isTrue = v => ['1', 'true', 'yes', 'on', 'y'].includes(String(v || '').toLowerCase());
+const isTrue = v => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
 const qOf = (req) => (req?.q || query);
 
 module.exports = function registerMlSync(app, opts = {}) {
@@ -15,7 +15,6 @@ module.exports = function registerMlSync(app, opts = {}) {
 
   /* ----------------------------- helpers ----------------------------- */
 
-  // Alguns payloads do ML podem trazer o "resource_id" como objeto (ex.: { id: 123 })
   function normalizeOrderId(v) {
     if (v == null) return null;
     if (typeof v === 'number' || typeof v === 'string') return String(v);
@@ -58,12 +57,10 @@ module.exports = function registerMlSync(app, opts = {}) {
         VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
       `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
     } catch (e) {
-      // ignorar conflito idempotente
-      if (String(e?.code) !== '23505') throw e;
+      if (String(e?.code) !== '23505') throw e; // ignora idempotência
     }
   }
 
-  // Garante a devolução pelo id_venda; id_venda pode ser BIGINT
   async function ensureReturnByOrder(req, { order_id, sku = null, created_by = 'ml-sync' }) {
     const q = qOf(req);
     const { rows } = await q(
@@ -92,16 +89,47 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
+  // Tenta buscar claims com o "modelo novo"; se falhar 400, tenta o "modelo antigo".
+  async function fetchClaims(http, account, { fromIso, toIso, limit = 100 }) {
+    const paramsNew = {
+      player_role: 'seller',
+      player_user_id: account.user_id,
+      // alguns datacenters exigem um único parâmetro 'date_created' com intervalo
+      date_created: `${fromIso},${toIso}`,
+      site_id: account.site_id || undefined,
+      limit
+    };
+
+    try {
+      const { data } = await http.get('/post-purchase/v1/claims/search', { params: paramsNew });
+      return { data, paramsUsed: 'new' };
+    } catch (e) {
+      const status = e?.response?.status;
+      const msg = (e?.response?.data && JSON.stringify(e.response.data)) || e?.message || String(e);
+      const isParamsError = status === 400 || /at least any of these filters/i.test(msg);
+      if (!isParamsError) throw e;
+
+      // fallback para o modelo antigo
+      const paramsOld = {
+        'seller.id': account.user_id,
+        'date_created.from': fromIso,
+        'date_created.to': toIso,
+        limit
+      };
+      const { data } = await http.get('/post-purchase/v1/claims/search', { params: paramsOld });
+      return { data, paramsUsed: 'old' };
+    }
+  }
+
   /* ------------------------------- rotas ------------------------------ */
 
-  // Sanity-check: testa a conta ativa (ou a enviada em ?ml_account= / header x-ml-account)
   router.get('/api/ml/ping', async (req, res) => {
     try {
       const { http, account } = await getAuthedAxios(req);
-      const { data: me } = await http.get('/users/me'); // endpoint simples protegido
+      const { data: me } = await http.get('/users/me');
       return res.json({
         ok: true,
-        account: { user_id: account.user_id, nickname: account.nickname, expires_at: account.expires_at },
+        account: { user_id: account.user_id, nickname: account.nickname, site_id: account.site_id, expires_at: account.expires_at },
         me
       });
     } catch (e) {
@@ -110,8 +138,7 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
-  // DEBUG: retorna a busca crua de claims do ML
-  // Uso: GET /api/ml/claims/search-debug?days=60  (ou ?from=YYYY-MM-DD&to=YYYY-MM-DD)
+  // DEBUG: dump cru da busca (com fallback interno)
   router.get('/api/ml/claims/search-debug', async (req, res) => {
     try {
       const now = dayjs();
@@ -120,29 +147,14 @@ module.exports = function registerMlSync(app, opts = {}) {
       const toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
 
       const { http, account } = await getAuthedAxios(req);
+      const { data, paramsUsed } = await fetchClaims(http, account, { fromIso, toIso, limit: 100 });
 
-      const { data } = await http.get('/post-purchase/v1/claims/search', {
-        params: {
-          'seller.id': account.user_id,
-          'date_created.from': fromIso,
-          'date_created.to'  : toIso,
-          limit: 100
-        }
-      });
-
-      res.json({
-        ok: true,
-        account: { user_id: account.user_id, nickname: account.nickname },
-        from: fromIso, to: toIso,
-        raw: data
-      });
+      res.json({ ok: true, account: { user_id: account.user_id, site_id: account.site_id }, paramsUsed, from: fromIso, to: toIso, raw: data });
     } catch (e) {
       res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
     }
   });
 
-  // DEBUG: detalhes de um claim específico
-  // Uso: GET /api/ml/claims/claim-debug?id=123456
   router.get('/api/ml/claims/claim-debug', async (req, res) => {
     try {
       const id = req.query.id;
@@ -155,25 +167,15 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
-  /**
-   * Importa claims/devoluções do ML
-   * Exemplos:
-   *  GET /api/ml/claims/import
-   *  GET /api/ml/claims/import?days=30
-   *  GET /api/ml/claims/import?from=2025-10-01&to=2025-10-08
-   *  GET /api/ml/claims/import?days=60&silent=1&debug=1
-   *  GET /api/ml/claims/import?days=60&ml_account=1124956474
-   */
   router.get('/api/ml/claims/import', async (req, res) => {
     const debug = isTrue(req.query.debug);
     try {
       const dry = isTrue(req.query.dry);
       const silent = isTrue(req.query.silent);
-
-      // Janela temporal
       const now = dayjs();
-      let fromIso, toIso;
 
+      // janela
+      let fromIso, toIso;
       if (req.query.from || req.query.to) {
         fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(7, 'day').toISOString();
         toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
@@ -186,18 +188,8 @@ module.exports = function registerMlSync(app, opts = {}) {
         toIso   = now.toISOString();
       }
 
-      // Axios autenticado (conta ativa ou forçada por req)
       const { http, account } = await getAuthedAxios(req);
-
-      // Busca claims do vendedor no intervalo
-      const { data: search } = await http.get('/post-purchase/v1/claims/search', {
-        params: {
-          'seller.id': account.user_id,
-          'date_created.from': fromIso,
-          'date_created.to'  : toIso,
-          limit: 100
-        }
-      });
+      const { data: search, paramsUsed } = await fetchClaims(http, account, { fromIso, toIso, limit: 100 });
 
       const raw = Array.isArray(search?.data || search?.results)
         ? (search.data || search.results)
@@ -208,17 +200,14 @@ module.exports = function registerMlSync(app, opts = {}) {
 
       for (const it of raw) {
         try {
-          // Tipo do claim — mantemos só retornos
           const t = String(it?.type || it?.claim_type || '').toLowerCase();
           if (t && !t.includes('return')) continue;
 
           const claimId = it?.id || it?.claim_id;
           if (!claimId) continue;
 
-          // Detalhes do claim
           const { data: det } = await http.get(`/post-purchase/v1/claims/${claimId}`);
 
-          // Normaliza order_id (evita [object Object] no BIGINT)
           const order_id =
             normalizeOrderId(det?.resource_id) ||
             normalizeOrderId(det?.order_id)    ||
@@ -235,11 +224,9 @@ module.exports = function registerMlSync(app, opts = {}) {
 
           const sku = normalizeSku(it, det);
 
-          // Garante existência da devolução
           const returnId = await ensureReturnByOrder(req, { order_id, sku, created_by: 'ml-sync' });
 
           if (!dry) {
-            // Atualiza campos mínimos
             await qOf(req)(
               `UPDATE devolucoes
                   SET status = COALESCE($1, status),
@@ -251,7 +238,6 @@ module.exports = function registerMlSync(app, opts = {}) {
             updated++;
           }
 
-          // Evento idempotente por claim
           const idemp = `ml-claim:${claimId}:${order_id}`;
           if (!dry) {
             await addReturnEvent(req, {
@@ -259,7 +245,7 @@ module.exports = function registerMlSync(app, opts = {}) {
               type: 'ml-claim',
               title: `Claim ${claimId} (${status})`,
               message: 'Sincronizado pelo import',
-              meta: { claim_id: claimId, order_id, status_raw: statusRaw },
+              meta: { claim_id: claimId, order_id, status_raw: statusRaw, paramsUsed },
               idemp_key: idemp
             });
             events++;
@@ -277,12 +263,13 @@ module.exports = function registerMlSync(app, opts = {}) {
 
       if (!silent) {
         console.log('[ml-sync] import', {
-          from: fromIso, to: toIso, total: raw.length, processed, updated, events, errors
+          paramsUsed, from: fromIso, to: toIso, total: raw.length, processed, updated, events, errors
         });
       }
 
       return res.json({
         ok: true,
+        paramsUsed,
         from: fromIso,
         to: toIso,
         total: raw.length,
@@ -292,9 +279,7 @@ module.exports = function registerMlSync(app, opts = {}) {
 
     } catch (e) {
       const detail = e?.response?.data || e?.message || String(e);
-      if (debug) {
-        return res.status(500).json({ ok: false, error: detail });
-      }
+      if (debug) return res.status(500).json({ ok: false, error: detail });
       return res.status(500).json({ ok: false, error: 'Falha ao importar' });
     }
   });
