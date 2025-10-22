@@ -1,24 +1,25 @@
+// radial-progress.js
+// Loader/Progress circular leve em JS puro (script clássico, sem ESM)
+
+'use strict';
+
 /**
- * RadialProgress — donut loader/progress em JS puro (ESM).
- *
- * • Auto-init: adiciona progresso em todo elemento com [data-rp]
- *   Atributos suportados:
- *     - data-value="0..100"          (determinado)
- *     - data-indeterminate="true"    (spinner)
- *     - data-size="96"               (px)
- *     - data-thickness="10"          (px)
- *     - data-color="#0b5fff"         (cor do progresso; padrão: var(--primary) ou azul)
- *     - data-track="#e5e7eb"         (cor da trilha; padrão: var(--border))
- *     - data-label="true|false"      (mostra porcentagem no centro; padrão: true se determinado)
- *     - data-duration="700"          (ms para animar a mudança de valor)
+ * • Auto-init: [data-rp]
+ *   Atributos:
+ *     - data-value="0..100"
+ *     - data-indeterminate="true"
+ *     - data-size="96"
+ *     - data-thickness="10"
+ *     - data-color="#0b5fff"
+ *     - data-track="#e5e7eb"
+ *     - data-label="true|false"
+ *     - data-duration="700"
  *
  * • API:
- *     const inst = RadialProgress.create(elOrSelector, opts?)      // cria/monta
- *     inst.set(value, opts?)                                       // atualiza (anima)
- *     RadialProgress.scan(context?)                                // melhora [data-rp]
- *     RadialProgress.destroy(elOrSelector)                         // remove listeners/refs
- *
- * • Acessibilidade: role="progressbar" + aria-valuenow/min/max.
+ *     const inst = RadialProgress.create(elOrSelector, opts?)
+ *     inst.set(value, opts?)
+ *     RadialProgress.scan(context?)
+ *     RadialProgress.destroy(elOrSelector)
  */
 
 const ONE_STYLE_ID = 'radial-progress-css-v1';
@@ -43,7 +44,13 @@ function injectOnce(css) {
 }
 
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
-const pick = (v, d) => (v === undefined || v === null || v === '') ? d : v;
+// pega o primeiro valor definido/não-vazio
+const pick = (...vals) => {
+  for (const v of vals) {
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return undefined;
+};
 
 class RP {
   constructor(el, opts = {}) {
@@ -61,7 +68,8 @@ class RP {
     this.value     = this.indet ? 0 : clamp(Number(pick(opts.value, ds.value, 0)), 0, 100);
 
     // marca de modo
-    if (this.indet) this.el.setAttribute('data-indeterminate', 'true'); else this.el.removeAttribute('data-indeterminate');
+    if (this.indet) this.el.setAttribute('data-indeterminate', 'true');
+    else this.el.removeAttribute('data-indeterminate');
 
     // constrói DOM
     this._build();
@@ -72,9 +80,9 @@ class RP {
 
   _build() {
     const s = this.size;
-    const t = clamp(this.thickness, 2, Math.max(2, Math.floor(s/2)));
-    const r = (s/2) - t/2;                   // raio no meio do traço
-    const c = 2 * Math.PI * r;               // circunferência
+    const t = clamp(this.thickness, 2, Math.max(2, Math.floor(s / 2)));
+    const r = (s / 2) - t / 2;          // raio no meio do traço
+    const c = 2 * Math.PI * r;          // circunferência
     this._circ = c;
 
     // SVG
@@ -84,21 +92,21 @@ class RP {
     svg.setAttribute('viewBox', `0 0 ${s} ${s}`);
     svg.setAttribute('aria-hidden', 'true');
 
-    // trilha (back)
+    // trilha
     const back = document.createElementNS(svg.namespaceURI, 'circle');
-    back.setAttribute('cx', s/2);
-    back.setAttribute('cy', s/2);
+    back.setAttribute('cx', s / 2);
+    back.setAttribute('cy', s / 2);
     back.setAttribute('r',  r);
     back.setAttribute('fill', 'none');
     back.setAttribute('stroke', this.track);
     back.setAttribute('stroke-width', t);
     back.setAttribute('stroke-linecap', 'round');
 
-    // frente (progress)
+    // progresso
     const ring = document.createElementNS(svg.namespaceURI, 'circle');
     ring.classList.add('rp-ring');
-    ring.setAttribute('cx', s/2);
-    ring.setAttribute('cy', s/2);
+    ring.setAttribute('cx', s / 2);
+    ring.setAttribute('cy', s / 2);
     ring.setAttribute('r',  r);
     ring.setAttribute('fill', 'none');
     ring.setAttribute('stroke', this.color);
@@ -120,7 +128,7 @@ class RP {
     wrap.className = 'rp';
     wrap.style.width  = s + 'px';
     wrap.style.height = s + 'px';
-    if (this.indet) wrap.setAttribute('data-indeterminate','true');
+    if (this.indet) wrap.setAttribute('data-indeterminate', 'true');
 
     // a11y
     wrap.setAttribute('role', 'progressbar');
@@ -134,7 +142,7 @@ class RP {
     wrap.appendChild(svg);
     wrap.appendChild(label);
 
-    // limpa alvo e injeta
+    // injeta
     this.el.innerHTML = '';
     this.el.appendChild(wrap);
 
@@ -165,7 +173,7 @@ class RP {
     wrap.setAttribute('aria-valuenow', String(Math.round(to)));
 
     if (!durationMs) {
-      ring.setAttribute('stroke-dashoffset', String(c * (1 - to/100)));
+      ring.setAttribute('stroke-dashoffset', String(c * (1 - to / 100)));
       if (lab && this.labelOn) lab.textContent = `${Math.round(to)}%`;
       return;
     }
@@ -173,24 +181,33 @@ class RP {
     const anim = (now) => {
       const t = clamp((now - start) / durationMs, 0, 1);
       const cur = from + (to - from) * easeOutCubic(t);
-      ring.setAttribute('stroke-dashoffset', String(c * (1 - cur/100)));
+      ring.setAttribute('stroke-dashoffset', String(c * (1 - cur / 100)));
       if (lab && this.labelOn) lab.textContent = `${Math.round(cur)}%`;
       if (t < 1) this._raf = requestAnimationFrame(anim);
     };
-    cancelAnimationFrame(this._raf);
+    if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = requestAnimationFrame(anim);
   }
 
   destroy() {
-    cancelAnimationFrame(this._raf);
+    if (this._raf) cancelAnimationFrame(this._raf);
     if (this.el) this.el.innerHTML = '';
   }
 }
 
 // Utils
 function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
-function toBool(v){ if (typeof v === 'boolean') return v; const s = String(v||'').toLowerCase().trim(); return s==='1'||s==='true'||s==='yes'; }
-function getCss(name, fallback){ try{ const v = getComputedStyle(document.documentElement).getPropertyValue(name); return v?.trim() || fallback; }catch{ return fallback; } }
+function toBool(v){
+  if (typeof v === 'boolean') return v;
+  const s = String(v || '').toLowerCase().trim();
+  return s === '1' || s === 'true' || s === 'yes';
+}
+function getCss(name, fallback){
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return (v && v.trim()) || fallback;
+  } catch { return fallback; }
+}
 
 // ---- API pública ----
 const RadialProgress = {
@@ -218,6 +235,5 @@ if (document.readyState === 'loading') {
   RadialProgress.scan(document);
 }
 
-// expõe no window e como módulo
+// expõe no window (script clássico)
 window.RadialProgress = RadialProgress;
-export default RadialProgress;
