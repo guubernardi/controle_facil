@@ -742,7 +742,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND A.sku <> ''
+      WHERE a.sku IS NOT NULL AND a.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
@@ -790,7 +790,6 @@ const server = app.listen(port, host, () => {
 /* ===========================
  *  AUTO SYNC (ML) — JOB PERIÓDICO
  * =========================== */
-let _mlSyncRegistered = false;
 let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
 
 function setupMlAutoSync() {
