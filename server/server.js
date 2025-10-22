@@ -25,11 +25,13 @@ const ConnectPg = require('connect-pg-simple')(session);
 const app = express();
 app.disable('x-powered-by');
 
-/** Parsers globais (ANTES das rotas) */
+/* =====================================================================
+ *  PARSERS
+ * ===================================================================== */
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Tratador de JSON inválido (logo após os parsers)
+// Tratador de JSON inválido (tem que vir logo após os parsers)
 app.use((err, _req, res, next) => {
   if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
     return res.status(400).json({ ok: false, error: 'invalid_json' });
@@ -37,11 +39,9 @@ app.use((err, _req, res, next) => {
   next(err);
 });
 
-/**
- * Sessão (antes do static e de qualquer rota)
- * SESSION_RELOGIN_ON_CLOSE=true  => cookie de sessão (sem maxAge) ⇒ expira ao fechar o navegador
- * SESSION_RELOGIN_ON_CLOSE=false => cookie persistente por 12h (maxAge)
- */
+/* =====================================================================
+ *  SESSÃO (antes do static e de qualquer rota)
+ * ===================================================================== */
 app.set('trust proxy', 1);
 
 const reloginOnClose = /^true|1|yes$/i.test(process.env.SESSION_RELOGIN_ON_CLOSE || 'true');
@@ -50,7 +50,7 @@ const sessCookie = {
   httpOnly: true,
   sameSite: 'lax',
   secure: process.env.NODE_ENV === 'production',
-  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }) // sem maxAge => session cookie
+  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }) // sem maxAge => expira ao fechar o navegador
 };
 
 app.use(session({
@@ -66,10 +66,11 @@ app.use(session({
   cookie: sessCookie
 }));
 
-/** Static (raiz /public) */
+/* =====================================================================
+ *  STATIC & HOME
+ * ===================================================================== */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-/** Aliases para documentação estática */
 app.get('/docs', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'docs', 'index.html'));
 });
@@ -78,13 +79,14 @@ app.get('/docs/:slug', (req, res) => {
   res.redirect(`/docs/index.html?g=${slug}`);
 });
 
-/** Página raiz (depois da sessão) */
 app.get('/', (req, res) => {
   if (req.session?.user) return res.redirect('/home.html');
   return res.redirect('/login.html');
 });
 
-/** SSE (opcional) */
+/* =====================================================================
+ *  SSE (opcional)
+ * ===================================================================== */
 try {
   const events = require('./events');
   if (typeof events?.sse === 'function') {
@@ -97,104 +99,18 @@ try {
   console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
 }
 
-/** Cabeçalho de resposta JSON nas rotas /api (ANTES de montar rotas) */
+/* =====================================================================
+ *  HEADER JSON PARA /api
+ * ===================================================================== */
 app.use('/api', (_req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
 
-/** Guard /api (allowlist p/ auth/health + job-token) — vem ANTES das rotas protegidas */
-app.use('/api', (req, res, next) => {
-  // como este middleware está montado em "/api", aqui o req.path vem como "/auth/register", etc.
-  const p = req.path || '';
-  const orig = req.originalUrl || '';
-
-  const isOpen =
-    p === '/health' ||
-    p === '/db/ping' ||
-    p.startsWith('/auth/'); // cobre /api/auth/* (register, check-email, login, me, logout)
-
-  // Exceção segura: job interno chama /api/ml/claims/import com token
-  const jobHeader = req.get('x-job-token');
-  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
-  const isJob     = /^\/api\/ml\/claims\/import(?:\?|$)/i.test(orig) && jobHeader && jobToken && jobHeader === jobToken;
-
-  if (isOpen || isJob) return next();
-  if (req.session?.user) return next();
-
-  console.warn('[GUARD 401]', req.method, orig, 'path=', p);
-  return res.status(401).json({ error: 'Não autorizado' });
-});
-
-/** Helper para usar a conexão do middleware (req.q) com fallback */
+/* =====================================================================
+ *  HELPERS
+ * ===================================================================== */
 const qOf = (req) => (req?.q || query);
-
-/** Rotas de autenticação (ABERTAS) */
-const authRoutes = require('./routes/auth');
-app.use('/api/auth', authRoutes);
-
-/* ========= Auth - Registro de usuário (cadastro) ========= */
-try {
-  const registerAuthRegister = require('./routes/auth-register');
-  if (typeof registerAuthRegister === 'function') {
-    registerAuthRegister(app);
-    console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
-}
-
-/** Compat: front antigo que POSTava em /login */
-app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
-
-/** --------- MULTI-TENANT (RLS) --------- */
-try {
-  const tenantMw = require('./middleware/tenant-mw');
-  app.use('/api', tenantMw());
-  console.log('[BOOT] Tenant RLS habilitado em /api');
-} catch (e) {
-  console.warn('[BOOT] Tenant RLS não carregado (./middleware/tenant-mw):', e?.message || e);
-}
-
-/** --------- Fallback de Tenant (DEV/seguro) --------- */
-app.use('/api', (req, _res, next) => {
-  try {
-    const user = req.session?.user || {};
-    req.tenant = req.tenant || {};
-    const emailPrefix = (user.email || '').split('@')[0] || null;
-
-    if (!req.tenant.slug) {
-      req.tenant.slug = process.env.TENANT_TEXT_FALLBACK || user.company || emailPrefix || 'default';
-    }
-    if (req.tenant.id == null && user.tenant_id != null) {
-      req.tenant.id = user.tenant_id;
-    }
-
-    next();
-  } catch {
-    next();
-  }
-});
-
-/* ===========================
- *  HELPERS / UTIL
- * =========================== */
-[
-  'BLING_AUTHORIZE_URL',
-  'BLING_TOKEN_URL',
-  'BLING_API_BASE',
-  'BLING_CLIENT_ID',
-  'BLING_CLIENT_SECRET',
-  'BLING_REDIRECT_URI',
-  'DATABASE_URL',
-  'ML_CLIENT_ID',
-  'ML_CLIENT_SECRET',
-  'ML_REDIRECT_URI',
-  'MELI_OWNER_TOKEN',
-  'TENANT_TEXT_FALLBACK'
-].forEach(k => {
-  if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
-});
 
 function safeParseJson(s) {
   if (s == null) return null;
@@ -215,7 +131,88 @@ async function tableHasColumns(table, columns, req) {
   return out;
 }
 
-/** addReturnEvent (idempotente) — usa fallback global */
+/* =====================================================================
+ *  ROTAS ABERTAS: /api/auth
+ *  (montadas ANTES do guard)
+ * ===================================================================== */
+const authRoutes = require('./routes/auth'); // login, me, logout
+app.use('/api/auth', authRoutes);
+
+try {
+  const registerAuthRegister = require('./routes/auth-register'); // check-email, register
+  if (typeof registerAuthRegister === 'function') {
+    registerAuthRegister(app);
+    console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
+}
+
+// Compatibilidade: front antigo que POSTava em /login
+app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
+
+/* =====================================================================
+ *  GUARD /api (depois das rotas abertas!)
+ * ===================================================================== */
+app.use('/api', (req, res, next) => {
+  // Como este middleware está montado em /api, req.path aqui é relativo: "/auth/...", "/health", etc.
+  const p = String(req.path || '').toLowerCase();
+  const orig = req.originalUrl || '';
+
+  // Allowlist clara para endpoints públicos
+  const isOpen =
+    p === '/health' ||
+    p === '/db/ping' ||
+    p === '/auth' ||           // cobre /api/auth
+    p.startsWith('/auth/');    // cobre /api/auth/* (login, me, register, check-email, logout)
+
+  // Exceção segura: job interno chama /api/ml/claims/import com token
+  const jobHeader = req.get('x-job-token');
+  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
+  const isJob = (/^\/api\/ml\/claims\/import(?:\?|$)/i.test(orig) && jobHeader && jobToken && jobHeader === jobToken);
+
+  if (isOpen || isJob || req.session?.user) return next();
+
+  const reveal = String(process.env.REVEAL_ERRORS ?? 'false').toLowerCase() === 'true';
+  const payload = { error: 'Não autorizado' };
+  if (reveal) payload._debug = { path: req.path, originalUrl: req.originalUrl, hasSession: !!req.session?.user };
+  console.warn('[GUARD 401]', req.method, orig, 'path=', p);
+  return res.status(401).json(payload);
+});
+
+/* =====================================================================
+ *  MULTI-TENANT (RLS)
+ * ===================================================================== */
+try {
+  const tenantMw = require('./middleware/tenant-mw');
+  app.use('/api', tenantMw());
+  console.log('[BOOT] Tenant RLS habilitado em /api');
+} catch (e) {
+  console.warn('[BOOT] Tenant RLS não carregado (./middleware/tenant-mw):', e?.message || e);
+}
+
+/* Fallback de Tenant (DEV/seguro) */
+app.use('/api', (req, _res, next) => {
+  try {
+    const user = req.session?.user || {};
+    req.tenant = req.tenant || {};
+    const emailPrefix = (user.email || '').split('@')[0] || null;
+
+    if (!req.tenant.slug) {
+      req.tenant.slug = process.env.TENANT_TEXT_FALLBACK || user.company || emailPrefix || 'default';
+    }
+    if (req.tenant.id == null && user.tenant_id != null) {
+      req.tenant.id = user.tenant_id;
+    }
+  } catch {}
+  next();
+});
+
+/* =====================================================================
+ *  ROTAS UTIL / CSV / CENTRAL / RETURNS / CHAT / UPLOADS / ML
+ * ===================================================================== */
+
+// addReturnEvent (idempotente) — usa fallback global `query`
 async function addReturnEvent({
   returnId, type, title = null, message = null, meta = null,
   createdBy = 'system', idempKey = null
@@ -255,109 +252,29 @@ async function addReturnEvent({
   }
 }
 
-/* ========= Rotas utilitárias ========= */
-try {
-  const utilsRoutes = require('./routes/utils');
-  app.use(utilsRoutes);
-  console.log('[BOOT] Rotas /utils carregadas');
-} catch (e) {
-  console.warn('[BOOT] Falha ao carregar rotas /utils:', e?.message || e);
-}
+// Utils
+try { app.use(require('./routes/utils')); console.log('[BOOT] Rotas /utils carregadas'); } catch (e) { console.warn('[BOOT] /utils off:', e?.message || e); }
 
-/* ========= CSV (upload estendido) ========= */
-try {
-  const registerCsvUploadExtended = require('./routes/csv-upload-extended');
-  registerCsvUploadExtended(app, { addReturnEvent });
-  console.log('[BOOT] Rotas CSV carregadas');
-} catch (e) {
-  console.warn('[BOOT] Falha ao carregar rotas CSV:', e?.message || e);
-}
+// CSV
+try { require('./routes/csv-upload-extended')(app, { addReturnEvent }); console.log('[BOOT] Rotas CSV carregadas'); } catch (e) { console.warn('[BOOT] CSV off:', e?.message || e); }
 
-/* ========= Central (overview) ========= */
-try {
-  const registerCentral = require('./routes/central');
-  if (typeof registerCentral === 'function') {
-    registerCentral(app);
-    console.log('[BOOT] Rotas Central registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas Central não carregadas (opcional):', e?.message || e);
-}
+// Central
+try { const r = require('./routes/central'); if (typeof r === 'function') { r(app); console.log('[BOOT] Rotas Central registradas'); } } catch (e) { console.warn('[BOOT] Central off:', e?.message || e); }
 
-/* ========= Returns (listagem genérica) ========= */
-try {
-  const registerReturns = require('./routes/returns');
-  if (typeof registerReturns === 'function') {
-    registerReturns(app);
-    console.log('[BOOT] Rotas Returns registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas Returns não carregadas (opcional):', e?.message || e);
-}
+// Returns
+try { const r = require('./routes/returns'); if (typeof r === 'function') { r(app); console.log('[BOOT] Rotas Returns registradas'); } } catch (e) { console.warn('[BOOT] Returns off:', e?.message || e); }
 
-/* ========= Chat por Devolução (mensagens) ========= */
-try {
-  const returnsMessages = require('./routes/returns-messages');
-  app.use('/api', returnsMessages);
-  console.log('[BOOT] Rotas Chat por Devolução registradas (/api/returns/:id/messages)');
-} catch (e) {
-  console.warn('[BOOT] Rotas Chat por Devolução não carregadas (opcional):', e?.message || e);
-}
+// Chat por Devolução
+try { app.use('/api', require('./routes/returns-messages')); console.log('[BOOT] Rotas Chat por Devolução registradas (/api/returns/:id/messages)'); } catch (e) { console.warn('[BOOT] Chat Returns off:', e?.message || e); }
 
-/* ========= Uploads (imagens) ========= */
-try {
-  const uploadsRoutes = require('./routes/uploads');
-  app.use('/api/uploads', uploadsRoutes);
-  console.log('[BOOT] Rotas Uploads registradas (/api/uploads)');
-} catch (e) {
-  console.warn('[BOOT] Rotas Uploads não carregadas (opcional):', e?.message || e);
-}
+// Uploads
+try { app.use('/api/uploads', require('./routes/uploads')); console.log('[BOOT] Rotas Uploads registradas (/api/uploads)'); } catch (e) { console.warn('[BOOT] Uploads off:', e?.message || e); }
 
-/* ========= Webhook Mercado Livre ========= */
-try {
-  const registerMlWebhook = require('./routes/ml-webhook');
-  if (typeof registerMlWebhook === 'function') {
-    registerMlWebhook(app);
-    console.log('[BOOT] Webhook ML registrado');
-  }
-} catch (e) {
-  console.warn('[BOOT] Webhook ML não carregado (opcional):', e?.message || e);
-}
+// ML: webhook / oauth / api / chat
+try { const r = require('./routes/ml-webhook'); if (typeof r === 'function') { r(app); console.log('[BOOT] Webhook ML registrado'); } } catch (e) { console.warn('[BOOT] Webhook ML off:', e?.message || e); }
+try { const r = require('./routes/ml-auth'); if (typeof r === 'function') { r(app); console.log('[BOOT] Rotas ML OAuth registradas'); } } catch (e) { console.warn('[BOOT] ML OAuth off:', e?.message || e); }
+try { const r = require('./routes/ml-api'); if (typeof r === 'function') { r(app); console.log('[BOOT] Rotas ML API registradas'); } } catch (e) { console.warn('[BOOT] ML API off:', e?.message || e); }
 
-/* ========= OAuth Mercado Livre ========= */
-try {
-  const registerMlAuth = require('./routes/ml-auth');
-  if (typeof registerMlAuth === 'function') {
-    registerMlAuth(app);
-    console.log('[BOOT] Rotas ML OAuth registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas ML OAuth não carregadas (opcional):', e?.message || e);
-}
-
-/* ========= API Mercado Livre (stores/contas) ========= */
-try {
-  const registerMlApi = require('./routes/ml-api');
-  if (typeof registerMlApi === 'function') {
-    registerMlApi(app);
-    console.log('[BOOT] Rotas ML API registradas');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
-}
-
-/* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
-try {
-  const mlChatRoutes = require('./routes/ml-chat');
-  if (mlChatRoutes) {
-    app.use('/api/ml', mlChatRoutes);
-    console.log('[BOOT] Rotas ML Chat registradas (/api/ml/...)');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas ML Chat não carregadas (opcional):', e?.message || e);
-}
-
-/* ========= Importador Mercado Livre (Sync Claims -> devolucoes) ========= */
 let _mlSyncRegistered = false;
 try {
   const registerMlSync = require('./routes/ml-sync'); // expõe /api/ml/claims/import
@@ -370,14 +287,13 @@ try {
   console.warn('[BOOT] Importador ML não carregado (opcional):', e?.message || e);
 }
 
-/* ------------------------------------------------------------
- *  Healthchecks
- * ------------------------------------------------------------ */
+/* =====================================================================
+ *  HEALTH
+ * ===================================================================== */
 app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 app.get('/api/db/ping', async (req, res) => {
   try {
-    const q = qOf(req);
-    const r = await q('select now() as now');
+    const r = await qOf(req)('select now() as now');
     res.json({ ok: true, now: r.rows[0].now });
   } catch (e) {
     console.error('DB PING ERRO:', e);
@@ -385,9 +301,9 @@ app.get('/api/db/ping', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------
- *  Events API — listar eventos por return_id (auditoria)
- * ------------------------------------------------------------ */
+/* =====================================================================
+ *  EVENTS (auditoria)
+ * ===================================================================== */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
     const q = qOf(req);
@@ -422,9 +338,9 @@ app.get('/api/returns/:id/events', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------
- *  Log de custos (com suporte a ?return_id=)
- * ------------------------------------------------------------ */
+/* =====================================================================
+ *  LOGS DE CUSTO
+ * ===================================================================== */
 app.get('/api/returns/logs', async (req, res) => {
   try {
     const q = qOf(req);
@@ -443,8 +359,8 @@ app.get('/api/returns/logs', async (req, res) => {
     if (status)     { params.push(String(status).toLowerCase());     where.push(`LOWER(status) = $${params.length}`); }
     if (log_status) { params.push(String(log_status).toLowerCase()); where.push(`LOWER(log_status) = $${params.length}`); }
     if (responsavel){ params.push(String(responsavel).toLowerCase());where.push(`LOWER(responsavel_custo) = $${params.length}`); }
-    if (loja)       { params.push(`%${loja}%`);                        where.push(`loja_nome ILIKE $${params.length}`); }
-    if (return_id)  { params.push(parseInt(return_id,10));             where.push(`return_id = $${params.length}`); }
+    if (loja)       { params.push(`%${loja}%`);                       where.push(`loja_nome ILIKE $${params.length}`); }
+    if (return_id)  { params.push(parseInt(return_id,10));            where.push(`return_id = $${params.length}`); }
     if (qstr) {
       const like = `%${qstr}%`;
       params.push(like, like, like, like);
@@ -532,9 +448,9 @@ app.get('/api/returns/logs', async (req, res) => {
   }
 });
 
-/* ------------------------------------------------------------
- *  DASHBOARD (dados consolidados)
- * ------------------------------------------------------------ */
+/* =====================================================================
+ *  DASHBOARD
+ * ===================================================================== */
 app.get('/api/dashboard', async (req, res) => {
   const mock = () => {
     const today = new Date();
@@ -759,7 +675,9 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
-/** ----- Handler de erro final (respeita REVEAL_ERRORS=true) ----- */
+/* =====================================================================
+ *  ERROR HANDLER
+ * ===================================================================== */
 app.use((err, req, res, _next) => {
   console.error('[API ERROR]', err);
   const reveal = String(process.env.REVEAL_ERRORS ?? 'false').toLowerCase() === 'true';
@@ -771,9 +689,9 @@ app.use((err, req, res, _next) => {
   }
 });
 
-/* ===========================
+/* =====================================================================
  *  START
- * =========================== */
+ * ===================================================================== */
 const port = process.env.PORT || 3000;
 const host = '0.0.0.0';
 
@@ -782,9 +700,10 @@ const server = app.listen(port, host, () => {
   setupMlAutoSync();
 });
 
-/* ===========================
+/* =====================================================================
  *  AUTO SYNC (ML) — JOB PERIÓDICO
- * =========================== */
+ * ===================================================================== */
+let _mlSyncRegistered = _mlSyncRegistered || false; // garantido acima
 let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
 
 function setupMlAutoSync() {
@@ -861,9 +780,9 @@ function setupMlAutoSync() {
   console.log(`[BOOT] ML AutoSync habilitado: intervalo=${intervalMs}ms, janela=${windowDays}d`);
 }
 
-/* ===========================
+/* =====================================================================
  *  ERROS NÃO TRATADOS
- * =========================== */
+ * ===================================================================== */
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
 process.on('uncaughtException',  err => console.error('[uncaughtException]', err));
 
