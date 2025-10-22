@@ -5,13 +5,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TOAST_BOX = $("#toastContainer");
 const POLL_MS = 50000;        // 50s
-const LOADER_MIN_MS = 6000;  // tempo mínimo do overlay fullscreen (6s)
+const LOADER_MIN_MS = 6000;   // tempo mínimo do overlay fullscreen (6s)
 
-// IDs já vistos para não repetir toast
 const seen = new Set();
-// Evitar toasts no primeiro carregamento
 let firstRun = true;
-// Pausa o polling quando a aba não está visível
 let pollingOn = true;
 document.addEventListener("visibilitychange", () => {
   pollingOn = document.visibilityState === "visible";
@@ -76,10 +73,17 @@ async function api(url) {
  *  Dados + Renderização
  * ========================= */
 
-// Reclamações pendentes (dados)
+// --- Reclamacoes Abertas (dados) = pendente + aprovado ---
 async function fetchReclamacoesAbertas() {
-  const res  = await api("/api/returns?status=pendente&page=1&pageSize=500");
-  const rows = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
+  const [pend, aprov] = await Promise.all([
+    api("/api/returns?status=pendente&page=1&pageSize=500").catch(() => ({ items: [] })),
+    api("/api/returns?status=aprovado&page=1&pageSize=500").catch(() => ({ items: [] })),
+  ]);
+
+  const rows = []
+    .concat(Array.isArray(pend?.items) ? pend.items : Array.isArray(pend) ? pend : [])
+    .concat(Array.isArray(aprov?.items) ? aprov.items : Array.isArray(aprov) ? aprov : []);
+
   const agg = {};
   for (const r of rows) {
     const mk = lojaToMarketplace(r.loja_nome || "");
@@ -88,7 +92,6 @@ async function fetchReclamacoesAbertas() {
   return { rows, agg };
 }
 
-// Reclamações pendentes (render)
 function renderReclamacoesAbertas(agg) {
   const cont  = $("#mk-cards");
   const ordem = ["Shopee", "Mercado Livre", "Magalu", "Outros"];
@@ -105,14 +108,11 @@ function renderReclamacoesAbertas(agg) {
   });
 }
 
-// Toasts para novas reclamações
+// Toasts para novas reclamações (somente as pendentes)
 function handleNewReclamacoes(rows) {
   rows.forEach((r) => {
     const id = String(r.id);
-    if (firstRun) {
-      seen.add(id); // semear no 1º load
-      return;
-    }
+    if (firstRun) { seen.add(id); return; }
     if (!seen.has(id)) {
       seen.add(id);
       showToast({
@@ -124,41 +124,18 @@ function handleNewReclamacoes(rows) {
   });
 }
 
-// “Devoluções a caminho” (dados)
-async function fetchACaminho() {
-  // ML-Sync persiste status: pendente | aprovado | encerrado | rejeitado
-  // Para “a caminho”, priorizamos aprovados; depois pendentes (fallback).
-  const tryStatuses = ["aprovado", "pendente", "recebido_cd", "em_inspecao"];
-  const picked = [];
-  const seenIds = new Set();
-
-  for (const st of tryStatuses) {
-    const res = await api(`/api/returns?status=${encodeURIComponent(st)}&page=1&pageSize=50`).catch(() => null);
-    const items = Array.isArray(res?.items) ? res.items : [];
-    for (const it of items) {
-      const key = String(it.id ?? it.return_id ?? it.id_venda ?? Math.random());
-      if (seenIds.has(key)) continue;
-      seenIds.add(key);
-
-      picked.push({
-        ...it,
-        _prio: (it.loja_nome || "").toLowerCase().includes("mercado") ? 1 : 0
-      });
-      if (picked.length >= 6) break;
-    }
-    if (picked.length >= 6) break;
-  }
-
-  // Prioriza ML e mais recentes
-  picked.sort((a, b) =>
-    (b._prio - a._prio) ||
+// --- “Devoluções a caminho” (dados) = status aprovado ---
+async function fetchACaminho(limit = 6) {
+  const res  = await api("/api/returns?status=aprovado&page=1&pageSize=50").catch(() => null);
+  const rows = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
+  // ordena por atualizado mais recente; prioriza ML
+  rows.sort((a, b) =>
+    ((b.loja_nome||'').includes('Mercado') - (a.loja_nome||'').includes('Mercado')) ||
     new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)
   );
-
-  return picked.slice(0, 6);
+  return rows.slice(0, limit);
 }
 
-// “Devoluções a caminho” (render)
 function renderACaminho(rows) {
   const ul = $("#a-caminho");
   ul.innerHTML = "";
@@ -178,41 +155,55 @@ function renderACaminho(rows) {
   });
 }
 
+/* ========= Kickstart de import se vazio ========= */
+
+async function kickstartImportIfEmpty() {
+  try {
+    const res = await api("/api/returns?page=1&pageSize=1").catch(() => null);
+    const hasAny = Array.isArray(res?.items) ? res.items.length > 0 : Array.isArray(res) ? res.length > 0 : false;
+    if (hasAny) return false;
+
+    // dispara import só de returns (60 dias) e silencioso
+    await api("/api/ml/claims/import?source=returns&days=60&silent=1").catch(() => null);
+    // dá um respiro rápido pro backend gravar
+    await sleep(1500);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* =========================
  *  Boot + Polling
  * ========================= */
 
 async function boot() {
   const hasLoader = !!window.PageLoader;
-  if (hasLoader) {
-    // segura o overlay de tela cheia por ~13s no 1º load
-    window.PageLoader.hold(LOADER_MIN_MS);
-  }
+  if (hasLoader) window.PageLoader.hold(LOADER_MIN_MS);
 
   try {
-    // Busca dados em paralelo; se não houver PageLoader, impõe atraso mínimo via sleep
-    const results = await Promise.all([
+    // Se o BD está vazio, puxamos do ML
+    const kicked = await kickstartImportIfEmpty();
+    if (kicked) console.info("[central] Import de returns disparado (kickstart).");
+
+    const [abertas, caminho] = await Promise.all([
       fetchReclamacoesAbertas(),
       fetchACaminho(),
       hasLoader ? Promise.resolve() : sleep(LOADER_MIN_MS)
     ]);
 
-    const abertas = results[0];
-    const caminho = results[1];
-
     renderReclamacoesAbertas(abertas.agg);
     handleNewReclamacoes(abertas.rows);
     renderACaminho(caminho);
   } catch (e) {
-    // Em caso de erro inicial, deixamos os skeletons e seguimos para o polling
     console.warn("initial load fail:", e?.message || e);
   } finally {
     if (hasLoader) window.PageLoader.done();
   }
 
-  firstRun = false; // a partir daqui, novos IDs disparam toast
+  firstRun = false;
 
-  // Polling leve
+  // Polling
   while (true) {
     await sleep(POLL_MS);
     if (!pollingOn) continue;
