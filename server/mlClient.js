@@ -5,13 +5,16 @@ const { query } = require('./db');
 const axios = require('axios');
 const dayjs = require('dayjs');
 
-const ML_TOKEN_URL   = process.env.ML_TOKEN_URL  || 'https://api.mercadolibre.com/oauth/token';
-const ML_BASE_URL    = process.env.ML_BASE_URL   || 'https://api.mercadolibre.com';
-const CLIENT_ID      = process.env.ML_CLIENT_ID;
-const CLIENT_SECRET  = process.env.ML_CLIENT_SECRET;
+const ML_TOKEN_URL  = process.env.ML_TOKEN_URL  || 'https://api.mercadolibre.com/oauth/token';
+const ML_BASE_URL   = process.env.ML_BASE_URL   || 'https://api.mercadolibre.com';
+const CLIENT_ID     = process.env.ML_CLIENT_ID;
+const CLIENT_SECRET = process.env.ML_CLIENT_SECRET;
 
-/** Garante tabela/colunas/índices necessários (idempotente) */
+/* -------------------------------------------------------
+ * Schema helpers (idempotentes)
+ * -----------------------------------------------------*/
 async function ensureSchema() {
+  // Tabela base (não altera se já existir com outra definição)
   await query(`
     CREATE TABLE IF NOT EXISTS public.ml_accounts (
       user_id       TEXT PRIMARY KEY,
@@ -27,7 +30,7 @@ async function ensureSchema() {
     );
   `);
 
-  // coluna is_active (para ambientes antigos)
+  // Garante coluna is_active para bases antigas
   await query(`
     DO $$
     BEGIN
@@ -35,29 +38,40 @@ async function ensureSchema() {
         SELECT 1 FROM information_schema.columns
         WHERE table_schema='public' AND table_name='ml_accounts' AND column_name='is_active'
       ) THEN
-        ALTER TABLE public.ml_accounts
-          ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE public.ml_accounts ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT FALSE;
       END IF;
     END$$;
   `);
 
-  // índice por apelido (ordenação rápida)
+  // Índice/unique para upsert por user_id (se não existir)
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ml_accounts_user_id_uq
+      ON public.ml_accounts (user_id);
+  `);
+
+  // (Opcional) índice por apelido
   await query(`
     CREATE INDEX IF NOT EXISTS ml_accounts_nickname_idx
       ON public.ml_accounts (nickname);
   `);
-
-  // apenas 1 conta ativa (true) ao mesmo tempo
-  await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ml_accounts_only_one_active_idx
-      ON public.ml_accounts (is_active)
-      WHERE is_active IS TRUE;
-  `);
 }
 
-/** Salva/atualiza conta e marca ativa (upsert) */
+/* -------------------------------------------------------
+ * Persistência
+ * -----------------------------------------------------*/
 async function saveAccount(acc) {
   await ensureSchema();
+
+  // Estratégia segura: primeiro desativa outras, depois ativa/upserta a conta
+  // para não colidir com índices parciais de "apenas 1 ativa".
+  await query(
+    `UPDATE public.ml_accounts
+        SET is_active = FALSE
+      WHERE is_active = TRUE
+        AND user_id::text <> $1::text`,
+    [String(acc.user_id)]
+  );
+
   await query(
     `
     INSERT INTO public.ml_accounts
@@ -80,54 +94,74 @@ async function saveAccount(acc) {
       acc.refresh_token || null,
       acc.scope || null,
       acc.token_type || null,
-      acc.expires_at || null,
+      acc.expires_at || null
     ]
   );
-
-  // como há índice único parcial de is_active, se existir outra ativa, falha.
-  // por isso, forçamos a conta salva como ativa e desativamos as demais:
-  await query(`UPDATE public.ml_accounts SET is_active = FALSE WHERE user_id <> $1 AND is_active = TRUE;`, [
-    String(acc.user_id),
-  ]);
 }
 
-/** Lista contas */
 async function listAccounts() {
   await ensureSchema();
-  const r = await query(
-    `SELECT user_id, nickname, expires_at, is_active FROM public.ml_accounts ORDER BY is_active DESC, nickname NULLS LAST`
-  );
+  const r = await query(`
+    SELECT user_id, nickname, expires_at, is_active
+      FROM public.ml_accounts
+     ORDER BY is_active DESC, updated_at DESC, nickname NULLS LAST
+  `);
   return r.rows;
 }
 
-/** Ativa uma conta (desativa as outras) */
 async function setActive(user_id) {
   await ensureSchema();
   await query(`UPDATE public.ml_accounts SET is_active = FALSE WHERE is_active = TRUE;`);
-  await query(`UPDATE public.ml_accounts SET is_active = TRUE, updated_at = now() WHERE user_id = $1;`, [
-    String(user_id),
-  ]);
+  await query(
+    `UPDATE public.ml_accounts
+        SET is_active = TRUE, updated_at = now()
+      WHERE user_id::text = $1::text`,
+    [String(user_id)]
+  );
 }
 
-/** Retorna o user_id ativo (ou null) */
 async function getActiveUserId() {
   await ensureSchema();
-  const r = await query(`SELECT user_id FROM public.ml_accounts WHERE is_active = TRUE LIMIT 1;`);
+  const r = await query(
+    `SELECT user_id
+       FROM public.ml_accounts
+      WHERE is_active = TRUE
+      ORDER BY updated_at DESC
+      LIMIT 1`
+  );
   return r.rows[0]?.user_id || null;
 }
 
-/** Carrega conta (se não passar user_id, pega a ativa) */
 async function loadAccount(user_id) {
   await ensureSchema();
   if (user_id) {
-    const r = await query(`SELECT * FROM public.ml_accounts WHERE user_id = $1 LIMIT 1;`, [String(user_id)]);
+    const r = await query(
+      `SELECT *
+         FROM public.ml_accounts
+        WHERE user_id::text = $1::text
+        LIMIT 1`,
+      [String(user_id)]
+    );
     return r.rows[0] || null;
   }
-  const r = await query(`SELECT * FROM public.ml_accounts WHERE is_active = TRUE LIMIT 1;`);
+  const r = await query(
+    `SELECT *
+       FROM public.ml_accounts
+      WHERE is_active = TRUE
+      ORDER BY updated_at DESC
+      LIMIT 1`
+  );
   return r.rows[0] || null;
 }
 
-/** Atualiza token via refresh_token */
+async function removeAccount(user_id) {
+  await ensureSchema();
+  await query(`DELETE FROM public.ml_accounts WHERE user_id::text = $1::text;`, [String(user_id)]);
+}
+
+/* -------------------------------------------------------
+ * Token
+ * -----------------------------------------------------*/
 async function refreshToken(refresh_token) {
   if (!CLIENT_ID || !CLIENT_SECRET) {
     throw new Error('missing_ml_credentials');
@@ -137,22 +171,22 @@ async function refreshToken(refresh_token) {
     grant_type: 'refresh_token',
     client_id: CLIENT_ID,
     client_secret: CLIENT_SECRET,
-    refresh_token,
+    refresh_token
   });
 
   const { data } = await axios.post(ML_TOKEN_URL, form.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    timeout: 15000,
+    timeout: 15000
   });
 
   return data; // { access_token, token_type, expires_in, scope, refresh_token? }
 }
 
-/** Garante que a conta tenha access_token válido (faz refresh se faltarem ~60s) */
 async function ensureFreshAccount(acc) {
   if (!acc) return null;
 
   const expiresAt = dayjs(acc.expires_at || 0);
+  // se faltarem menos de 60s, já faz refresh
   if (expiresAt.isAfter(dayjs().add(60, 'second'))) return acc;
 
   try {
@@ -163,38 +197,51 @@ async function ensureFreshAccount(acc) {
       refresh_token: t.refresh_token || acc.refresh_token,
       token_type: t.token_type || acc.token_type,
       scope: t.scope || acc.scope,
-      expires_at: dayjs().add(t.expires_in || 600, 'second').toISOString(),
+      expires_at: dayjs().add(t.expires_in || 600, 'second').toISOString()
     };
     await saveAccount(next);
     return next;
   } catch (e) {
     console.error('[mlClient] refreshToken error:', e?.response?.data || e?.message || e);
-    // mantém acc como está; caller pode lidar (ex.: forçar reconectar)
+    // mantém o token antigo; caller decide o que fazer
     return acc;
   }
 }
 
-/** Retorna um axios autenticado (da conta ativa ou da informada) */
-async function getAuthedAxios(user_id) {
+/* -------------------------------------------------------
+ * Cliente autenticado
+ * Aceita:
+ *   - getAuthedAxios(req)  -> usa ?ml_account= / header x-ml-account / ativa
+ *   - getAuthedAxios('USER_ID') -> usa essa conta
+ * -----------------------------------------------------*/
+async function getAuthedAxios(ctx) {
   await ensureSchema();
-  let acc = await loadAccount(user_id);
+
+  // Se vier string, considere como user_id
+  let desiredUserId = (typeof ctx === 'string') ? ctx : null;
+
+  // Se for req, tente query/header
+  if (!desiredUserId && ctx && typeof ctx === 'object') {
+    desiredUserId =
+      ctx.query?.ml_account ||
+      ctx.query?.user_id ||
+      ctx.headers?.['x-ml-account'] ||
+      ctx.headers?.['x-ml-user'] ||
+      null;
+  }
+
+  let acc = await loadAccount(desiredUserId);
   if (!acc) throw new Error('not_connected');
 
   acc = await ensureFreshAccount(acc);
 
   const http = axios.create({
     baseURL: ML_BASE_URL,
-    timeout: 15000,
-    headers: { Authorization: `Bearer ${acc.access_token}` },
+    timeout: 20000,
+    headers: { Authorization: `Bearer ${acc.access_token}` }
   });
 
   return { http, account: acc };
-}
-
-/** Remove conta */
-async function removeAccount(user_id) {
-  await ensureSchema();
-  await query(`DELETE FROM public.ml_accounts WHERE user_id = $1;`, [String(user_id)]);
 }
 
 module.exports = {
@@ -205,5 +252,5 @@ module.exports = {
   listAccounts,
   setActive,
   removeAccount,
-  getActiveUserId,
+  getActiveUserId
 };
