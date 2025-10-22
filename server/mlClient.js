@@ -14,11 +14,12 @@ const CLIENT_SECRET = process.env.ML_CLIENT_SECRET;
  * Schema helpers (idempotentes)
  * -----------------------------------------------------*/
 async function ensureSchema() {
-  // Tabela base (não altera se já existir com outra definição)
+  // Tabela base
   await query(`
     CREATE TABLE IF NOT EXISTS public.ml_accounts (
       user_id       TEXT PRIMARY KEY,
       nickname      TEXT,
+      site_id       TEXT,
       access_token  TEXT,
       refresh_token TEXT,
       scope         TEXT,
@@ -30,7 +31,7 @@ async function ensureSchema() {
     );
   `);
 
-  // Garante coluna is_active para bases antigas
+  // Colunas para bases antigas
   await query(`
     DO $$
     BEGIN
@@ -40,19 +41,25 @@ async function ensureSchema() {
       ) THEN
         ALTER TABLE public.ml_accounts ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT FALSE;
       END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='ml_accounts' AND column_name='site_id'
+      ) THEN
+        ALTER TABLE public.ml_accounts ADD COLUMN site_id TEXT;
+      END IF;
     END$$;
   `);
 
-  // Índice/unique para upsert por user_id (se não existir)
-  await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ml_accounts_user_id_uq
-      ON public.ml_accounts (user_id);
-  `);
+  // Índices úteis
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS ml_accounts_user_id_uq ON public.ml_accounts (user_id);`);
+  await query(`CREATE INDEX IF NOT EXISTS ml_accounts_nickname_idx ON public.ml_accounts (nickname);`);
 
-  // (Opcional) índice por apelido
+  // Garante "só 1 ativa" (índice único parcial)
   await query(`
-    CREATE INDEX IF NOT EXISTS ml_accounts_nickname_idx
-      ON public.ml_accounts (nickname);
+    CREATE UNIQUE INDEX IF NOT EXISTS ml_accounts_only_one_active_idx
+      ON public.ml_accounts (is_active)
+      WHERE is_active IS TRUE;
   `);
 }
 
@@ -62,8 +69,7 @@ async function ensureSchema() {
 async function saveAccount(acc) {
   await ensureSchema();
 
-  // Estratégia segura: primeiro desativa outras, depois ativa/upserta a conta
-  // para não colidir com índices parciais de "apenas 1 ativa".
+  // Desativa outras ativas primeiro para não colidir com o índice parcial
   await query(
     `UPDATE public.ml_accounts
         SET is_active = FALSE
@@ -75,10 +81,11 @@ async function saveAccount(acc) {
   await query(
     `
     INSERT INTO public.ml_accounts
-      (user_id, nickname, access_token, refresh_token, scope, token_type, expires_at, is_active, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7, TRUE, now())
+      (user_id, nickname, site_id, access_token, refresh_token, scope, token_type, expires_at, is_active, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, TRUE, now())
     ON CONFLICT (user_id) DO UPDATE SET
-      nickname      = EXCLUDED.nickname,
+      nickname      = COALESCE(EXCLUDED.nickname, public.ml_accounts.nickname),
+      site_id       = COALESCE(EXCLUDED.site_id, public.ml_accounts.site_id),
       access_token  = EXCLUDED.access_token,
       refresh_token = EXCLUDED.refresh_token,
       scope         = EXCLUDED.scope,
@@ -90,6 +97,7 @@ async function saveAccount(acc) {
     [
       String(acc.user_id),
       acc.nickname || null,
+      acc.site_id || null,
       acc.access_token || null,
       acc.refresh_token || null,
       acc.scope || null,
@@ -102,7 +110,7 @@ async function saveAccount(acc) {
 async function listAccounts() {
   await ensureSchema();
   const r = await query(`
-    SELECT user_id, nickname, expires_at, is_active
+    SELECT user_id, nickname, site_id, expires_at, is_active
       FROM public.ml_accounts
      ORDER BY is_active DESC, updated_at DESC, nickname NULLS LAST
   `);
@@ -240,6 +248,31 @@ async function getAuthedAxios(ctx) {
     timeout: 20000,
     headers: { Authorization: `Bearer ${acc.access_token}` }
   });
+
+  // Enriquecimento assíncrono (nickname/site_id) se estiver faltando
+  try {
+    if (!acc.nickname || !acc.site_id) {
+      const { data: me } = await http.get('/users/me');
+      const nickname = me?.nickname || acc.nickname || null;
+      const site_id  = me?.site_id  || acc.site_id  || null;
+
+      if (nickname !== acc.nickname || site_id !== acc.site_id) {
+        await query(
+          `UPDATE public.ml_accounts
+              SET nickname = $2,
+                  site_id  = $3,
+                  updated_at = now()
+            WHERE user_id::text = $1::text`,
+          [String(acc.user_id), nickname, site_id]
+        );
+        acc.nickname = nickname;
+        acc.site_id  = site_id;
+      }
+    }
+  } catch (e) {
+    // não quebra a autenticação se /users/me falhar
+    console.warn('[mlClient] enrichment (/users/me) failed:', e?.response?.data || e?.message || e);
+  }
 
   return { http, account: acc };
 }

@@ -8,6 +8,7 @@ const { getAuthedAxios } = require('../mlClient');
 
 const isTrue = v => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
 const qOf = (req) => (req?.q || query);
+const fmtML = d => dayjs(d).format('YYYY-MM-DDTHH:mm:ss.SSSZZ'); // ex: 2025-10-22T12:34:56.789-0300
 
 module.exports = function registerMlSync(app, opts = {}) {
   const router = express.Router();
@@ -89,66 +90,30 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
-  // tenta várias rotas e esquemas de parâmetros; devolve { data, pathUsed, paramsUsed }
-  async function genericSearchWithFallback(http, paths, makeParamsList) {
-    const lastErrors = [];
-    for (const path of paths) {
-      for (const { label, params } of makeParamsList) {
-        try {
-          const { data } = await http.get(path, { params });
-          return { data, pathUsed: path, paramsUsed: label };
-        } catch (e) {
-          const st = e?.response?.status;
-          const body = e?.response?.data;
-          const txt = (body && JSON.stringify(body)) || e?.message || String(e);
-          lastErrors.push({ path, label, status: st, error: txt });
-          // tenta próximo par (path, params)
-          continue;
-        }
-      }
-    }
-    const err = new Error('all_return_paths_failed');
-    err.detail = lastErrors;
-    throw err;
+  // Busca claims com filtros corretos (range + status + player)
+  async function searchClaims(http, { user_id }, { fromIso, toIso, status = 'opened', limit = 100 }) {
+    const params = {
+      status,
+      range: `date_created:after:${fmtML(fromIso)}:before:${fmtML(toIso)}`,
+      player_role: 'seller',
+      player_user_id: user_id,
+      sort: 'date_created:desc',
+      limit
+    };
+    const { data } = await http.get('/post-purchase/v1/claims/search', { params });
+    return { data, paramsUsed: params };
   }
 
-  // CLAIMS: duas “gerações” de params
-  async function searchClaims(http, account, { fromIso, toIso, limit }) {
-    const paths = ['/post-purchase/v1/claims/search'];
-    const makeParamsList = [
-      { label: 'new', params: { player_role: 'seller', player_user_id: account.user_id, date_created: `${fromIso},${toIso}`, site_id: account.site_id || undefined, limit } },
-      { label: 'old', params: { 'seller.id': account.user_id, 'date_created.from': fromIso, 'date_created.to': toIso, limit } },
-    ];
-    return genericSearchWithFallback(http, paths, makeParamsList);
+  // Detalhe do claim
+  async function getClaimDetail(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
+    return data;
   }
 
-  // RETURNS: tenta múltiplas rotas conhecidas + duas gerações de params
-  async function searchReturns(http, account, { fromIso, toIso, limit }) {
-    const paths = [
-      '/post-purchase/v1/returns/search', // algumas contas/sites
-      '/returns/search'                   // outras contas/sites
-    ];
-    const makeParamsList = [
-      { label: 'new', params: { player_role: 'seller', player_user_id: account.user_id, date_created: `${fromIso},${toIso}`, site_id: account.site_id || undefined, limit } },
-      { label: 'oldA', params: { seller: account.user_id, 'date_created.from': fromIso, 'date_created.to': toIso, limit } },
-      { label: 'oldB', params: { seller: account.user_id, 'creation_date.from': fromIso, 'creation_date.to': toIso, limit } },
-    ];
-    return genericSearchWithFallback(http, paths, makeParamsList);
-  }
-
-  // Detalhe de return: tenta duas rotas
-  async function getReturnDetail(http, id) {
-    const paths = [
-      `/post-purchase/v1/returns/${id}`,
-      `/returns/${id}`
-    ];
-    for (const p of paths) {
-      try {
-        const { data } = await http.get(p);
-        return { data, pathUsed: p };
-      } catch (_) { /* tenta próxima */ }
-    }
-    throw new Error(`return_detail_not_found:${id}`);
+  // Detalhe de returns (v2) por claim_id
+  async function getReturnV2ByClaim(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
+    return data; // contém id (return_id), status, resource_id, orders[], shipments[], etc.
   }
 
   /* ------------------------------- rotas ------------------------------ */
@@ -168,55 +133,45 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
-  // DEBUG — claims
+  // DEBUG — claims (mostra params usados e 1ª página)
   router.get('/api/ml/claims/search-debug', async (req, res) => {
     try {
       const now = dayjs();
       const days = Math.max(1, parseInt(req.query.days || '7', 10) || 7);
       const fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(days, 'day').toISOString();
       const toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
+      const status  = (req.query.status || 'opened').toLowerCase();
 
       const { http, account } = await getAuthedAxios(req);
-      const r = await searchClaims(http, account, { fromIso, toIso, limit: 100 });
+      const r = await searchClaims(http, account, { fromIso, toIso, status, limit: 100 });
 
-      res.json({ ok: true, kind: 'claims', account: { user_id: account.user_id }, ...r, from: fromIso, to: toIso });
+      res.json({ ok: true, account: { user_id: account.user_id }, from: fromIso, to: toIso, paramsUsed: r.paramsUsed, total: Array.isArray(r.data?.data) ? r.data.data.length : 0, raw: r.data });
     } catch (e) {
-      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)), detail: e?.detail });
+      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
     }
   });
 
-  // DEBUG — returns
-  router.get('/api/ml/returns/search-debug', async (req, res) => {
-    try {
-      const now = dayjs();
-      const days = Math.max(1, parseInt(req.query.days || '7', 10) || 7);
-      const fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(days, 'day').toISOString();
-      const toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
-
-      const { http, account } = await getAuthedAxios(req);
-      const r = await searchReturns(http, account, { fromIso, toIso, limit: 100 });
-
-      res.json({ ok: true, kind: 'returns', account: { user_id: account.user_id }, ...r, from: fromIso, to: toIso });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)), detail: e?.detail });
-    }
+  // DEBUG — returns/search não é suportado: devolve aviso em vez de 500
+  router.get('/api/ml/returns/search-debug', (req, res) => {
+    res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /v2/claims/{claim_id}/returns' });
   });
 
   /**
-   * Importador unificado (claims + returns)
-   *  - ?source=claims|returns|both  (padrão: both)
+   * Importa devoluções a partir dos claims
+   * Params:
    *  - ?days=60  OU  ?from=YYYY-MM-DD&to=YYYY-MM-DD
-   *  - ?silent=1 suprime logs no server
-   *  - ?debug=1 retorna erro bruto do ML
+   *  - ?status=opened,closed  (default ambos)
+   *  - ?silent=1  (menos logs)
+   *  - ?dry=1     (não persiste)
+   *  - ?debug=1   (revela erro bruto no body)
    */
   router.get('/api/ml/claims/import', async (req, res) => {
     const debug = isTrue(req.query.debug);
     try {
       const dry = isTrue(req.query.dry);
       const silent = isTrue(req.query.silent);
-      const source = (req.query.source || 'both').toLowerCase(); // claims | returns | both
-      const now = dayjs();
 
+      const now = dayjs();
       let fromIso, toIso;
       if (req.query.from || req.query.to) {
         fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(7, 'day').toISOString();
@@ -230,120 +185,136 @@ module.exports = function registerMlSync(app, opts = {}) {
         toIso   = now.toISOString();
       }
 
+      const statusList = String(req.query.status || 'opened,closed')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+
       const { http, account } = await getAuthedAxios(req);
 
-      const buckets = [];
-      const usedParams = {};
-
-      if (source === 'claims' || source === 'both') {
-        const r = await searchClaims(http, account, { fromIso, toIso, limit: 100 });
-        buckets.push({ kind: 'claims', payload: r.data });
-        usedParams.claims = { path: r.pathUsed, params: r.paramsUsed };
+      // busca claims para cada status e de-duplica por claim id
+      const claimMap = new Map();
+      const paramsUsed = [];
+      for (const st of statusList) {
+        try {
+          const r = await searchClaims(http, account, { fromIso, toIso, status: st, limit: 100 });
+          paramsUsed.push({ status: st, params: r.paramsUsed });
+          const arr = Array.isArray(r.data?.data) ? r.data.data : [];
+          for (const it of arr) {
+            const id = it?.id || it?.claim_id;
+            if (!id) continue;
+            if (!claimMap.has(id)) claimMap.set(id, it);
+          }
+        } catch (e) {
+          // segue com os outros status
+          paramsUsed.push({ status: st, error: e?.response?.data || e?.message || String(e) });
+        }
       }
-      if (source === 'returns' || source === 'both') {
-        const r = await searchReturns(http, account, { fromIso, toIso, limit: 100 });
-        buckets.push({ kind: 'returns', payload: r.data });
-        usedParams.returns = { path: r.pathUsed, params: r.paramsUsed };
-      }
 
-      let processed = 0, created = 0, updated = 0, events = 0, errors = 0, total = 0;
+      let processed = 0, created = 0, updated = 0, events = 0, errors = 0, total = claimMap.size;
       const errors_detail = [];
 
-      for (const b of buckets) {
-        const arr = Array.isArray(b.payload?.data || b.payload?.results)
-          ? (b.payload.data || b.payload.results)
-          : [];
+      for (const [claimId, it] of claimMap.entries()) {
+        try {
+          // detalhe do claim para checar related_entities
+          const claimDet = await getClaimDetail(http, claimId);
+          const hasReturn = Array.isArray(claimDet?.related_entities)
+            ? claimDet.related_entities.includes('return') || claimDet.related_entities.includes('returns')
+            : false;
 
-        total += arr.length;
+          if (!hasReturn) continue; // sem devolução
 
-        for (const it of arr) {
+          // detalhe da devolução (v2) atrelada ao claim
+          let ret;
           try {
-            const claimId = it?.id || it?.claim_id || it?.return_id;
-            if (!claimId) continue;
-
-            let det, detPathUsed;
-            if (b.kind === 'returns') {
-              const d = await getReturnDetail(http, claimId);
-              det = d.data; detPathUsed = d.pathUsed;
-            } else {
-              const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
-              det = data; detPathUsed = '/post-purchase/v1/claims/:id';
-            }
-
-            const order_id =
-              normalizeOrderId(det?.resource_id) ||
-              normalizeOrderId(det?.order_id)    ||
-              normalizeOrderId(it?.resource_id)  ||
-              normalizeOrderId(it?.order_id);
-
-            if (!order_id) continue;
-
-            const rawStatus = String(det?.status || it?.status || '').toLowerCase();
-            let status;
-            if (/rej|neg|cancel/.test(rawStatus)) status = 'rejeitado';
-            else if (/approved|accept|authoriz/.test(rawStatus)) status = 'aprovado';
-            else if (/closed|finaliz/.test(rawStatus)) status = 'encerrado';
-            else status = 'pendente';
-
-            const sku = normalizeSku(it, det);
-
-            const returnId = await ensureReturnByOrder(req, { order_id, sku, created_by: 'ml-sync' });
-
-            if (!dry) {
-              await qOf(req)(
-                `UPDATE devolucoes
-                    SET status = COALESCE($1, status),
-                        sku    = COALESCE($2, sku),
-                        updated_at = now()
-                  WHERE id = $3`,
-                [status, sku, returnId]
-              );
-              updated++;
-            }
-
-            const idemp = `ml-${b.kind}:${claimId}:${order_id}`;
-            if (!dry) {
-              await addReturnEvent(req, {
-                returnId,
-                type: `ml-${b.kind}`,
-                title: `${b.kind.slice(0,1).toUpperCase()+b.kind.slice(1)} ${claimId} (${status})`,
-                message: 'Sincronizado pelo import',
-                meta: { id: claimId, order_id, status_raw: rawStatus, kind: b.kind, detail_path: detPathUsed, usedParams },
-                idemp_key: idemp
-              });
-              events++;
-            }
-
-            processed++;
+            ret = await getReturnV2ByClaim(http, claimId);
           } catch (e) {
+            // se não encontrar o v2, apenas sinaliza e segue
             errors++;
-            errors_detail.push({
-              kind: b.kind,
-              item: typeof it?.id !== 'undefined' ? it.id : it,
-              error: String(e?.response?.data || e?.message || e)
-            });
+            errors_detail.push({ kind: 'return_v2', item: claimId, error: String(e?.response?.data || e?.message || e) });
+            continue;
           }
+
+          const order_id =
+            normalizeOrderId(ret?.resource_id) ||
+            normalizeOrderId(claimDet?.resource_id) ||
+            normalizeOrderId(it?.resource_id) ||
+            normalizeOrderId(it?.order_id);
+
+          if (!order_id) continue;
+
+          // status simplificado para nossa tabela (mantendo compat c/ valores antigos)
+          const retStatus = String(ret?.status || '').toLowerCase();
+          const status =
+            /delivered|cancelled/.test(retStatus) ? 'encerrado' : 'pendente';
+
+          const sku = normalizeSku(it, claimDet);
+
+          // garante a devolução local
+          const returnId = await ensureReturnByOrder(req, { order_id, sku, created_by: 'ml-sync' });
+
+          if (!dry) {
+            await qOf(req)(
+              `UPDATE devolucoes
+                 SET status = COALESCE($1, status),
+                     sku    = COALESCE($2, sku),
+                     updated_at = now()
+               WHERE id = $3`,
+              [status, sku, returnId]
+            );
+            updated++;
+          }
+
+          // evento idempotente
+          const idemp = `ml-claim:${claimId}:${order_id}`;
+          if (!dry) {
+            await addReturnEvent(req, {
+              returnId,
+              type: 'ml-claim',
+              title: `Claim ${claimId} (${status})`,
+              message: 'Sincronizado pelo import',
+              meta: {
+                claim_id: claimId,
+                order_id,
+                return_id: ret?.id || null,
+                return_status: retStatus,
+                status_money: ret?.status_money || null
+              },
+              idemp_key: idemp
+            });
+            events++;
+          }
+
+          processed++;
+        } catch (e) {
+          errors++;
+          errors_detail.push({
+            kind: 'claim',
+            item: claimId,
+            error: String(e?.response?.data || e?.message || e)
+          });
         }
       }
 
       if (!silent) {
-        console.log('[ml-sync] import',
-          { usedParams, from: fromIso, to: toIso, total, processed, updated, events, errors });
+        console.log('[ml-sync] import', {
+          from: fromIso, to: toIso, total, processed, updated, events, errors, paramsUsed
+        });
       }
 
       return res.json({
         ok: true,
-        usedParams,
         from: fromIso,
         to: toIso,
         total,
         processed, created, updated, events, errors,
+        paramsUsed,
         errors_detail
       });
 
     } catch (e) {
       const detail = e?.response?.data || e?.message || String(e);
-      if (debug) return res.status(500).json({ ok: false, error: detail, detail: e?.detail });
+      if (debug) return res.status(500).json({ ok: false, error: detail });
       return res.status(500).json({ ok: false, error: 'Falha ao importar' });
     }
   });
