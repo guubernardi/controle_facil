@@ -38,6 +38,10 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
+  function jserr(e) {
+    return JSON.stringify(e?.response?.data ?? e?.toJSON?.() ?? e?.message ?? String(e));
+  }
+
   async function addReturnEvent(req, {
     returnId, type, title = null, message = null, meta = null,
     created_by = 'ml-sync', idemp_key = null
@@ -89,49 +93,110 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
-  // --------- ML helpers (v2 claims search + return por claim) ----------
+  /* ---------------------- buscas com fallback ------------------------ */
 
-  // /v2/claims/search — busca por status com paginação
-  async function searchClaimsV2(http, { user_id }, { status, limit = 200, offset = 0 }) {
-    const params = {
-      'seller.id': user_id,
-      status,
-      limit,
-      offset,
-      sort: 'date_created:desc'
-    };
-    const { data } = await http.get('/v2/claims/search', { params });
-    const list = Array.isArray(data?.results) ? data.results
-              : Array.isArray(data?.data)    ? data.data
-              : [];
-    const paging = data?.paging || { total: list.length, limit, offset };
-    return { list, paging, paramsUsed: params, raw: data };
+  // Extrai lista de claims em diferentes formatos
+  function extractClaimsList(data) {
+    if (Array.isArray(data?.results)) return data.results;
+    if (Array.isArray(data?.data))    return data.data;
+    if (Array.isArray(data))          return data;
+    return [];
   }
 
-  // Detalhe do claim (v1) — útil para pegar item/sku e resource_id quando faltar
-  async function getClaimDetail(http, claimId) {
-    try {
-      const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
-      return data;
-    } catch {
-      return null;
+  // Tenta várias rotas/params p/ claims.search (SEM range de datas)
+  async function searchClaimsWithFallback(http, account, { status, limit = 200, offset = 0 }) {
+    const tries = [
+      {
+        path: '/post-purchase/v1/claims/search',
+        label: 'v1:new',
+        params: {
+          player_role: 'seller',
+          player_user_id: account.user_id,
+          status,
+          site_id: account.site_id || undefined,
+          sort: 'date_created:desc',
+          limit, offset
+        }
+      },
+      {
+        path: '/post-purchase/v1/claims/search',
+        label: 'v1:oldA',
+        params: {
+          'seller.id': account.user_id,
+          status,
+          sort: 'date_created:desc',
+          limit, offset
+        }
+      },
+      {
+        path: '/post-purchase/v1/claims/search',
+        label: 'v1:oldB',
+        params: {
+          seller: account.user_id,
+          status,
+          sort: 'date_created:desc',
+          limit, offset
+        }
+      },
+      {
+        path: '/v2/claims/search',
+        label: 'v2',
+        params: {
+          'seller.id': account.user_id,
+          status,
+          sort: 'date_created:desc',
+          limit, offset
+        }
+      }
+    ];
+
+    const errors = [];
+    for (const t of tries) {
+      try {
+        const { data } = await http.get(t.path, { params: t.params });
+        const list = extractClaimsList(data);
+        const paging = data?.paging || { total: list.length, limit, offset };
+        return { list, paging, used: { path: t.path, label: t.label, params: t.params }, raw: data };
+      } catch (e) {
+        errors.push({ try: { path: t.path, label: t.label }, error: e?.response?.status, body: e?.response?.data || e?.message });
+      }
     }
+    const err = new Error('claims_search_failed');
+    err.detail = errors;
+    throw err;
   }
 
-  // /post-purchase/v2/claims/{id}/returns
-  async function getReturnByClaimV2(http, claimId) {
-    const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
-    if (!data) return null;
-    if (Array.isArray(data)) return data[0] || null;
+  // Detalhe do claim (v1)
+  async function getClaimDetail(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
     return data;
   }
 
-  // Mapeia status do return (ML) para status local
-  function mapReturnStatus(retStatus = '') {
-    const s = String(retStatus).toLowerCase();
-    // Encerrado quando finalizado/cancelado/entregue
-    if (/delivered|returned|cancelled|closed|finaliz/.test(s)) return 'encerrado';
-    // Pendente para demais (em trânsito, postagem, etc.)
+  // Detalhe do return por claim — tenta múltiplas rotas
+  async function getReturnByClaim(http, claimId) {
+    const paths = [
+      `/post-purchase/v2/claims/${claimId}/returns`,
+      `/v2/claims/${claimId}/returns`,
+      `/post-purchase/v1/claims/${claimId}/returns`
+    ];
+    const errs = [];
+    for (const p of paths) {
+      try {
+        const { data } = await http.get(p);
+        if (!data) continue;
+        return { data: Array.isArray(data) ? (data[0] || null) : data, pathUsed: p };
+      } catch (e) {
+        errs.push({ path: p, status: e?.response?.status, body: e?.response?.data || e?.message });
+      }
+    }
+    const err = new Error('return_by_claim_not_found');
+    err.detail = errs;
+    throw err;
+  }
+
+  function mapReturnStatus(s = '') {
+    const v = String(s).toLowerCase();
+    if (/delivered|returned|cancelled|closed|finaliz/.test(v)) return 'encerrado';
     return 'pendente';
   }
 
@@ -147,12 +212,11 @@ module.exports = function registerMlSync(app, opts = {}) {
         me
       });
     } catch (e) {
-      const detail = e?.response?.data || e?.message || String(e);
-      return res.status(500).json({ ok: false, error: detail });
+      return res.status(500).json({ ok: false, error: e?.response?.data || e?.message || String(e) });
     }
   });
 
-  // DEBUG — claims v2 (sem range de datas; usa status + paginação)
+  // DEBUG — claims.search com fallback
   router.get('/api/ml/claims/search-debug', async (req, res) => {
     try {
       const status = (req.query.status || 'opened').toLowerCase();
@@ -160,36 +224,35 @@ module.exports = function registerMlSync(app, opts = {}) {
       const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
 
       const { http, account } = await getAuthedAxios(req);
-      const r = await searchClaimsV2(http, account, { status, limit, offset });
+      const r = await searchClaimsWithFallback(http, account, { status, limit, offset });
 
       res.json({
         ok: true,
         account: { user_id: account.user_id },
         status, limit, offset,
-        pageTotal: r.list.length,
+        pageCount: r.list.length,
         paging: r.paging,
-        paramsUsed: r.paramsUsed,
+        used: r.used,
         sample: r.list.slice(0, 3)
       });
     } catch (e) {
-      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
+      res.status(500).json({ ok: false, error: jserr(e), detail: e?.detail });
     }
   });
 
-  // DEBUG — returns/search não é suportado
+  // DEBUG — returns/search não existe
   router.get('/api/ml/returns/search-debug', (req, res) => {
-    res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /v2/claims/{claim_id}/returns' });
-    return;
+    res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /claims/{claim_id}/returns' });
   });
 
   /**
-   * Importa devoluções a partir dos claims (v2)
-   * Params:
-   *  - ?statuses=opened,in_progress,closed   (default: opened,in_progress)
-   *  - ?max=1000   (máximo de registros por status; default 1000)
-   *  - ?silent=1   (menos logs)
-   *  - ?dry=1      (não persiste)
-   *  - ?debug=1    (retorna erro bruto)
+   * Importa devoluções a partir dos claims (paginação por status)
+   * Query:
+   *  - ?statuses=opened,in_progress (default)
+   *  - ?max=1000  (máx. por status)
+   *  - ?silent=1  (menos logs)
+   *  - ?dry=1     (não grava)
+   *  - ?debug=1   (retorna erro bruto)
    */
   router.get('/api/ml/claims/import', async (req, res) => {
     const debug = isTrue(req.query.debug);
@@ -201,7 +264,8 @@ module.exports = function registerMlSync(app, opts = {}) {
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
       const maxPerStatus = Math.max(1, parseInt(req.query.max || '1000', 10) || 1000);
-      const pageLimit = 200; // limite máximo da API
+      const pageLimit = 200;
+
       const { http, account } = await getAuthedAxios(req);
 
       let processed = 0, updated = 0, events = 0, errors = 0, total = 0;
@@ -209,18 +273,17 @@ module.exports = function registerMlSync(app, opts = {}) {
       const paramsUsed = [];
 
       for (const st of statuses) {
-        let offset = 0;
-        let fetched = 0;
+        let offset = 0, fetched = 0;
 
         while (fetched < maxPerStatus) {
-          let list = [], paging = {};
+          let list = [], used = null;
           try {
-            const r = await searchClaimsV2(http, account, { status: st, limit: pageLimit, offset });
-            paramsUsed.push({ status: st, page: (offset / pageLimit) + 1, params: r.paramsUsed, paging: r.paging });
-            list = r.list; paging = r.paging || {};
+            const r = await searchClaimsWithFallback(http, account, { status: st, limit: pageLimit, offset });
+            list = r.list; used = r.used;
+            paramsUsed.push({ status: st, page: (offset / pageLimit) + 1, used });
           } catch (e) {
             errors++;
-            errors_detail.push({ kind: 'claims_search', status: st, error: String(e?.response?.data || e?.message || e) });
+            errors_detail.push({ kind: 'claims_search', status: st, error: jserr(e), detail: e?.detail });
             break;
           }
 
@@ -232,14 +295,21 @@ module.exports = function registerMlSync(app, opts = {}) {
               const claimId = it?.id || it?.claim_id;
               if (!claimId) continue;
 
-              // busca o return vinculado ao claim
-              const ret = await getReturnByClaimV2(http, claimId).catch(() => null);
-              if (!ret) continue; // claim sem return
+              // tenta obter o return vinculado ao claim
+              let ret, retPath;
+              try {
+                const r = await getReturnByClaim(http, claimId);
+                ret = r.data; retPath = r.pathUsed;
+                if (!ret) continue;
+              } catch (e) {
+                // sem return para esse claim — segue
+                continue;
+              }
 
-              // detalhe do claim só se necessário (para SKU/resource_id)
+              // SKU + order
               let claimDet = null;
-              if (!normalizeOrderId(ret?.resource_id) && !normalizeSku(it, null)) {
-                claimDet = await getClaimDetail(http, claimId);
+              if (!normalizeOrderId(ret?.resource_id)) {
+                try { claimDet = await getClaimDetail(http, claimId); } catch (_) {}
               }
 
               const order_id =
@@ -275,7 +345,7 @@ module.exports = function registerMlSync(app, opts = {}) {
                   type: 'ml-returns',
                   title: `Return via Claim ${claimId} (${status})`,
                   message: 'Sincronizado pelo import (claims→returns)',
-                  meta: { claim_id: claimId, order_id, return_id: ret?.id || null, return_status: ret?.status || null },
+                  meta: { claim_id: claimId, order_id, return_id: ret?.id || null, return_status: ret?.status || null, ret_path: retPath, used },
                   idemp_key: idemp
                 });
                 events++;
@@ -284,23 +354,19 @@ module.exports = function registerMlSync(app, opts = {}) {
               processed++;
             } catch (e) {
               errors++;
-              errors_detail.push({
-                kind: 'claim_item',
-                error: String(e?.response?.data || e?.message || e),
-                item: it?.id || it
-              });
+              errors_detail.push({ kind: 'claim_item', error: jserr(e), item: it?.id || it });
             }
           }
 
           fetched += list.length;
-          if (list.length < pageLimit) break; // última página
+          if (list.length < pageLimit) break;
           offset += pageLimit;
           if (fetched >= maxPerStatus) break;
         }
       }
 
       if (!silent) {
-        console.log('[ml-sync] import (returns via claims v2)', { statuses, total, processed, updated, events, errors });
+        console.log('[ml-sync] import (claims→returns)', { statuses, total, processed, updated, events, errors });
       }
 
       return res.json({
