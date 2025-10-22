@@ -103,6 +103,29 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
+/** Guard /api (allowlist p/ auth/health + job-token) — vem ANTES das rotas protegidas */
+app.use('/api', (req, res, next) => {
+  // como este middleware está montado em "/api", aqui o req.path vem como "/auth/register", etc.
+  const p = req.path || '';
+  const orig = req.originalUrl || '';
+
+  const isOpen =
+    p === '/health' ||
+    p === '/db/ping' ||
+    p.startsWith('/auth/'); // cobre /api/auth/* (register, check-email, login, me, logout)
+
+  // Exceção segura: job interno chama /api/ml/claims/import com token
+  const jobHeader = req.get('x-job-token');
+  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
+  const isJob     = /^\/api\/ml\/claims\/import(?:\?|$)/i.test(orig) && jobHeader && jobToken && jobHeader === jobToken;
+
+  if (isOpen || isJob) return next();
+  if (req.session?.user) return next();
+
+  console.warn('[GUARD 401]', req.method, orig, 'path=', p);
+  return res.status(401).json({ error: 'Não autorizado' });
+});
+
 /** Helper para usar a conexão do middleware (req.q) com fallback */
 const qOf = (req) => (req?.q || query);
 
@@ -123,26 +146,6 @@ try {
 
 /** Compat: front antigo que POSTava em /login */
 app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
-
-/** Guard /api (allowlist p/ auth/health + job-token) — vem ANTES das rotas protegidas */
-app.use('/api', (req, res, next) => {
-  const orig = req.originalUrl || '';
-
-  // Endpoints públicos da API
-  if (/^\/api\/(health|db\/ping|auth(?:\/|$))/i.test(orig)) {
-    return next();
-  }
-
-  // Exceção segura: job interno chama /api/ml/claims/import com token
-  const jobHeader = req.get('x-job-token');
-  const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
-  if (/^\/api\/ml\/claims\/import(?:\?|$)/i.test(orig) && jobHeader && jobToken && jobHeader === jobToken) {
-    return next();
-  }
-
-  if (req.session?.user) return next();
-  return res.status(401).json({ error: 'Não autorizado' });
-});
 
 /** --------- MULTI-TENANT (RLS) --------- */
 try {
@@ -166,6 +169,7 @@ app.use('/api', (req, _res, next) => {
     if (req.tenant.id == null && user.tenant_id != null) {
       req.tenant.id = user.tenant_id;
     }
+
     next();
   } catch {
     next();
