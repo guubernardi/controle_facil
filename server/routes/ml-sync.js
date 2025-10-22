@@ -8,6 +8,8 @@ const { getAuthedAxios } = require('../mlClient');
 
 const isTrue = v => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
 const qOf = (req) => (req?.q || query);
+// ML exige timezone com dois-pontos (ex: 2025-10-22T12:34:56.789-03:00)
+const fmtML = (d) => dayjs(d).format('YYYY-MM-DDTHH:mm:ss.SSSZ');
 
 module.exports = function registerMlSync(app, opts = {}) {
   const router = express.Router();
@@ -36,10 +38,6 @@ module.exports = function registerMlSync(app, opts = {}) {
       it?.item?.seller_sku ||
       null
     );
-  }
-
-  function jserr(e) {
-    return JSON.stringify(e?.response?.data ?? e?.toJSON?.() ?? e?.message ?? String(e));
   }
 
   async function addReturnEvent(req, {
@@ -93,111 +91,73 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
-  /* ---------------------- buscas com fallback ------------------------ */
+  /* ----------------- ML: claims search + returns(v2) ------------------ */
 
-  // Extrai lista de claims em diferentes formatos
-  function extractClaimsList(data) {
-    if (Array.isArray(data?.results)) return data.results;
-    if (Array.isArray(data?.data))    return data.data;
-    if (Array.isArray(data))          return data;
-    return [];
+  // faz 1 chamada ao /post-purchase/v1/claims/search com fallback de params (novos/antigos)
+  async function oneClaimsPage(http, account, { status, fromIso, toIso, limit = 200, offset = 0 }) {
+    const path = '/post-purchase/v1/claims/search';
+
+    // params "novos" (funcionam hoje)
+    const pNew = {
+      player_role: 'seller',
+      player_user_id: account.user_id,
+      status,
+      range: `date_created:after:${fmtML(fromIso)}:before:${fmtML(toIso)}`,
+      sort: 'date_created:desc',
+      limit,
+      offset
+    };
+
+    try {
+      const { data } = await http.get(path, { params: pNew });
+      return { data, used: { path, label: 'v1:new', params: pNew } };
+    } catch (e) {
+      // tenta forma "antiga"
+      const pOld = {
+        'seller.id': account.user_id,
+        status,
+        'date_created.from': fmtML(fromIso),
+        'date_created.to'  : fmtML(toIso),
+        sort: 'date_created:desc',
+        limit,
+        offset
+      };
+      const { data } = await http.get(path, { params: pOld });
+      return { data, used: { path, label: 'v1:old', params: pOld } };
+    }
   }
 
-  // Tenta várias rotas/params p/ claims.search (SEM range de datas)
-  async function searchClaimsWithFallback(http, account, { status, limit = 200, offset = 0 }) {
-    const tries = [
-      {
-        path: '/post-purchase/v1/claims/search',
-        label: 'v1:new',
-        params: {
-          player_role: 'seller',
-          player_user_id: account.user_id,
-          status,
-          site_id: account.site_id || undefined,
-          sort: 'date_created:desc',
-          limit, offset
-        }
-      },
-      {
-        path: '/post-purchase/v1/claims/search',
-        label: 'v1:oldA',
-        params: {
-          'seller.id': account.user_id,
-          status,
-          sort: 'date_created:desc',
-          limit, offset
-        }
-      },
-      {
-        path: '/post-purchase/v1/claims/search',
-        label: 'v1:oldB',
-        params: {
-          seller: account.user_id,
-          status,
-          sort: 'date_created:desc',
-          limit, offset
-        }
-      },
-      {
-        path: '/v2/claims/search',
-        label: 'v2',
-        params: {
-          'seller.id': account.user_id,
-          status,
-          sort: 'date_created:desc',
-          limit, offset
-        }
-      }
-    ];
+  // pagina por todos os status pedidos, até um máximo de itens
+  async function paginateClaims(http, account, { statuses, fromIso, toIso, limitPerPage = 200, max = 1000 }) {
+    const out = [];
+    const used = [];
+    for (const status of statuses) {
+      let offset = 0;
+      while (out.length < max) {
+        const { data, used: meta } = await oneClaimsPage(http, account, {
+          status, fromIso, toIso, limit: limitPerPage, offset
+        });
+        used.push({ status, page: (offset/limitPerPage)+1, used: meta });
 
-    const errors = [];
-    for (const t of tries) {
-      try {
-        const { data } = await http.get(t.path, { params: t.params });
-        const list = extractClaimsList(data);
-        const paging = data?.paging || { total: list.length, limit, offset };
-        return { list, paging, used: { path: t.path, label: t.label, params: t.params }, raw: data };
-      } catch (e) {
-        errors.push({ try: { path: t.path, label: t.label }, error: e?.response?.status, body: e?.response?.data || e?.message });
+        const arr = Array.isArray(data?.data) ? data.data : [];
+        if (!arr.length) break;
+
+        out.push(...arr);
+        if (arr.length < limitPerPage) break; // última página
+        offset += limitPerPage;
       }
     }
-    const err = new Error('claims_search_failed');
-    err.detail = errors;
-    throw err;
+    return { items: out.slice(0, max), used };
   }
 
-  // Detalhe do claim (v1)
   async function getClaimDetail(http, claimId) {
     const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
     return data;
   }
 
-  // Detalhe do return por claim — tenta múltiplas rotas
-  async function getReturnByClaim(http, claimId) {
-    const paths = [
-      `/post-purchase/v2/claims/${claimId}/returns`,
-      `/v2/claims/${claimId}/returns`,
-      `/post-purchase/v1/claims/${claimId}/returns`
-    ];
-    const errs = [];
-    for (const p of paths) {
-      try {
-        const { data } = await http.get(p);
-        if (!data) continue;
-        return { data: Array.isArray(data) ? (data[0] || null) : data, pathUsed: p };
-      } catch (e) {
-        errs.push({ path: p, status: e?.response?.status, body: e?.response?.data || e?.message });
-      }
-    }
-    const err = new Error('return_by_claim_not_found');
-    err.detail = errs;
-    throw err;
-  }
-
-  function mapReturnStatus(s = '') {
-    const v = String(s).toLowerCase();
-    if (/delivered|returned|cancelled|closed|finaliz/.test(v)) return 'encerrado';
-    return 'pendente';
+  async function getReturnV2ByClaim(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
+    return data;
   }
 
   /* ------------------------------- rotas ------------------------------ */
@@ -212,172 +172,186 @@ module.exports = function registerMlSync(app, opts = {}) {
         me
       });
     } catch (e) {
-      return res.status(500).json({ ok: false, error: e?.response?.data || e?.message || String(e) });
+      const detail = e?.response?.data || e?.message || String(e);
+      return res.status(500).json({ ok: false, error: detail });
     }
   });
 
-  // DEBUG — claims.search com fallback
+  // DEBUG — claims (mostra params usados e 1ª página)
   router.get('/api/ml/claims/search-debug', async (req, res) => {
     try {
-      const status = (req.query.status || 'opened').toLowerCase();
-      const limit  = Math.min(200, parseInt(req.query.limit || '50', 10) || 50);
-      const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
+      const now = dayjs();
+      const days = Math.max(1, parseInt(req.query.days || '7', 10) || 7);
+      const fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(days, 'day').toISOString();
+      const toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
+      const status  = (req.query.status || 'opened').toLowerCase();
+      const limit   = Math.min(200, parseInt(req.query.limit || '5', 10) || 5);
 
       const { http, account } = await getAuthedAxios(req);
-      const r = await searchClaimsWithFallback(http, account, { status, limit, offset });
+      const r = await oneClaimsPage(http, account, { status, fromIso, toIso, limit, offset: 0 });
 
       res.json({
         ok: true,
         account: { user_id: account.user_id },
-        status, limit, offset,
-        pageCount: r.list.length,
-        paging: r.paging,
+        status,
+        limit,
+        paging: { total: Array.isArray(r.data?.data) ? r.data.data.length : 0, offset: 0, limit },
         used: r.used,
-        sample: r.list.slice(0, 3)
+        sample: Array.isArray(r.data?.data) ? r.data.data.slice(0, limit) : []
       });
     } catch (e) {
-      res.status(500).json({ ok: false, error: jserr(e), detail: e?.detail });
+      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
     }
   });
 
-  // DEBUG — returns/search não existe
-  router.get('/api/ml/returns/search-debug', (req, res) => {
-    res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /claims/{claim_id}/returns' });
+  // DEBUG — returns/search não existe no ML
+  router.get('/api/ml/returns/search-debug', (_req, res) => {
+    res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /v2/claims/{claim_id}/returns' });
   });
 
   /**
-   * Importa devoluções a partir dos claims (paginação por status)
+   * Importa devoluções a partir dos claims
    * Query:
-   *  - ?statuses=opened,in_progress (default)
-   *  - ?max=1000  (máx. por status)
-   *  - ?silent=1  (menos logs)
-   *  - ?dry=1     (não grava)
-   *  - ?debug=1   (retorna erro bruto)
+   *  - days=60  OU  from=YYYY-MM-DD&to=YYYY-MM-DD
+   *  - statuses=opened,closed,in_progress  (default: opened,closed)
+   *  - max=1000 (limite duro de itens)
+   *  - dry=1 (não persiste), silent=1 (menos logs), debug=1 (erro bruto)
    */
   router.get('/api/ml/claims/import', async (req, res) => {
     const debug = isTrue(req.query.debug);
     try {
-      const dry    = isTrue(req.query.dry);
+      const dry = isTrue(req.query.dry);
       const silent = isTrue(req.query.silent);
 
-      const statuses = String(req.query.statuses || 'opened,in_progress')
-        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      const now = dayjs();
+      let fromIso, toIso;
+      if (req.query.from || req.query.to) {
+        fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(7, 'day').toISOString();
+        toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
+      } else if (req.query.days) {
+        const days = Math.max(1, parseInt(req.query.days, 10) || 7);
+        fromIso = now.subtract(days, 'day').toISOString();
+        toIso   = now.toISOString();
+      } else {
+        fromIso = now.subtract(7, 'day').toISOString();
+        toIso   = now.toISOString();
+      }
 
-      const maxPerStatus = Math.max(1, parseInt(req.query.max || '1000', 10) || 1000);
-      const pageLimit = 200;
+      const statuses = String(req.query.statuses || req.query.status || 'opened,closed')
+        .split(',')
+        .map(s => s.trim().toLowerCase())
+        .filter(Boolean);
+
+      const max = Math.max(1, Math.min(5000, parseInt(req.query.max || '1000', 10) || 1000));
+      const limitPerPage = 200;
 
       const { http, account } = await getAuthedAxios(req);
 
-      let processed = 0, updated = 0, events = 0, errors = 0, total = 0;
+      // pagina claims de todos os status solicitados
+      const pag = await paginateClaims(http, account, { statuses, fromIso, toIso, limitPerPage, max });
+      const claims = pag.items;
+
+      // de-dup por id (caso o mesmo claim apareça em >1 status)
+      const map = new Map();
+      for (const it of claims) {
+        const id = it?.id || it?.claim_id;
+        if (id && !map.has(id)) map.set(id, it);
+      }
+
+      let processed = 0, created = 0, updated = 0, events = 0, errors = 0;
       const errors_detail = [];
-      const paramsUsed = [];
 
-      for (const st of statuses) {
-        let offset = 0, fetched = 0;
+      for (const [claimId, it] of map.entries()) {
+        try {
+          const claimDet = await getClaimDetail(http, claimId);
+          const hasReturn = Array.isArray(claimDet?.related_entities)
+            ? (claimDet.related_entities.includes('return') || claimDet.related_entities.includes('returns'))
+            : false;
+          if (!hasReturn) continue;
 
-        while (fetched < maxPerStatus) {
-          let list = [], used = null;
+          let ret;
           try {
-            const r = await searchClaimsWithFallback(http, account, { status: st, limit: pageLimit, offset });
-            list = r.list; used = r.used;
-            paramsUsed.push({ status: st, page: (offset / pageLimit) + 1, used });
+            ret = await getReturnV2ByClaim(http, claimId);
           } catch (e) {
             errors++;
-            errors_detail.push({ kind: 'claims_search', status: st, error: jserr(e), detail: e?.detail });
-            break;
+            errors_detail.push({ kind: 'return_v2', item: claimId, error: String(e?.response?.data || e?.message || e) });
+            continue;
           }
 
-          if (!Array.isArray(list) || list.length === 0) break;
-          total += list.length;
+          const order_id =
+            normalizeOrderId(ret?.resource_id) ||
+            normalizeOrderId(claimDet?.resource_id) ||
+            normalizeOrderId(it?.resource_id) ||
+            normalizeOrderId(it?.order_id);
 
-          for (const it of list) {
-            try {
-              const claimId = it?.id || it?.claim_id;
-              if (!claimId) continue;
+          if (!order_id) continue;
 
-              // tenta obter o return vinculado ao claim
-              let ret, retPath;
-              try {
-                const r = await getReturnByClaim(http, claimId);
-                ret = r.data; retPath = r.pathUsed;
-                if (!ret) continue;
-              } catch (e) {
-                // sem return para esse claim — segue
-                continue;
-              }
+          const retStatus = String(ret?.status || '').toLowerCase();
+          // mapeamento simples para nossos status
+          let status = 'pendente';
+          if (/delivered|closed|cancelled|canceled|finished/.test(retStatus)) status = 'encerrado';
+          else if (/approved|authorized|accepted/.test(retStatus))          status = 'aprovado';
+          else if (/rejected|denied|declined/.test(retStatus))               status = 'rejeitado';
 
-              // SKU + order
-              let claimDet = null;
-              if (!normalizeOrderId(ret?.resource_id)) {
-                try { claimDet = await getClaimDetail(http, claimId); } catch (_) {}
-              }
+          const sku = normalizeSku(it, claimDet);
 
-              const order_id =
-                normalizeOrderId(ret?.resource_id) ||
-                normalizeOrderId(ret?.order_id)    ||
-                normalizeOrderId(it?.resource_id)  ||
-                normalizeOrderId(it?.order_id)     ||
-                normalizeOrderId(claimDet?.resource_id);
+          const returnId = await ensureReturnByOrder(req, { order_id, sku, created_by: 'ml-sync' });
 
-              if (!order_id) continue;
-
-              const status = mapReturnStatus(ret?.status);
-              const sku = normalizeSku(it, claimDet);
-
-              const returnId = await ensureReturnByOrder(req, { order_id, sku, created_by: 'ml-sync' });
-
-              if (!dry) {
-                await qOf(req)(
-                  `UPDATE devolucoes
-                      SET status = COALESCE($1, status),
-                          sku    = COALESCE($2, sku),
-                          updated_at = now()
-                    WHERE id = $3`,
-                  [status, sku, returnId]
-                );
-                updated++;
-              }
-
-              const idemp = `ml-returns:${claimId}:${order_id}`;
-              if (!dry) {
-                await addReturnEvent(req, {
-                  returnId,
-                  type: 'ml-returns',
-                  title: `Return via Claim ${claimId} (${status})`,
-                  message: 'Sincronizado pelo import (claims→returns)',
-                  meta: { claim_id: claimId, order_id, return_id: ret?.id || null, return_status: ret?.status || null, ret_path: retPath, used },
-                  idemp_key: idemp
-                });
-                events++;
-              }
-
-              processed++;
-            } catch (e) {
-              errors++;
-              errors_detail.push({ kind: 'claim_item', error: jserr(e), item: it?.id || it });
-            }
+          if (!dry) {
+            await qOf(req)(
+              `UPDATE devolucoes
+                 SET status = COALESCE($1, status),
+                     sku    = COALESCE($2, sku),
+                     updated_at = now()
+               WHERE id = $3`,
+              [status, sku, returnId]
+            );
+            updated++;
           }
 
-          fetched += list.length;
-          if (list.length < pageLimit) break;
-          offset += pageLimit;
-          if (fetched >= maxPerStatus) break;
+          const idemp = `ml-claim:${claimId}:${order_id}`;
+          if (!dry) {
+            await addReturnEvent(req, {
+              returnId,
+              type: 'ml-claim',
+              title: `Claim ${claimId} (${status})`,
+              message: 'Sincronizado pelo import',
+              meta: {
+                claim_id: claimId,
+                order_id,
+                return_id: ret?.id || null,
+                return_status: retStatus,
+                status_money: ret?.status_money || null
+              },
+              idemp_key: idemp
+            });
+            events++;
+          }
+
+          processed++;
+        } catch (e) {
+          errors++;
+          errors_detail.push({
+            kind: 'claim',
+            item: claimId,
+            error: String(e?.response?.data || e?.message || e)
+          });
         }
       }
 
       if (!silent) {
-        console.log('[ml-sync] import (claims→returns)', { statuses, total, processed, updated, events, errors });
+        console.log('[ml-sync] import', {
+          from: fromIso, to: toIso, total: map.size, processed, updated, events, errors,
+          statuses, used: pag.used
+        });
       }
 
       return res.json({
         ok: true,
         statuses,
-        total,
-        processed,
-        updated,
-        events,
-        errors,
-        paramsUsed,
+        total: map.size,
+        processed, created, updated, events, errors,
+        paramsUsed: pag.used,
         errors_detail
       });
 
