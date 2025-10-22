@@ -64,6 +64,21 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
+  // Healthcheck do token/conta ML
+  // GET /api/ml/ping
+  router.get('/api/ml/ping', async (req, res) => {
+    try {
+      const { http, account } = await getAuthedAxios(req);
+      const { data } = await http.get('/users/me');
+      return res.json({ ok: true, account, me: data });
+    } catch (e) {
+      const status = e?.response?.status || null;
+      const detail = e?.response?.data || e?.message || String(e);
+      console.error('[ml-sync] ping error:', status, detail);
+      return res.status(500).json({ ok: false, status, error: detail });
+    }
+  });
+
   /**
    * Importa claims/devoluções do ML
    * Exemplos:
@@ -71,10 +86,11 @@ module.exports = function registerMlSync(app, opts = {}) {
    *  GET /api/ml/claims/import?days=30
    *  GET /api/ml/claims/import?from=2025-10-01&to=2025-10-08
    *  GET /api/ml/claims/import?days=60&silent=1
+   *  GET /api/ml/claims/import?days=60&debug=1   (exibe erro detalhado)
    */
   router.get('/api/ml/claims/import', async (req, res) => {
     try {
-      const dry = isTrue(req.query.dry);
+      const dry    = isTrue(req.query.dry);
       const silent = isTrue(req.query.silent);
 
       // Janela temporal
@@ -94,7 +110,6 @@ module.exports = function registerMlSync(app, opts = {}) {
       }
 
       // Axios autenticado scoped ao tenant/usuário atual
-      // (getAuthedAxios aceita req para escolher a conta correta)
       const { http, account } = await getAuthedAxios(req);
 
       if (!account?.user_id) {
@@ -186,8 +201,12 @@ module.exports = function registerMlSync(app, opts = {}) {
       }
 
       if (!silent) {
-        console.log('[ml-sync] import',
-          { from: fromIso, to: toIso, count: raw.length, processed, updated, events, errors });
+        console.log('[ml-sync] import', {
+          tenant: req?.tenant?.id || req?.tenant?.slug || null,
+          account: account?.user_id || null,
+          from: fromIso, to: toIso,
+          count: raw.length, processed, updated, events, errors
+        });
       }
 
       return res.json({
@@ -204,12 +223,16 @@ module.exports = function registerMlSync(app, opts = {}) {
       });
 
     } catch (e) {
-      console.error('[ml-sync] import error:', e);
+      const status = e?.response?.status || null;
+      const detail = e?.response?.data || e?.message || String(e);
+      console.error('[ml-sync] import error:', status, detail);
+
       const reveal = String(process.env.REVEAL_ERRORS ?? 'false').toLowerCase() === 'true';
-      const msg = reveal
-        ? (e?.response?.data || e?.message || String(e))
-        : 'Falha ao importar';
-      return res.status(500).json({ ok: false, error: msg });
+      const debug  = isTrue(req.query.debug);
+      if (reveal || debug) {
+        return res.status(500).json({ ok: false, status, error: detail });
+      }
+      return res.status(500).json({ ok: false, error: 'Falha ao importar' });
     }
   });
 
