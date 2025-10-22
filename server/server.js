@@ -384,6 +384,24 @@ app.get('/api/db/ping', async (req, res) => {
 });
 
 /* ------------------------------------------------------------
+ *  DEBUG do tenant (útil pra validar RLS)
+ * ------------------------------------------------------------ */
+app.get('/api/_debug/tenant', async (req, res) => {
+  try {
+    const q = qOf(req);
+    const r = await q(`
+      SELECT
+        current_setting('app.tenant_id',   true) AS tenant_id,
+        current_setting('app.tenant_slug', true) AS tenant_slug
+    `);
+    const { rows } = await q('SELECT COUNT(*)::int AS n FROM devolucoes');
+    res.json({ ...r.rows[0], devolucoes_visiveis: rows[0]?.n || 0 });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+/* ------------------------------------------------------------
  *  Events API — listar eventos por return_id (auditoria)
  * ------------------------------------------------------------ */
 app.get('/api/returns/:id/events', async (req, res) => {
