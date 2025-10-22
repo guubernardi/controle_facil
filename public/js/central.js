@@ -126,17 +126,36 @@ function handleNewReclamacoes(rows) {
 
 // “Devoluções a caminho” (dados)
 async function fetchACaminho() {
-  let res  = await api("/api/returns?status=recebido_cd&page=1&pageSize=20").catch(() => null);
-  let rows = Array.isArray(res?.items) ? res.items : [];
-  if (!rows.length) {
-    res  = await api("/api/returns?status=em_inspecao&page=1&pageSize=20").catch(() => null);
-    rows = Array.isArray(res?.items) ? res.items : [];
+  // ML-Sync persiste status: pendente | aprovado | encerrado | rejeitado
+  // Para “a caminho”, priorizamos aprovados; depois pendentes (fallback).
+  const tryStatuses = ["aprovado", "pendente", "recebido_cd", "em_inspecao"];
+  const picked = [];
+  const seenIds = new Set();
+
+  for (const st of tryStatuses) {
+    const res = await api(`/api/returns?status=${encodeURIComponent(st)}&page=1&pageSize=50`).catch(() => null);
+    const items = Array.isArray(res?.items) ? res.items : [];
+    for (const it of items) {
+      const key = String(it.id ?? it.return_id ?? it.id_venda ?? Math.random());
+      if (seenIds.has(key)) continue;
+      seenIds.add(key);
+
+      picked.push({
+        ...it,
+        _prio: (it.loja_nome || "").toLowerCase().includes("mercado") ? 1 : 0
+      });
+      if (picked.length >= 6) break;
+    }
+    if (picked.length >= 6) break;
   }
-  if (!rows.length) {
-    res  = await api("/api/returns?status=pendente&page=1&pageSize=20").catch(() => null);
-    rows = Array.isArray(res?.items) ? res.items : [];
-  }
-  return rows.slice(0, 6);
+
+  // Prioriza ML e mais recentes
+  picked.sort((a, b) =>
+    (b._prio - a._prio) ||
+    new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)
+  );
+
+  return picked.slice(0, 6);
 }
 
 // “Devoluções a caminho” (render)
