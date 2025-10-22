@@ -2,8 +2,10 @@
 'use strict';
 
 const express = require('express');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');               // unifica com o auth.js
 const { query } = require('../db');
+
+const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
 function signupEnabled() {
   return String(process.env.OPEN_SIGNUP ?? 'false').toLowerCase() === 'true';
@@ -13,25 +15,28 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').toLowerCase());
 }
 
+// Em ambientes novos SEM migrations rodadas, criamos o básico.
+// Em bancos já migrados (001_users.sql), isso só faz no-ops.
 async function ensureUsersTable() {
-  // Cria tabela básica (se não existir)
   await query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user',
+      role TEXT NOT NULL DEFAULT 'operador',   -- alinhar com o CHECK das migrations
       company TEXT,
       tenant_id INT,
-      created_at TIMESTAMP NOT NULL DEFAULT now()
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      last_login_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
-  // Unicidade case-insensitive de e-mail
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email));`);
-  // Garante colunas extras caso a tabela já existisse
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company   TEXT;`);
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id INT;`);
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
 }
 
 module.exports = function registerAuthRegister(app) {
@@ -41,7 +46,7 @@ module.exports = function registerAuthRegister(app) {
     console.error('[auth-register] Falha ao garantir tabela users:', err);
   });
 
-  // Checar se o e-mail já existe (para validação client-side)
+  // GET /api/auth/check-email
   router.get('/check-email', async (req, res) => {
     try {
       if (!signupEnabled()) return res.status(403).json({ ok: false, error: 'signup_disabled' });
@@ -55,13 +60,12 @@ module.exports = function registerAuthRegister(app) {
     }
   });
 
-  // Registrar novo usuário
+  // POST /api/auth/register
   router.post('/register', async (req, res) => {
     try {
       if (!signupEnabled()) return res.status(403).json({ ok: false, error: 'signup_disabled' });
 
       const {
-        // aceita ambos formatos
         name,
         firstName, lastName,
         empresa, company,
@@ -86,32 +90,36 @@ module.exports = function registerAuthRegister(app) {
 
       const { rows: cntR } = await query(`SELECT COUNT(*)::int AS n FROM users`);
       const isFirst = (cntR[0]?.n || 0) === 0;
-      const role = isFirst ? 'admin' : 'user';
 
-      const hash = await bcrypt.hash(pass, 10);
+      // IMPORTANT: alinhar com o CHECK das migrations (admin|gestor|operador)
+      const role = isFirst ? 'admin' : 'operador';
+
+      const hash = await bcrypt.hash(pass, BCRYPT_ROUNDS);
 
       const ins = await query(
-        `INSERT INTO users (name, email, password_hash, role, company)
-         VALUES ($1,$2,$3,$4,$5)
+        `INSERT INTO users (name, email, password_hash, role, is_active, company)
+         VALUES ($1,$2,$3,$4, TRUE, $5)
          RETURNING id, name, email, role, company, tenant_id, created_at AS "createdAt"`,
         [displayName, mail, hash, role, comp || null]
       );
       const user = ins.rows[0];
 
       // cria sessão automaticamente
-      try {
-        req.session.user = {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          company: user.company || null,
-          tenant_id: user.tenant_id ?? null
-        };
-      } catch (_) {}
+      req.session.user = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        company: user.company || null,
+        tenant_id: user.tenant_id ?? null
+      };
 
       res.status(201).json({ ok: true, user: req.session.user });
     } catch (e) {
+      // Mapeia erros comuns (CHECK/constraint/NULL)
+      const code = String(e?.code || '');
+      if (code === '23514') return res.status(400).json({ error: 'Perfil inválido para cadastro. Contate o administrador.' });
+      if (code === '23505') return res.status(409).json({ error: 'Email já cadastrado' });
       console.error('[auth-register] /register erro:', e);
       res.status(500).json({ error: 'Falha ao cadastrar' });
     }
