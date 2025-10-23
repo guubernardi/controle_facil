@@ -1,16 +1,26 @@
-// /js/devolucao-editar.js — normalização reforçada + fallback para return-cost do ML (ES2017)
+// /js/devolucao-editar.js — ES2017 com normalização reforçada + debug
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
-  var returnId =
-    qs.get('id') ||
-    qs.get('return_id') ||
-    (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
+  var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
 
+  // aceita "R$ 1.234,56", "1.234,56", "1234.56", "1,23"...
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'string') v = v.replace(/\./g, '').replace(',', '.');
+    if (typeof v === 'number') return isFinite(v) ? v : 0;
+    v = String(v).trim();
+    // remove texto e símbolo de moeda, mantém dígitos, vírgula, ponto e sinal
+    v = v.replace(/[^\d.,-]/g, '');
+    // se tiver mais de um ponto, remove pontos de milhar (tudo menos o último)
+    var parts = v.split(',');
+    if (parts.length > 2) { v = v.replace(/\./g, ''); } // casos bizarros
+    else {
+      // remover pontos de milhar quando vírgula é decimal
+      if (v.indexOf(',') >= 0) v = v.replace(/\./g, '');
+    }
+    // troca vírgula por ponto (decimal)
+    v = v.replace(',', '.');
     var n = parseFloat(v);
     return isNaN(n) ? 0 : n;
   }
@@ -87,7 +97,7 @@
     return vp + vf;
   }
 
-  // ===== Normalização =====
+  // ===== Normalização de payload =====
   function siteIdToName(siteId) {
     var map = { MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre' };
     return map[siteId] || 'Mercado Livre';
@@ -99,13 +109,9 @@
     }
     return null;
   }
-  function deep(obj, path) {
-    try { return path.split('.').reduce(function(o,k){ return (o && o[k]!==undefined && o[k]!==null) ? o[k] : undefined; }, obj); }
-    catch(e){ return undefined; }
-  }
   function findWarehouseReceivedAt(j) {
     try {
-      var sh = j.shipments || [];
+      var sh = j.shipments || j.shipping || [];
       for (var i=0;i<sh.length;i++){
         var s = sh[i] || {};
         var dest = (s.destination && s.destination.name) || '';
@@ -134,7 +140,7 @@
       j.motivo, j.motivo_cliente
     );
 
-    var logAtual   = firstNonEmpty(j.log_status, j.log, j.current_log, j.log_atual, j.status_log);
+    var logAtual   = firstNonEmpty(j.log_status, j.log, j.current_log, j.log_atual, j.status_log, j.status);
 
     var lojaNome   = firstNonEmpty(
       j.loja_nome, j.loja, sellerName, j.store_nickname, j.store_nick, j.seller_nickname, j.nickname,
@@ -144,64 +150,45 @@
     var recebCdEm  = firstNonEmpty(j.cd_recebido_em, j.recebido_em, j.warehouse_received_at, findWarehouseReceivedAt(j));
     var recebResp  = firstNonEmpty(j.cd_responsavel, j.warehouse_responsavel, j.recebido_por);
 
-    // Produto — tenta vários nomes e, se não vier, soma itens
+    // Totais em estruturas comuns
+    var totals = j.totals || j.amounts || j.summary || {};
+    var vpFromTotals = firstNonEmpty(
+      totals.product, totals.products, totals.items, totals.item_total,
+      totals.valor_produto, totals.valor_produtos, totals.produto, totals.subtotal_items
+    );
+    var vfFromTotals = firstNonEmpty(
+      totals.freight, totals.frete, totals.shipping, totals.shipping_cost, totals.logistics, totals.logistic_cost
+    );
+
+    // valores — procurar em vários nomes possíveis
     var vpRaw = firstNonEmpty(
       j.valor_produto, j.valor_produtos, j.valor_item, j.produto_valor, j.valor, j.valor_total, j.total_produto,
       j.product_value, j.item_value, j.price, j.unit_price, j.amount_item, j.item_amount, j.amount, j.subtotal,
-      j.refund_value, j.refund_amount,
-      deep(j,'totals.products'), deep(j,'totals.product'),
-      deep(j,'order.totals.products'), deep(j,'order.subtotal_amount'),
-      deep(j,'order.amounts.items'), deep(j,'amounts.items'),
-      deep(j,'ml_order.totals.products')
+      j.refund_value, j.refund_amount, vpFromTotals
     );
-    if (vpRaw === null || vpRaw === undefined) {
-      var items = firstNonEmpty(j.items, j.order_items, deep(j,'order.items')) || [];
-      if (Array.isArray(items) && items.length) {
-        var sum = 0;
-        for (var i = 0; i < items.length; i++) {
-          var it = items[i] || {};
-          var q = toNum(firstNonEmpty(it.quantity, it.qty, 1));
-          var p = toNum(firstNonEmpty(it.unit_price, it.price, it.value, it.amount));
-          sum += q * p;
-        }
-        vpRaw = sum;
-      }
-    }
-
-    // Frete — inclui caminho de charges.return_cost.amount dos docs
     var vfRaw = firstNonEmpty(
       j.valor_frete, j.frete, j.shipping_value, j.shipping_cost, j.valor_envio, j.valorFrete, j.custo_envio,
-      j.frete_valor, j.logistics_cost, j.logistic_cost, j.shipping_amount, j.amount_shipping,
-      deep(j,'totals.shipping'), deep(j,'totals.freight'),
-      deep(j,'order.totals.shipping'), deep(j,'order.shipping_cost'),
-      deep(j,'order.shipping.cost'), deep(j,'shipment.cost'), deep(j,'shipping.cost'),
-      deep(j,'charges.return_cost.amount'),    // <== docs ML
-      deep(j,'return_cost.amount'),
-      deep(j,'charges.return_cost'),           // pode vir direto como número
-      deep(j,'charges.amount')                 // fallback genérico
+      j.frete_valor, j.logistics_cost, j.logistic_cost, j.shipping_amount, j.amount_shipping, vfFromTotals
     );
 
     return {
       raw: j,
-      id:              firstNonEmpty(j.id, j.return_id, j._id),
-      id_venda:        firstNonEmpty(j.id_venda, j.order_id, j.resource_id, j.mco_order_id),
-      claim_id:        firstNonEmpty(j.claim_id, deep(j,'raw.claim_id')),
-      cliente_nome:    buyerName,
-      loja_nome:       lojaNome,
-      data_compra:     dataCompra,
-      status:          firstNonEmpty(j.status, j.situacao),
-      sku:             firstNonEmpty(j.sku, j.item_sku, j.item_id),
+      id:           firstNonEmpty(j.id, j.return_id, j._id),
+      id_venda:     firstNonEmpty(j.id_venda, j.order_id, j.resource_id, j.mco_order_id),
+      cliente_nome: buyerName,
+      loja_nome:    lojaNome,
+      data_compra:  dataCompra,
+      status:       firstNonEmpty(j.status, j.situacao),
+      sku:          firstNonEmpty(j.sku, j.item_sku, j.item_id),
       tipo_reclamacao: motivo,
-      nfe_numero:      firstNonEmpty(j.nfe_numero, j.invoice_number),
-      nfe_chave:       firstNonEmpty(j.nfe_chave, j.invoice_key),
-      reclamacao:      firstNonEmpty(j.reclamacao, j.obs, j.observacoes, j.observacao),
-
-      valor_produto:   toNum(vpRaw),
-      valor_frete:     toNum(vfRaw),
-
-      log_status:      logAtual,
-      cd_recebido_em:  recebCdEm,
-      cd_responsavel:  recebResp
+      nfe_numero:   firstNonEmpty(j.nfe_numero, j.invoice_number),
+      nfe_chave:    firstNonEmpty(j.nfe_chave, j.invoice_key),
+      reclamacao:   firstNonEmpty(j.reclamacao, j.obs, j.observacoes, j.observacao),
+      valor_produto: toNum(vpRaw),
+      valor_frete:   toNum(vfRaw),
+      log_status:    logAtual,
+      cd_recebido_em: recebCdEm,
+      cd_responsavel: recebResp
     };
   }
 
@@ -217,8 +204,8 @@
     var rf = $('resumo-frete');
     var rt = $('resumo-total');
 
-    if (rs) rs.textContent = d.status || '—';
-    if (rl) rl.textContent = d.log_status || '—';
+    if (rs) rs.textContent = (d.status || '—').toLowerCase();
+    if (rl) rl.textContent = (d.log_status || '—').toLowerCase();
     if (rc) rc.textContent = d.cd_recebido_em ? 'recebido' : 'não recebido';
     if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
     if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
@@ -279,56 +266,42 @@
     recalc();
   }
 
+  // Debug opcional (?debug=1)
+  function showDebug(raw, norm) {
+    if (!qs.has('debug')) return;
+    var pre = document.createElement('details');
+    pre.open = true;
+    pre.style.margin = '12px 0';
+    pre.innerHTML = '<summary style="cursor:pointer">Debug: payload recebido / normalizado</summary>' +
+      '<pre style="white-space:pre-wrap;font-size:12px;background:#f7f7f8;border:1px solid #e6e6eb;padding:10px;border-radius:8px;overflow:auto;max-height:320px"></pre>';
+    var main = document.querySelector('.page-wrap');
+    if (main) main.insertBefore(pre, main.firstChild);
+    try { pre.querySelector('pre').textContent = JSON.stringify({raw: raw, normalized: norm}, null, 2); } catch(e){}
+  }
+
   function normalizeAndSet(j) {
     var n = normalize(j);
     current = n;
     try { console.debug('[devolucao-editar] raw->norm', j, n); } catch(e){}
     fill(n);
+    showDebug(j, n);
   }
 
   // ===== API =====
   function safeJson(res){ 
     if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status));
+    // alguns backends retornam 204 no events
+    if (res.status === 204) return {};
     return res.json();
   }
-
   function reloadCurrent() {
     if (!returnId) return Promise.resolve();
     return fetch('/api/returns/' + encodeURIComponent(returnId))
       .then(safeJson)
       .then(function (j) {
-        var data = (j && (j.data || j.item || j.return || j)) || {};
+        var data = (j && (j.data || j.item || j.return || j)) || j || {};
         normalizeAndSet(data);
-      })
-      .then(ensureFreteFromReturnCost);
-  }
-
-  // tenta buscar o custo de frete do ML se continuou zerado
-  function ensureFreteFromReturnCost() {
-    if (!current || toNum(current.valor_frete) > 0) return;
-    var claimId = current.claim_id;
-    if (!claimId) return;
-
-    var urls = [
-      '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost',
-      '/api/ml/claims/' + encodeURIComponent(claimId) + '/return-cost',
-      '/api/ml/returns/' + encodeURIComponent(current.id) + '/return-cost'
-    ];
-
-    function tryNext(i){
-      if (i >= urls.length) return Promise.resolve();
-      return fetch(urls[i]).then(function(r){
-        if (!r.ok) throw new Error('fail');
-        return r.json();
-      }).then(function(data){
-        var amt = toNum(data && (data.amount || data.value || data.total || data.amount_brl));
-        if (amt > 0) {
-          var inp = $('valor_frete');
-          if (inp) { inp.value = amt; recalc(); }
-        }
-      }).catch(function(){ return tryNext(i+1); });
-    }
-    return tryNext(0);
+      });
   }
 
   function save() {
@@ -339,8 +312,9 @@
       body: JSON.stringify(Object.assign({}, body, { updated_by: 'frontend' }))
     })
     .then(function (r) {
-      if(!r.ok) return r.json().catch(function(){})
-        .then(function(e){ throw new Error((e && e.error) || 'Falha ao salvar');});
+      if(!r.ok) return r.json().catch(function(){}).then(function(e){
+        throw new Error((e && e.error) || 'Falha ao salvar');
+      });
     })
     .then(function(){ return reloadCurrent(); })
     .then(function(){ toast('Salvo!', 'success'); return refreshTimeline(current.id); })
@@ -415,10 +389,7 @@
   }
   function parecePedidoML(pedido) { return /^\d{6,}$/.test(String(pedido || '')); }
   function needsEnrichment(d) {
-    if (!d) return true;
-    var essentialMissing = !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra;
-    var moneyMissing = (toNum(d.valor_produto) + toNum(d.valor_frete)) === 0;
-    return essentialMissing || moneyMissing;
+    return !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
   }
   function canEnrichNow() {
     var key = 'rf_enrich_' + returnId;
@@ -521,13 +492,19 @@
   }
 
   // ===== TIMELINE =====
+  function coerceEventsPayload(j) {
+    if (Array.isArray(j)) return j;
+    if (!j || typeof j !== 'object') return [];
+    return j.items || j.events || j.data || [];
+  }
+
   function fetchEvents(id, limit, offset) {
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
     return fetch(url).then(safeJson).then(function (j) {
-      var arr = (j && j.items) || [];
+      var arr = coerceEventsPayload(j);
       return Array.isArray(arr) ? arr : [];
-    });
+    }).catch(function(){ return []; });
   }
 
   function fmtRel(iso) {
@@ -609,7 +586,7 @@
       });
   }
 
-  // ===== Shortcuts & Listeners =====
+  // ===== Keyboard shortcuts =====
   document.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
@@ -617,6 +594,7 @@
     }
   });
 
+  // ===== Listeners =====
   ['valor_produto','valor_frete','status','tipo_reclamacao'].forEach(function(id){
     var el = $(id);
     if (!el) return;
@@ -640,7 +618,7 @@
   var btnEnrich = $('btn-enrich');
   if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
 
-  // ===== Load =====
+  // ===== Load inicial =====
   function load() {
     if (!returnId) {
       var cont = document.querySelector('.page-wrap');
@@ -665,7 +643,7 @@
           if (rqA2) rqA2.setAttribute('disabled','true');
           if (rqR2) rqR2.setAttribute('disabled','true');
         }
-        return refreshTimeline(current.id);
+        return current.id ? refreshTimeline(current.id) : null;
       })
       .catch(function (e) {
         var cont = document.querySelector('.page-wrap');
@@ -673,6 +651,9 @@
       });
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
-  else load();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', load);
+  } else {
+    load();
+  }
 })();
