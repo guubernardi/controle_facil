@@ -1,4 +1,4 @@
-// /js/devolucao-editar.js — normalização reforçada + compat ES2017
+// /js/devolucao-editar.js — normalização reforçada + fallback para return-cost do ML (ES2017)
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -10,18 +10,13 @@
 
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
-    if (typeof v === 'string') {
-      // remove milhar "." e troca vírgula por ponto
-      v = v.replace(/\./g, '').replace(',', '.');
-    }
+    if (typeof v === 'string') v = v.replace(/\./g, '').replace(',', '.');
     var n = parseFloat(v);
     return isNaN(n) ? 0 : n;
   }
-
   function moneyBRL(v) {
     return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   }
-
   function toast(msg, type) {
     type = type || 'info';
     var t = $('toast');
@@ -33,7 +28,6 @@
       setTimeout(function () { t.classList.remove('show'); }, 3000);
     });
   }
-
   function setAutoHint(txt){ var el = $('auto-hint'); if (el) el.textContent = txt || ''; }
 
   function getLogPillEl() { return $('pill-log') || $('log_status_pill'); }
@@ -48,7 +42,6 @@
     el.className = cls;
     el.textContent = text || '—';
   }
-
   function setCdInfo(opts) {
     opts = opts || {};
     var receivedAt = opts.receivedAt || null;
@@ -94,12 +87,11 @@
     return vp + vf;
   }
 
-  // ===== Normalização de payload =====
+  // ===== Normalização =====
   function siteIdToName(siteId) {
     var map = { MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre' };
     return map[siteId] || 'Mercado Livre';
   }
-
   function firstNonEmpty() {
     for (var i=0;i<arguments.length;i++) {
       var v = arguments[i];
@@ -107,16 +99,10 @@
     }
     return null;
   }
-
-  // helper seguro para ler caminhos aninhados: deep(j,'order.totals.shipping')
   function deep(obj, path) {
-    try {
-      return path.split('.').reduce(function (o, k) {
-        return (o && o[k] !== undefined && o[k] !== null) ? o[k] : undefined;
-      }, obj);
-    } catch (e) { return undefined; }
+    try { return path.split('.').reduce(function(o,k){ return (o && o[k]!==undefined && o[k]!==null) ? o[k] : undefined; }, obj); }
+    catch(e){ return undefined; }
   }
-
   function findWarehouseReceivedAt(j) {
     try {
       var sh = j.shipments || [];
@@ -158,19 +144,16 @@
     var recebCdEm  = firstNonEmpty(j.cd_recebido_em, j.recebido_em, j.warehouse_received_at, findWarehouseReceivedAt(j));
     var recebResp  = firstNonEmpty(j.cd_responsavel, j.warehouse_responsavel, j.recebido_por);
 
-    // === Valores (produto & frete) — tenta vários nomes + caminhos aninhados; se não houver, soma itens ===
+    // Produto — tenta vários nomes e, se não vier, soma itens
     var vpRaw = firstNonEmpty(
       j.valor_produto, j.valor_produtos, j.valor_item, j.produto_valor, j.valor, j.valor_total, j.total_produto,
       j.product_value, j.item_value, j.price, j.unit_price, j.amount_item, j.item_amount, j.amount, j.subtotal,
       j.refund_value, j.refund_amount,
-
-      // aninhados comuns
       deep(j,'totals.products'), deep(j,'totals.product'),
       deep(j,'order.totals.products'), deep(j,'order.subtotal_amount'),
       deep(j,'order.amounts.items'), deep(j,'amounts.items'),
       deep(j,'ml_order.totals.products')
     );
-
     if (vpRaw === null || vpRaw === undefined) {
       var items = firstNonEmpty(j.items, j.order_items, deep(j,'order.items')) || [];
       if (Array.isArray(items) && items.length) {
@@ -185,20 +168,24 @@
       }
     }
 
+    // Frete — inclui caminho de charges.return_cost.amount dos docs
     var vfRaw = firstNonEmpty(
       j.valor_frete, j.frete, j.shipping_value, j.shipping_cost, j.valor_envio, j.valorFrete, j.custo_envio,
       j.frete_valor, j.logistics_cost, j.logistic_cost, j.shipping_amount, j.amount_shipping,
-
-      // aninhados
       deep(j,'totals.shipping'), deep(j,'totals.freight'),
       deep(j,'order.totals.shipping'), deep(j,'order.shipping_cost'),
-      deep(j,'order.shipping.cost'), deep(j,'shipment.cost'), deep(j,'shipping.cost')
+      deep(j,'order.shipping.cost'), deep(j,'shipment.cost'), deep(j,'shipping.cost'),
+      deep(j,'charges.return_cost.amount'),    // <== docs ML
+      deep(j,'return_cost.amount'),
+      deep(j,'charges.return_cost'),           // pode vir direto como número
+      deep(j,'charges.amount')                 // fallback genérico
     );
 
     return {
       raw: j,
       id:              firstNonEmpty(j.id, j.return_id, j._id),
       id_venda:        firstNonEmpty(j.id_venda, j.order_id, j.resource_id, j.mco_order_id),
+      claim_id:        firstNonEmpty(j.claim_id, deep(j,'raw.claim_id')),
       cliente_nome:    buyerName,
       loja_nome:       lojaNome,
       data_compra:     dataCompra,
@@ -312,7 +299,36 @@
       .then(function (j) {
         var data = (j && (j.data || j.item || j.return || j)) || {};
         normalizeAndSet(data);
-      });
+      })
+      .then(ensureFreteFromReturnCost);
+  }
+
+  // tenta buscar o custo de frete do ML se continuou zerado
+  function ensureFreteFromReturnCost() {
+    if (!current || toNum(current.valor_frete) > 0) return;
+    var claimId = current.claim_id;
+    if (!claimId) return;
+
+    var urls = [
+      '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost',
+      '/api/ml/claims/' + encodeURIComponent(claimId) + '/return-cost',
+      '/api/ml/returns/' + encodeURIComponent(current.id) + '/return-cost'
+    ];
+
+    function tryNext(i){
+      if (i >= urls.length) return Promise.resolve();
+      return fetch(urls[i]).then(function(r){
+        if (!r.ok) throw new Error('fail');
+        return r.json();
+      }).then(function(data){
+        var amt = toNum(data && (data.amount || data.value || data.total || data.amount_brl));
+        if (amt > 0) {
+          var inp = $('valor_frete');
+          if (inp) { inp.value = amt; recalc(); }
+        }
+      }).catch(function(){ return tryNext(i+1); });
+    }
+    return tryNext(0);
   }
 
   function save() {
@@ -393,22 +409,17 @@
 
   // ===== ENRIQUECIMENTO (ML) =====
   var ENRICH_TTL_MS = 10 * 60 * 1000;
-
   function lojaEhML(nome) {
     var s = String(nome || '').toLowerCase();
     return s.indexOf('mercado') >= 0 || s.indexOf('meli') >= 0 || s.indexOf('ml') >= 0;
   }
-
   function parecePedidoML(pedido) { return /^\d{6,}$/.test(String(pedido || '')); }
-
-  // agora também enriquece quando os valores de dinheiro estão zerados
   function needsEnrichment(d) {
     if (!d) return true;
     var essentialMissing = !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra;
     var moneyMissing = (toNum(d.valor_produto) + toNum(d.valor_frete)) === 0;
     return essentialMissing || moneyMissing;
   }
-
   function canEnrichNow() {
     var key = 'rf_enrich_' + returnId;
     var last = Number(localStorage.getItem(key) || 0);
@@ -416,7 +427,6 @@
     if (ok) localStorage.setItem(key, String(Date.now()));
     return ok;
   }
-
   function enrichFromML(reason) {
     reason = reason || 'auto';
     if (!current || !current.id) return Promise.resolve(false);
@@ -599,7 +609,7 @@
       });
   }
 
-  // ===== Keyboard shortcuts =====
+  // ===== Shortcuts & Listeners =====
   document.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
@@ -607,7 +617,6 @@
     }
   });
 
-  // ===== Listeners =====
   ['valor_produto','valor_frete','status','tipo_reclamacao'].forEach(function(id){
     var el = $(id);
     if (!el) return;
@@ -631,7 +640,7 @@
   var btnEnrich = $('btn-enrich');
   if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
 
-  // ===== Load inicial =====
+  // ===== Load =====
   function load() {
     if (!returnId) {
       var cont = document.querySelector('.page-wrap');
@@ -640,7 +649,6 @@
     }
     reloadCurrent()
       .then(function () {
-        // auto-enriquecer só se for ML (ou pedido numérico com "cara" de ML) e se faltar dado/valores
         if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) && needsEnrichment(current) && canEnrichNow()) {
           return enrichFromML('auto');
         }
@@ -665,9 +673,6 @@
       });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', load);
-  } else {
-    load();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load);
+  else load();
 })();
