@@ -134,8 +134,8 @@
 
         <div class="two">
           <div class="row">
-            <label for="loja_nome">Loja</label>
-            <input id="loja_nome" name="loja_nome" type="text" placeholder="Nome da loja" autocomplete="organization">
+            <label for="loja_nome">Loja (apelido no canal)</label>
+            <input id="loja_nome" name="loja_nome" type="text" placeholder="Ex.: Minha Loja Oficial" autocomplete="organization">
           </div>
           <div class="row">
             <label for="data_compra">Data da compra</label>
@@ -145,7 +145,7 @@
 
         <div class="two">
           <div class="row">
-            <label for="status">Status</label>
+            <label for="status">Status (interno)</label>
             <select id="status" name="status">
               <option value="">—</option>
               <option value="pendente">Pendente</option>
@@ -264,10 +264,9 @@
     </div>
   </main>
 
-  <!-- Toast simples (o JS desta página controla o conteúdo) -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <!-- Fallback simples para <dialog> (Safari/iOS antigos) -->
+  <!-- Fallback <dialog> -->
   <script>
     (function () {
       if (typeof HTMLDialogElement === 'undefined') {
