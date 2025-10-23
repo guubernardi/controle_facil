@@ -2,6 +2,7 @@
 'use strict';
 
 const { query } = require('../db');
+const { broadcast } = require('../events');
 
 /* =============== introspecção =============== */
 async function tableHasColumns(table, cols) {
@@ -14,7 +15,7 @@ async function tableHasColumns(table, cols) {
   const set = new Set(rows.map(r => r.column_name));
   const out = {};
   for (const c of cols) out[c] = set.has(c);
-  out.__cols = rows; // debug opcional
+  out.__cols = rows;
   return out;
 }
 
@@ -45,7 +46,6 @@ const LOG_MAP = new Map([
   ['nao recebido','nao_recebido'],['nao_recebido','nao_recebido'],['nao-recebido','nao_recebido'],
   ['recebido cd','recebido_cd'],['recebido_cd','recebido_cd'],['recebido-cd','recebido_cd'],
   ['em inspecao','em_inspecao'],['em_inspecao','em_inspecao'],['em-inspecao','em_inspecao'],['em inspecao','em_inspecao'],
-  // variações externas mapeadas para um permitido (ou null)
   ['postado','nao_recebido'],['coletado','nao_recebido'],
   ['em transito','nao_recebido'],['em_transito','nao_recebido'],['em-transito','nao_recebido'],
 ]);
@@ -63,7 +63,7 @@ function sanitizeForInsert(body={}, cols) {
     }
     if (c === 'log_status') {
       if (val == null || val === '') val = null;
-      else val = LOG_MAP.get(nrm(val)) ?? null; // null não viola o CHECK
+      else val = LOG_MAP.get(nrm(val)) ?? null;
     }
     if (c === 'valor_produto' || c === 'valor_frete') val = num(val);
     if (typeof val === 'string') { val = val.trim(); if (val === '') val = null; }
@@ -101,10 +101,30 @@ function errPayload(e, fallback) {
 
 function parseDateYMD(s) {
   if (!s) return null;
-  // aceita YYYY-MM-DD (ou qualquer coisa que Date entenda) e devolve YYYY-MM-DD
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString().slice(0,10);
+}
+
+/* ===== helpers de eventos (timeline) ===== */
+async function eventosTableExists() {
+  const { rows } = await query(
+    `SELECT 1 FROM information_schema.tables
+      WHERE table_schema='public' AND table_name='devolucao_eventos'`
+  );
+  return rows.length > 0;
+}
+
+async function logEvento(returnId, type, title, message, meta) {
+  try {
+    if (!(await eventosTableExists())) return; // não falha se não existir
+    await query(
+      `INSERT INTO devolucao_eventos (return_id, type, title, message, meta)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [returnId, type, title, message || null, meta ? JSON.stringify(meta) : null]
+    );
+    broadcast('return_event', { return_id: returnId, type, title, message, meta });
+  } catch (_) { /* silencioso */ }
 }
 
 /* ============================ ROTAS ============================ */
@@ -119,7 +139,7 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  /* ---------- LISTA SIMPLES (por status, paginação) ---------- */
+  /* ---------- LISTA SIMPLES ---------- */
   app.get('/api/returns', async (req, res) => {
     try {
       const { status='', page='1', pageSize='50', orderBy='updated_at', orderDir='desc' } = req.query;
@@ -128,7 +148,6 @@ module.exports = function registerReturns(app) {
                     'valor_produto','valor_frete','motivo','descricao','nfe_numero','nfe_chave',
                     'data_compra','recebido_cd','recebido_resp','recebido_em','created_at','updated_at'];
       const cols = await tableHasColumns('devolucoes', base);
-
       const select = ['id', ...base.filter(c => c!=='id' && cols[c])];
 
       const p = []; const where = [];
@@ -169,7 +188,7 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  /* ---------- LISTA AVANÇADA /search (from, to, q) ---------- */
+  /* ---------- LISTA AVANÇADA ---------- */
   app.get('/api/returns/search', async (req, res) => {
     try {
       const {
@@ -186,7 +205,6 @@ module.exports = function registerReturns(app) {
 
       const p = []; const where = [];
 
-      // janela de datas em created_at
       const fromY = parseDateYMD(from);
       const toY   = parseDateYMD(to);
       if (cols.created_at) {
@@ -202,7 +220,6 @@ module.exports = function registerReturns(app) {
         }
       }
 
-      // busca textual leve
       const needle = String(q || '').trim().toLowerCase();
       if (needle) {
         const like = `%${needle}%`;
@@ -293,8 +310,8 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  /* ---------- ATUALIZAR ---------- */
-  app.put('/api/returns/:id', async (req, res) => {
+  /* ---------- ATUALIZAR (PUT/PATCH) ---------- */
+  async function updateReturn(req, res) {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -322,14 +339,16 @@ module.exports = function registerReturns(app) {
       console.error('[returns] update erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao atualizar devolução.'));
     }
-  });
+  }
+  app.put('/api/returns/:id', updateReturn);
+  app.patch('/api/returns/:id', updateReturn); // ✅ front salva com PATCH
 
   /* ---------- EXCLUIR ---------- */
   app.delete('/api/returns/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
-    const { rowCount } = await query('DELETE FROM devolucoes WHERE id=$1', [id]);
+      const { rowCount } = await query('DELETE FROM devolucoes WHERE id=$1', [id]);
       if (!rowCount) return res.status(404).json({ error: 'Não encontrado' });
       res.json({ ok: true });
     } catch (e) {
@@ -338,7 +357,123 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  /* ---------- SEED DEV (sem recursão) ---------- */
+  /* ---------- TIMELINE ---------- */
+  app.get('/api/returns/:id/events', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+      if (!(await eventosTableExists())) return res.json({ items: [] }); // sem tabela → lista vazia
+
+      const { rows } = await query(
+        `SELECT id, return_id, type, title, message, meta, created_at
+           FROM devolucao_eventos
+          WHERE return_id=$1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 200`,
+        [id]
+      );
+      res.json({ items: rows });
+    } catch (e) {
+      console.error('[returns] events erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao carregar eventos.'));
+    }
+  });
+
+  /* ---------- AÇÕES DE CD ---------- */
+  app.patch('/api/returns/:id/cd/receive', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const cols = await tableHasColumns('devolucoes', ['recebido_cd','recebido_resp','recebido_em','log_status','updated_at']);
+      const when = req.body?.when ? new Date(req.body.when) : new Date();
+      const resp = (req.body?.responsavel || 'cd').trim();
+
+      // atualiza o que existir
+      const set = []; const params = [];
+      if (cols.recebido_cd)  { set.push(`recebido_cd=true`); }
+      if (cols.recebido_resp){ set.push(`recebido_resp=$${params.push(resp)}`); }
+      if (cols.recebido_em)  { set.push(`recebido_em=$${params.push(when.toISOString())}`); }
+      if (cols.log_status)   { set.push(`log_status='recebido_cd'`); }
+      if (cols.updated_at)   { set.push(`updated_at=now()`); }
+      params.push(id);
+
+      const { rows } = await query(`UPDATE devolucoes SET ${set.join(', ')} WHERE id=$${params.length} RETURNING *`, params);
+      if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
+
+      await logEvento(id, 'status', 'Recebido no CD', `Responsável: ${resp}`, { cd:{ responsavel: resp, receivedAt: when }, log_status:'recebido_cd' });
+      res.json({ item: rows[0] });
+    } catch (e) {
+      console.error('[returns] cd/receive erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao marcar recebido.'));
+    }
+  });
+
+  app.patch('/api/returns/:id/cd/unreceive', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const cols = await tableHasColumns('devolucoes', ['recebido_cd','recebido_resp','recebido_em','log_status','updated_at']);
+      const when = req.body?.when ? new Date(req.body.when) : new Date();
+      const resp = (req.body?.responsavel || 'cd').trim();
+
+      const set = []; const params = [];
+      if (cols.recebido_cd)  set.push(`recebido_cd=false`);
+      if (cols.recebido_resp)set.push(`recebido_resp=NULL`);
+      if (cols.recebido_em)  set.push(`recebido_em=NULL`);
+      if (cols.log_status)   set.push(`log_status='nao_recebido'`);
+      if (cols.updated_at)   set.push(`updated_at=now()`);
+      params.push(id);
+
+      const { rows } = await query(`UPDATE devolucoes SET ${set.join(', ')} WHERE id=$${params.length} RETURNING *`, params);
+      if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
+
+      await logEvento(id, 'status', 'Recebimento removido', `Responsável: ${resp}`, { cd:{ responsavel: resp, unreceivedAt: when }, log_status:'nao_recebido' });
+      res.json({ item: rows[0] });
+    } catch (e) {
+      console.error('[returns] cd/unreceive erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao remover marcação de recebido.'));
+    }
+  });
+
+  app.patch('/api/returns/:id/cd/inspect', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const cols = await tableHasColumns('devolucoes', ['log_status','updated_at']);
+      const result = String(req.body?.resultado || '').toLowerCase(); // 'aprovado' | 'rejeitado'
+      const obs    = (req.body?.observacao || '').trim();
+      const when   = req.body?.when ? new Date(req.body.when) : new Date();
+
+      let finalLog = null;
+      if (result.includes('aprov')) finalLog = 'em_inspecao';  // mantém regra finance (frete-only)
+      if (result.includes('rejeit')) finalLog = 'em_inspecao'; // idem (regras de total no front/back)
+
+      if (finalLog && cols.log_status) {
+        await query(
+          `UPDATE devolucoes SET log_status=$1, updated_at=now() WHERE id=$2`,
+          [finalLog, id]
+        );
+      }
+
+      await logEvento(
+        id,
+        'status',
+        result.includes('aprov') ? 'Inspeção aprovada' : 'Inspeção reprovada',
+        obs || null,
+        { cd:{ inspectedAt: when }, log_status: finalLog || undefined }
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[returns] cd/inspect erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao registrar inspeção.'));
+    }
+  });
+
+  /* ---------- SEED DEV ---------- */
   app.post('/api/dev/seed-return', async (req, res) => {
     try {
       if (process.env.NODE_ENV === 'production') {
@@ -350,7 +485,7 @@ module.exports = function registerReturns(app) {
         loja_nome: 'Mercado Livre',
         sku: 'SKU-TESTE-001',
         status: 'pendente',
-        log_status: 'nao_recebido', // ✅ compatível com CHECK
+        log_status: 'nao_recebido',
         valor_produto: 199.90,
         valor_frete: 19.90,
         motivo: 'defeito',
