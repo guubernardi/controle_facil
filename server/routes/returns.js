@@ -4,6 +4,46 @@
 const { query } = require('../db');
 const { broadcast } = require('../events');
 
+// ---- fetch helper (Node 18+ tem fetch nativo; senão cai no node-fetch) ----
+const _fetch = (typeof fetch === 'function')
+  ? fetch
+  : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+
+async function getMLToken(req) {
+  // ajuste aqui se o token estiver salvo em outro lugar no seu projeto
+  if (req?.user?.ml?.access_token) return req.user.ml.access_token;
+  if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
+  try {
+    const { rows } = await query(
+      `SELECT access_token
+         FROM ml_tokens
+        WHERE is_active IS TRUE
+        ORDER BY updated_at DESC NULLS LAST
+        LIMIT 1`
+    );
+    return rows[0]?.access_token || null;
+  } catch {
+    return null;
+  }
+}
+
+async function mlFetch(path, token) {
+  const url = `https://api.mercadolibre.com${path}`;
+  const r = await _fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  let j = null;
+  try { j = await r.json(); } catch {}
+  if (!r.ok) {
+    const msg = (j && (j.message || j.error))
+      ? `${j.error || ''} ${j.message || ''}`.trim()
+      : `ML HTTP ${r.status}`;
+    const err = new Error(msg);
+    err.status = r.status;
+    err.payload = j;
+    throw err;
+  }
+  return j;
+}
+
 /* =============== introspecção =============== */
 async function tableHasColumns(table, cols) {
   const { rows } = await query(
@@ -341,7 +381,7 @@ module.exports = function registerReturns(app) {
     }
   }
   app.put('/api/returns/:id', updateReturn);
-  app.patch('/api/returns/:id', updateReturn); // ✅ front salva com PATCH
+  app.patch('/api/returns/:id', updateReturn); // front usa PATCH
 
   /* ---------- EXCLUIR ---------- */
   app.delete('/api/returns/:id', async (req, res) => {
@@ -448,8 +488,8 @@ module.exports = function registerReturns(app) {
       const when   = req.body?.when ? new Date(req.body.when) : new Date();
 
       let finalLog = null;
-      if (result.includes('aprov')) finalLog = 'em_inspecao';  // mantém regra finance (frete-only)
-      if (result.includes('rejeit')) finalLog = 'em_inspecao'; // idem (regras de total no front/back)
+      if (result.includes('aprov')) finalLog = 'em_inspecao';
+      if (result.includes('rejeit')) finalLog = 'em_inspecao';
 
       if (finalLog && cols.log_status) {
         await query(
@@ -470,6 +510,83 @@ module.exports = function registerReturns(app) {
     } catch (e) {
       console.error('[returns] cd/inspect erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao registrar inspeção.'));
+    }
+  });
+
+  /* ---------- ML: debug do return-cost por claim_id ---------- */
+  app.get('/api/ml/claims/:claim_id/return-cost', async (req, res) => {
+    try {
+      const token = await getMLToken(req);
+      if (!token) return res.status(501).json({ error: 'Token do ML ausente (defina ML_ACCESS_TOKEN ou configure integração).' });
+      const claimId = req.params.claim_id;
+      const j = await mlFetch(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`, token);
+      res.json(j);
+    } catch (e) {
+      res.status(502).json({ error: 'Falha ao consultar return-cost no ML', detail: e.message, upstream: e.payload });
+    }
+  });
+
+  /* ---------- ML: enrich valor_frete (return-cost) ---------- */
+  app.post('/api/ml/returns/:id/enrich', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const token = await getMLToken(req);
+      if (!token) return res.status(501).json({ error: 'Token do ML ausente (defina ML_ACCESS_TOKEN ou configure integração).' });
+
+      // carrega a devolução
+      const { rows } = await query('SELECT * FROM devolucoes WHERE id=$1', [id]);
+      if (!rows.length) return res.status(404).json({ error: 'Devolução não encontrada' });
+      const dv = rows[0];
+
+      // tenta obter claim_id
+      const cols = await tableHasColumns('devolucoes', ['ml_claim_id','valor_frete','updated_at']);
+      let claimId = req.body?.claim_id || (cols.ml_claim_id ? dv.ml_claim_id : null) || null;
+
+      if (!claimId) {
+        const orderId = (dv.id_venda || '').toString().trim();
+        if (!orderId) return res.status(404).json({ error: 'Sem claim_id e sem id_venda para pesquisa' });
+
+        // /post-purchase/v1/claims/search?order_id=...
+        const s = await mlFetch(`/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}`, token);
+        claimId = s?.results?.[0]?.id || s?.data?.[0]?.id || s?.claims?.[0]?.id || null;
+        if (!claimId) return res.status(404).json({ error: `Nenhum claim encontrado para order_id ${orderId}`, raw: s });
+      }
+
+      // consulta o custo
+      const rc = await mlFetch(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`, token);
+      const amount   = Number(rc?.amount ?? rc?.data?.amount ?? NaN);
+      const currency = rc?.currency_id || rc?.data?.currency_id || 'BRL';
+      if (!Number.isFinite(amount)) {
+        return res.status(502).json({ error: 'ML não retornou amount numérico', raw: rc });
+      }
+
+      // prepara UPDATE
+      const set = []; const params = [];
+      if (cols.valor_frete) set.push(`valor_frete=$${params.push(amount)}`);
+      if (cols.ml_claim_id) set.push(`ml_claim_id=$${params.push(String(claimId))}`);
+      if (cols.updated_at)  set.push('updated_at=now()');
+      params.push(id);
+
+      const sql = set.length
+        ? `UPDATE devolucoes SET ${set.join(', ')} WHERE id=$${params.length} RETURNING *`
+        : `SELECT * FROM devolucoes WHERE id=$1`;
+
+      const { rows: up } = await query(sql, set.length ? params : [id]);
+
+      // registra na timeline se existir
+      await logEvento(
+        id,
+        'status',
+        'Frete da devolução (ML)',
+        `R$ ${amount.toFixed(2)} ${currency}`,
+        { claim_id: claimId, amount, currency_id: currency }
+      );
+
+      res.json({ item: up[0], source: { claim_id: claimId, amount, currency_id: currency } });
+    } catch (e) {
+      res.status(502).json({ error: 'Falha ao enriquecer com return-cost do ML', detail: e.message, upstream: e.payload });
     }
   });
 
