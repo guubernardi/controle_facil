@@ -1,12 +1,22 @@
-// /js/devolucao-editar.js  — versão compatível ES2017 e com normalização de campos
+// /js/devolucao-editar.js  — versão compatível ES2017 e com normalização reforçada
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
   var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
 
-  function toNum(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
-  function moneyBRL(v) { return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+  function toNum(v) {
+    if (v === null || v === undefined || v === '') return 0;
+    if (typeof v === 'string') {
+      // remove separador de milhar . e troca vírgula decimal por ponto
+      v = v.replace(/\./g, '').replace(',', '.');
+    }
+    var n = parseFloat(v);
+    return isNaN(n) ? 0 : n;
+  }
+  function moneyBRL(v) {
+    return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  }
   function toast(msg, type) {
     type = type || 'info';
     var t = $('toast');
@@ -82,44 +92,6 @@
     var map = { MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre' };
     return map[siteId] || 'Mercado Livre';
   }
-
-  // remove acentos p/ comparar motivos
-  function stripAccents(s) {
-    try { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
-    catch(e){ return String(s || ''); }
-  }
-
-  function mapStatus(s) {
-    s = String(s || '').toLowerCase();
-    if (!s) return '';
-    if (s.indexOf('pend') >= 0) return 'pendente';
-    if (s.indexOf('aprov') >= 0) return 'aprovado';
-    if (s.indexOf('rej') >= 0 || s.indexOf('neg') >= 0) return 'rejeitado';
-    // números/códigos ocasionais
-    if (s === '0') return 'pendente';
-    if (s === '1') return 'aprovado';
-    if (s === '2') return 'rejeitado';
-    return s; // tenta usar como veio
-  }
-
-  function mapMotivo(m) {
-    var s = stripAccents(String(m || '')).toLowerCase();
-    if (!s) return '';
-    if (s.indexOf('arrepend') >= 0) return 'cliente-arrependimento';
-    if ((s.indexOf('endereco') >= 0 || s.indexOf('endereco') >= 0) && (s.indexOf('err') >= 0 || s.indexOf('incorret') >= 0)) return 'cliente-endereco-errado';
-    if (s.indexOf('defeit') >= 0 || s.indexOf('defect') >= 0 || s.indexOf('quebrad') >= 0) return 'defeito';
-    if (s.indexOf('avaria') >= 0 || s.indexOf('amass') >= 0 || s.indexOf('danif') >= 0 || s.indexOf('damage') >= 0) return 'avaria';
-    if ((s.indexOf('pedido') >= 0 || s.indexOf('item') >= 0) && (s.indexOf('incorr') >= 0 || s.indexOf('errad') >= 0 || s.indexOf('trocad') >= 0 || s.indexOf('wrong') >= 0))
-      return 'pedido-incorreto';
-    // ids numéricos comuns
-    if (s === '1' || s === 'cliente_arrependimento') return 'cliente-arrependimento';
-    if (s === '2' || s === 'cliente_endereco_errado') return 'cliente-endereco-errado';
-    if (s === '3' || s === 'defeito') return 'defeito';
-    if (s === '4' || s === 'avaria') return 'avaria';
-    if (s === '5' || s === 'pedido_incorreto') return 'pedido-incorreto';
-    return s; // fallback
-  }
-
   function firstNonEmpty() {
     for (var i=0;i<arguments.length;i++) {
       var v = arguments[i];
@@ -127,7 +99,6 @@
     }
     return null;
   }
-
   function findWarehouseReceivedAt(j) {
     try {
       var sh = j.shipments || [];
@@ -143,15 +114,42 @@
   }
 
   function normalize(j) {
-    var sellerName = (j.seller && (j.seller.nickname || j.seller.name)) || j.seller_name || j.store_name || j.shop_name || null;
-    var buyerName  = (j.buyer && (j.buyer.nickname || j.buyer.name)) || j.cliente || j.cliente_nome || j.buyer_name || null;
+    var sellerName =
+      (j.seller && (j.seller.nickname || j.seller.name || j.seller.nickname || j.seller.nick_name)) ||
+      j.seller_nickname || j.sellerNick || j.seller_nick || j.nickname ||
+      j.seller_name || j.store_name || j.shop_name || null;
+
+    var buyerName  =
+      (j.buyer && (j.buyer.nickname || j.buyer.name)) ||
+      j.cliente || j.cliente_nome || j.buyer_name || null;
+
     var dataCompra = firstNonEmpty(j.data_compra, j.order_date, j.date_created, j.paid_at, j.created_at);
-    var motivoRaw  = firstNonEmpty(j.tipo_reclamacao, j.reclamacao, j.reason_name, j.reason, j.reason_id);
-    var statusRaw  = firstNonEmpty(j.status, j.situacao);
+
+    var motivo     = firstNonEmpty(
+      j.tipo_reclamacao, j.reclamacao, j.reason_name, j.reason, j.reason_id,
+      j.motivo, j.motivo_cliente
+    );
+
     var logAtual   = firstNonEmpty(j.log_status, j.log, j.current_log, j.log_atual, j.status_log);
-    var lojaNome   = firstNonEmpty(j.loja_nome, j.loja, sellerName, (j.site_id ? siteIdToName(j.site_id) : null));
+
+    var lojaNome   = firstNonEmpty(
+      j.loja_nome, j.loja, sellerName, j.store_nickname, j.store_nick, j.seller_nickname, j.nickname,
+      (j.site_id ? siteIdToName(j.site_id) : null)
+    );
+
     var recebCdEm  = firstNonEmpty(j.cd_recebido_em, j.recebido_em, j.warehouse_received_at, findWarehouseReceivedAt(j));
     var recebResp  = firstNonEmpty(j.cd_responsavel, j.warehouse_responsavel, j.recebido_por);
+
+    // valores — procurar em vários nomes possíveis
+    var vpRaw = firstNonEmpty(
+      j.valor_produto, j.valor_produtos, j.valor_item, j.produto_valor, j.valor, j.valor_total, j.total_produto,
+      j.product_value, j.item_value, j.price, j.unit_price, j.amount_item, j.item_amount, j.amount, j.subtotal,
+      j.refund_value, j.refund_amount
+    );
+    var vfRaw = firstNonEmpty(
+      j.valor_frete, j.frete, j.shipping_value, j.shipping_cost, j.valor_envio, j.valorFrete, j.custo_envio,
+      j.frete_valor, j.logistics_cost, j.logistic_cost, j.shipping_amount, j.amount_shipping
+    );
 
     return {
       raw: j,
@@ -160,14 +158,14 @@
       cliente_nome: buyerName,
       loja_nome:    lojaNome,
       data_compra:  dataCompra,
-      status:       mapStatus(statusRaw),
+      status:       firstNonEmpty(j.status, j.situacao),
       sku:          firstNonEmpty(j.sku, j.item_sku, j.item_id),
-      tipo_reclamacao: mapMotivo(motivoRaw),
+      tipo_reclamacao: motivo,
       nfe_numero:   firstNonEmpty(j.nfe_numero, j.invoice_number),
       nfe_chave:    firstNonEmpty(j.nfe_chave, j.invoice_key),
       reclamacao:   firstNonEmpty(j.reclamacao, j.obs, j.observacoes, j.observacao),
-      valor_produto: toNum(firstNonEmpty(j.valor_produto, j.product_value, j.amount_item, j.amount)),
-      valor_frete:   toNum(firstNonEmpty(j.valor_frete, j.shipping_value, j.frete, j.shipping_cost)),
+      valor_produto: toNum(vpRaw),
+      valor_frete:   toNum(vfRaw),
       log_status:    logAtual,
       cd_recebido_em: recebCdEm,
       cd_responsavel: recebResp
@@ -238,8 +236,8 @@
     if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
     if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
-    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto === null || d.valor_produto === undefined) ? '' : Number(d.valor_produto || 0);
-    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  === null || d.valor_frete  === undefined) ? '' : Number(d.valor_frete  || 0);
+    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto === null || d.valor_produto === undefined) ? '' : toNum(d.valor_produto);
+    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  === null || d.valor_frete  === undefined) ? '' : toNum(d.valor_frete);
 
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
@@ -260,7 +258,6 @@
     if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status));
     return res.json();
   }
-
   function reloadCurrent() {
     if (!returnId) return Promise.resolve();
     return fetch('/api/returns/' + encodeURIComponent(returnId))
@@ -278,7 +275,10 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(Object.assign({}, body, { updated_by: 'frontend' }))
     })
-    .then(function (r){ if(!r.ok) return r.json().catch(function(){}) .then(function(e){ throw new Error((e && e.error) || 'Falha ao salvar');}); })
+    .then(function (r) {
+      if(!r.ok) return r.json().catch(function(){})
+        .then(function(e){ throw new Error((e && e.error) || 'Falha ao salvar');});
+    })
     .then(function(){ return reloadCurrent(); })
     .then(function(){ toast('Salvo!', 'success'); return refreshTimeline(current.id); })
     .catch(function(e){ toast(e.message || 'Erro ao salvar', 'error'); });
@@ -317,7 +317,7 @@
       ? 'Confirme a aprovação da inspeção. Você pode adicionar uma observação.'
       : 'Confirme a reprovação da inspeção. Você pode adicionar uma observação.';
     if (btnOk) btnOk.className = isApprove ? 'btn btn--success' : 'btn btn--danger';
-    txt.value = '';
+    if (txt) txt.value = '';
     dlg.showModal();
 
     function onSubmit(ev) {
