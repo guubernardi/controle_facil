@@ -8,6 +8,7 @@ const { getAuthedAxios } = require('../mlClient');
 
 const isTrue = (v) => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
 const qOf = (req) => (req?.q || query);
+// formato aceito pelo ML nos filtros de range: 2025-10-22T12:34:56.789-0300
 const fmtML = (d) => dayjs(d).format('YYYY-MM-DDTHH:mm:ss.SSSZZ');
 
 module.exports = function registerMlSync(app, opts = {}) {
@@ -113,7 +114,7 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
-  // Claims Search com fallback e paginação
+  // -------- Claims Search robusto (com fallback + paginação) ----------
   async function fetchClaimsPaged(http, account, {
     fromIso, toIso, status, siteId, limitPerPage = 200, max = 2000
   }) {
@@ -193,20 +194,83 @@ module.exports = function registerMlSync(app, opts = {}) {
         used.push({ status, page: page + 1, used: { path: strat.path, label: strat.label }, error: e?.response?.data || e?.message || String(e) });
       }
 
+      // Se já trouxe algo com a estratégia atual, não precisa tentar as demais
       if (anyThisStrategy && collect.length) break;
     }
 
     return { items: collect, used };
   }
 
-  // Detalhes
+  // Detalhe do claim
   async function getClaimDetail(http, claimId) {
     const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
     return data;
   }
+
+  // Return (v2) vinculado ao claim
   async function getReturnV2ByClaim(http, claimId) {
     const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
+    return data; // { id, status, resource_id, ... }
+  }
+
+  // -------- Order detail (para enriquecer devolução) ----------
+  async function getOrderDetail(http, orderId) {
+    const { data } = await http.get(`/orders/${orderId}`);
     return data;
+  }
+
+  async function enrichReturnFromML(req, returnId) {
+    const q = qOf(req);
+
+    const { rows } = await q(
+      `SELECT id, id_venda, loja_nome FROM devolucoes WHERE id = $1 LIMIT 1`,
+      [returnId]
+    );
+    if (!rows[0]) throw new Error('Devolução não encontrada');
+
+    const orderId = normalizeOrderId(rows[0].id_venda);
+    if (!orderId) throw new Error('Devolução não possui número do pedido');
+
+    const { http } = await getAuthedAxios(req);
+    const order = await getOrderDetail(http, orderId);
+
+    // Nome do comprador
+    const buyer = order?.buyer || {};
+    const buyerName =
+      [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim() ||
+      buyer.nickname || null;
+
+    // Data da compra
+    const dataCompraIso = order?.date_created ? dayjs(order.date_created).toISOString() : null;
+
+    // SKU do primeiro item (se existir)
+    let sku = null;
+    const items = Array.isArray(order?.order_items) ? order.order_items : [];
+    for (const it of items) {
+      sku = normalizeSku(it, { item: it?.item }) || sku;
+      if (sku) break;
+    }
+
+    await q(`
+      UPDATE devolucoes
+         SET cliente_nome = COALESCE($1, cliente_nome),
+             data_compra  = COALESCE($2, data_compra),
+             loja_nome    = COALESCE($3, loja_nome),
+             sku          = COALESCE($4, sku),
+             updated_at   = now()
+       WHERE id = $5
+    `, [buyerName, dataCompraIso, 'Mercado Livre', sku, returnId]);
+
+    await addReturnEvent(req, {
+      returnId,
+      type: 'ml-sync',
+      title: 'Enriquecido via ML',
+      message: `Dados trazidos do pedido ${orderId}`,
+      meta: { order_id: orderId },
+      idemp_key: `ml-enrich:${returnId}:${orderId}`
+    });
+
+    return { ok: true, order_id: orderId };
   }
 
   /* ------------------------------- rotas ------------------------------ */
@@ -257,6 +321,7 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
+  // DEBUG — returns/search não existe
   router.get('/api/ml/returns/search-debug', (req, res) => {
     res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /v2/claims/{claim_id}/returns' });
     return;
@@ -429,6 +494,18 @@ module.exports = function registerMlSync(app, opts = {}) {
       const detail = e?.response?.data || e?.message || String(e);
       if (debug) return res.status(500).json({ ok: false, error: detail });
       return res.status(500).json({ ok: false, error: 'Falha ao importar' });
+    }
+  });
+
+  // Enriquecer uma devolução específica com dados do pedido do ML
+  router.post('/api/ml/returns/:id/enrich', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const out = await enrichReturnFromML(req, id);
+      return res.json({ ok: true, ...out });
+    } catch (e) {
+      const detail = e?.response?.data || e?.message || String(e);
+      return res.status(500).json({ ok: false, error: detail });
     }
   });
 

@@ -89,7 +89,7 @@
   function calcTotalByRules(d) {
     const st   = String(d.status || '').toLowerCase();
     const mot  = String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
-    const lgs  = String(d.log_status || '').toLowerCase();
+       const lgs  = String(d.log_status || '').toLowerCase();
     const vp   = Number(d.valor_produto || 0);
     const vf   = Number(d.valor_frete || 0);
 
@@ -296,14 +296,28 @@
     return !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
   }
 
+  function canEnrichNow() {
+    const key = `rf_enrich_${returnId}`;
+    const last = Number(localStorage.getItem(key) || 0);
+    const ok = !last || (Date.now() - last) > ENRICH_TTL_MS;
+    if (ok) localStorage.setItem(key, String(Date.now()));
+    return ok;
+  }
+
   async function enrichFromML(reason = 'auto') {
-    if (!current?.id_venda) return false;
+    if (!current?.id) return false;
     try {
       disableHead(true);
       setAutoHint('(atualizando dados do ML…)');
-      // importa últimos 90 dias (mesma janela do Central)
-      const url = `/api/ml/claims/import?days=90&silent=1`;
-      await fetch(url).then(() => null).catch(() => null);
+
+      // 1) claims (status/sku) — janela de 90 dias
+      await fetch(`/api/ml/claims/import?days=90&silent=1`).catch(() => null);
+
+      // 2) enriquecer esta devolução com dados do pedido (cliente, data, sku)
+      await fetch(`/api/ml/returns/${encodeURIComponent(current.id)}/enrich`, { method: 'POST' })
+        .then(r => r.ok ? null : Promise.reject())
+        .catch(() => null);
+
       await reloadCurrent();
       toast(reason === 'auto' ? 'Dados atualizados automaticamente.' : 'Dados atualizados do ML.', 'success');
       return true;
@@ -313,14 +327,6 @@
       setAutoHint('');
       disableHead(false);
     }
-  }
-
-  function canEnrichNow() {
-    const key = `rf_enrich_${returnId}`;
-    const last = Number(localStorage.getItem(key) || 0);
-    const ok = !last || (Date.now() - last) > ENRICH_TTL_MS;
-    if (ok) localStorage.setItem(key, String(Date.now()));
-    return ok;
   }
 
   // ==== Dialog Recebido no CD ====
