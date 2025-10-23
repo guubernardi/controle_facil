@@ -288,7 +288,7 @@
   }
 
   // ===== API =====
-  function safeJson(res){ 
+  function safeJson(res){
     if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status));
     // alguns backends retornam 204 no events
     if (res.status === 204) return {};
@@ -398,21 +398,59 @@
     if (ok) localStorage.setItem(key, String(Date.now()));
     return ok;
   }
+
+  /**
+   * Busca o custo de retorno no back e:
+   * 1) preenche o campo "valor_frete" do modal imediatamente
+   * 2) recalcula o total na hora
+   * 3) dispara a persistência/linha do tempo em background
+   */
   function enrichFromML(reason) {
     reason = reason || 'auto';
     if (!current || !current.id) return Promise.resolve(false);
-    disableHead(true); setAutoHint('(atualizando dados do ML…)');
-    return Promise.resolve()
-      .then(function(){ return fetch('/api/ml/claims/import?days=90&silent=1').catch(function(){}); })
-      .then(function(){ 
-        return fetch('/api/ml/returns/' + encodeURIComponent(current.id) + '/enrich', { method: 'POST' })
-          .then(function(r){ if(!r.ok) throw new Error(); })
-          .catch(function(){}); 
+
+    disableHead(true);
+    setAutoHint('(buscando frete no ML…)');
+
+    var id = current.id;
+    var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/return-cost?calculate_amount_usd=true';
+    var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich?calculate_amount_usd=true';
+
+    // 1) Busca o valor para mostrar no modal
+    return fetch(previewUrl)
+      .then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok) throw new Error((j && (j.error || j.message)) || 'Falha ao buscar custo de devolução no ML');
+          return j;
+        });
       })
-      .then(function(){ return reloadCurrent(); })
-      .then(function(){ toast(reason === 'auto' ? 'Dados atualizados automaticamente.' : 'Dados atualizados do ML.', 'success'); return true; })
-      .catch(function(){ return false; })
-      .then(function(v){ setAutoHint(''); disableHead(false); return v; });
+      .then(function (j) {
+        // 2) Atualiza UI imediatamente
+        var amt = Number(j.amount || 0);
+        current.valor_frete = amt;
+
+        var input = $('valor_frete');
+        if (input) {
+          // mostra com vírgula para PT-BR, mas o recalc usa toNum()
+          input.value = String(amt).replace('.', ',');
+        }
+        recalc(); // atualiza cartão e total
+        updateSummary(Object.assign({}, current, capture()));
+
+        toast('Frete do ML atualizado: ' + moneyBRL(amt), 'success');
+
+        // 3) Dispara persistência (cria mensagem/timeline no back)
+        return fetch(persistUrl, { method: 'POST' }).catch(function(){});
+      })
+      // 4) Recarrega o registro para garantir consistência com o banco
+      .then(function () { return reloadCurrent(); })
+      .catch(function (e) {
+        toast(e.message || 'Não foi possível obter o valor do frete no ML', 'error');
+      })
+      .then(function () {
+        setAutoHint('');
+        disableHead(false);
+      });
   }
 
   // ==== Dialog Recebido no CD ====
@@ -627,7 +665,8 @@
     }
     reloadCurrent()
       .then(function () {
-        if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) && needsEnrichment(current) && canEnrichNow()) {
+        // Auto (opcional): só roda se precisar e respeita TTL
+        if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) && canEnrichNow() && needsEnrichment(current)) {
           return enrichFromML('auto');
         }
       })
