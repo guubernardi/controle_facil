@@ -89,7 +89,7 @@
   function calcTotalByRules(d) {
     const st   = String(d.status || '').toLowerCase();
     const mot  = String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
-       const lgs  = String(d.log_status || '').toLowerCase();
+    const lgs  = String(d.log_status || '').toLowerCase();
     const vp   = Number(d.valor_produto || 0);
     const vf   = Number(d.valor_frete || 0);
 
@@ -291,6 +291,11 @@
     return s.includes('mercado') || s.includes('meli') || s.includes('ml');
   }
 
+  function parecePedidoML(pedido = '') {
+    // pedido numérico com pelo menos 6 dígitos (ML costuma ter 9–12)
+    return /^\d{6,}$/.test(String(pedido || ''));
+  }
+
   function needsEnrichment(d = {}) {
     // Se faltar algum campo “essencial”, tentamos enriquecer
     return !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
@@ -440,8 +445,9 @@
     try {
       await reloadCurrent();
 
-      // enriquecer automaticamente se a loja for ML e faltarem dados
-      if (lojaEhML(current.loja_nome) && needsEnrichment(current) && canEnrichNow()) {
+      // enriquecer automaticamente: aceita ML na loja OU pedido numérico “com cara de ML”
+      if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) &&
+          needsEnrichment(current) && canEnrichNow()) {
         await enrichFromML('auto');
       }
 
