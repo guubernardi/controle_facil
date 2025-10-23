@@ -78,7 +78,8 @@ async function api(url, opts) {
  * ========================= */
 
 async function tryImport(source) {
-  const url = `/api/ml/claims/import?source=${encodeURIComponent(source)}&days=${IMPORT_WINDOW_DAYS}&silent=1`;
+  // <<<<<< multi-contas: all=1 >>>>>>
+  const url = `/api/ml/claims/import?source=${encodeURIComponent(source)}&days=${IMPORT_WINDOW_DAYS}&silent=1&all=1`;
   try {
     const res = await api(url);
     const ok = !!res?.ok;
@@ -158,12 +159,7 @@ function handleNewReclamacoes(rows) {
 
 // “Devoluções a caminho” (dados) — prioriza 'a_caminho'
 async function fetchACaminho() {
-  const tries = [
-    "a_caminho",     // novo status (retornos em trânsito)
-    "recebido_cd",
-    "em_inspecao",
-    "pendente"
-  ];
+  const tries = ["a_caminho", "recebido_cd", "em_inspecao", "pendente"];
   for (const st of tries) {
     const res = await api(`/api/returns?status=${encodeURIComponent(st)}&page=1&pageSize=20`).catch(() => null);
     const rows = Array.isArray(res?.items) ? res.items : [];
@@ -206,10 +202,8 @@ async function boot() {
   if (hasLoader) window.PageLoader.hold(LOADER_MIN_MS);
 
   try {
-    // 1) Garante um import inicial (com fallback)
     await kickstartImport();
 
-    // 2) Busca dados em paralelo; se não houver PageLoader, impõe atraso mínimo via sleep
     const results = await Promise.all([
       fetchReclamacoesAbertas(),
       fetchACaminho(),
