@@ -2,6 +2,7 @@
 'use strict';
 
 const { query } = require('../db');
+const { broadcast } = require('../sql/events'); // opcional: SSE para front
 
 /* =============== introspecção =============== */
 async function tableHasColumns(table, cols) {
@@ -105,6 +106,50 @@ function parseDateYMD(s) {
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString().slice(0,10);
+}
+
+/* ===== helpers extras (fallbacks, eventos) ===== */
+function toNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'string') v = v.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+function siteIdToName(siteId) {
+  const map = { MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre' };
+  return map[siteId] || 'Mercado Livre';
+}
+
+let __eventsTableMemo = null;
+async function detectEventsTable() {
+  if (__eventsTableMemo !== null) return __eventsTableMemo;
+  const candidates = [
+    { table: 'return_events',      id: 'return_id'     },
+    { table: 'devolucoes_events',  id: 'devolucao_id'  },
+    { table: 'events_returns',     id: 'return_id'     },
+  ];
+  for (const c of candidates) {
+    try {
+      const { rows } = await query(`SELECT to_regclass('public.${c.table}') AS ok`);
+      if (rows[0]?.ok) { __eventsTableMemo = c; return c; }
+    } catch (_) {}
+  }
+  __eventsTableMemo = null;
+  return null;
+}
+
+async function insertEvent(returnId, type, title, message, meta) {
+  const evt = await detectEventsTable();
+  if (!evt) return false;
+  await query(
+    `
+      INSERT INTO ${evt.table} (${evt.id}, type, title, message, meta, created_at)
+      VALUES ($1, $2, $3, $4, $5, now())
+    `,
+    [returnId, type || 'status', title || null, message || null, meta || null]
+  );
+  try { broadcast('return_event', { returnId, type, title, message, meta }); } catch (_e) {}
+  return true;
 }
 
 /* ============================ ROTAS ============================ */
@@ -279,22 +324,50 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  /* ---------- BUSCAR 1 ---------- */
+  /* ---------- BUSCAR 1 (com normalização de valores) ---------- */
   app.get('/api/returns/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
+
       const { rows } = await query('SELECT * FROM devolucoes WHERE id=$1', [id]);
       if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
-      res.json({ item: rows[0] });
+
+      const r = rows[0];
+
+      const valor_produto =
+        toNum(r.valor_produto) ??
+        toNum(r.valor_produtos) ??
+        toNum(r.valor_item) ??
+        toNum(r.produto_valor) ??
+        toNum(r.valor_total) ??
+        toNum(r.subtotal) ??
+        toNum(r.item_value) ??
+        toNum(r.amount_item) ??
+        toNum(r.amount) ??
+        null;
+
+      const valor_frete =
+        toNum(r.valor_frete) ??
+        toNum(r.frete) ??
+        toNum(r.shipping_value) ??
+        toNum(r.shipping_cost) ??
+        toNum(r.logistics_cost) ??
+        null;
+
+      const loja_nome = r.loja_nome || (r.site_id ? siteIdToName(r.site_id) : null);
+
+      const item = { ...r, valor_produto, valor_frete, loja_nome };
+
+      res.json({ item });
     } catch (e) {
       console.error('[returns] getById erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao carregar devolução.'));
     }
   });
 
-  /* ---------- ATUALIZAR ---------- */
-  app.put('/api/returns/:id', async (req, res) => {
+  /* ---------- ATUALIZAR (PUT) ---------- */
+  async function updateReturn(req, res) {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -322,19 +395,170 @@ module.exports = function registerReturns(app) {
       console.error('[returns] update erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao atualizar devolução.'));
     }
-  });
+  }
+  app.put('/api/returns/:id', updateReturn);
+
+  /* ---------- ATUALIZAR (PATCH alias) ---------- */
+  app.patch('/api/returns/:id', updateReturn);
 
   /* ---------- EXCLUIR ---------- */
   app.delete('/api/returns/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
-    const { rowCount } = await query('DELETE FROM devolucoes WHERE id=$1', [id]);
+      const { rowCount } = await query('DELETE FROM devolucoes WHERE id=$1', [id]);
       if (!rowCount) return res.status(404).json({ error: 'Não encontrado' });
       res.json({ ok: true });
     } catch (e) {
       console.error('[returns] delete erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao excluir devolução.'));
+    }
+  });
+
+  /* ---------- TIMELINE: lista de eventos ---------- */
+  app.get('/api/returns/:id/events', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const tbl = await detectEventsTable();
+      if (!tbl) return res.json({ items: [] });
+
+      const limit  = Math.min(Math.max(parseInt(req.query.limit || '100', 10), 1), 200);
+      const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+
+      const { rows } = await query(
+        `
+          SELECT type, title, message, meta, created_at
+            FROM ${tbl.table}
+           WHERE ${tbl.id} = $1
+           ORDER BY created_at DESC
+           LIMIT $2 OFFSET $3
+        `,
+        [id, limit, offset]
+      );
+
+      const items = rows.map(r => ({
+        type: (r.type || 'status').toLowerCase(),
+        title: r.title || null,
+        message: r.message || null,
+        meta: r.meta || null,
+        createdAt: r.created_at
+      }));
+
+      res.json({ items });
+    } catch (e) {
+      console.error('[returns] events erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao listar eventos.'));
+    }
+  });
+
+  /* ---------- CD: marcar como recebido ---------- */
+  app.patch('/api/returns/:id/cd/receive', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const { responsavel = 'cd', when } = req.body || {};
+      const quando = when ? new Date(when) : new Date();
+
+      await query(
+        `
+          UPDATE devolucoes
+             SET recebido_cd = TRUE,
+                 recebido_resp = $2,
+                 recebido_em = $3,
+                 log_status = 'recebido_cd',
+                 updated_at = now()
+           WHERE id = $1
+        `,
+        [id, String(responsavel).trim() || 'cd', quando.toISOString()]
+      );
+
+      await insertEvent(
+        id,
+        'status',
+        'Recebido no CD',
+        `Responsável: ${responsavel || 'cd'}`,
+        { cd: { responsavel: responsavel || 'cd', receivedAt: quando.toISOString() } }
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[returns] cd/receive erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao marcar como recebido.'));
+    }
+  });
+
+  /* ---------- CD: desfazer recebido ---------- */
+  app.patch('/api/returns/:id/cd/unreceive', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const { responsavel = 'cd', when } = req.body || {};
+      const quando = when ? new Date(when) : new Date();
+
+      await query(
+        `
+          UPDATE devolucoes
+             SET recebido_cd = FALSE,
+                 recebido_resp = NULL,
+                 recebido_em = NULL,
+                 log_status = 'nao_recebido',
+                 updated_at = now()
+           WHERE id = $1
+        `,
+        [id]
+      );
+
+      await insertEvent(
+        id,
+        'status',
+        'Recebimento removido',
+        `Responsável: ${responsavel || 'cd'}`,
+        { cd: { unreceivedAt: quando.toISOString() } }
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[returns] cd/unreceive erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao desfazer recebido.'));
+    }
+  });
+
+  /* ---------- Inspeção (aprovar/reprovar) ---------- */
+  app.patch('/api/returns/:id/cd/inspect', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const { resultado, observacao = '', when } = req.body || {};
+      const quando = when ? new Date(when) : new Date();
+
+      // mantemos 'em_inspecao' no log_status; o resultado vai na timeline
+      await query(
+        `
+          UPDATE devolucoes
+             SET log_status = 'em_inspecao',
+                 updated_at = now()
+           WHERE id = $1
+        `,
+        [id]
+      );
+
+      await insertEvent(
+        id,
+        'status',
+        `Inspeção: ${resultado || 'sem-resultado'}`,
+        observacao || null,
+        { cd: { inspectedAt: quando.toISOString(), result: resultado || null } }
+      );
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[returns] cd/inspect erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao registrar inspeção.'));
     }
   });
 
