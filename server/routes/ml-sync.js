@@ -40,6 +40,16 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
+  // Mapa status (return v2) -> status interno
+  function mapReturnStatus(ret) {
+    const s = String(ret?.status || '').toLowerCase();
+    if (['to_be_sent','shipped','to_be_received','in_transit'].includes(s)) return 'a_caminho';
+    if (['received','arrived'].includes(s)) return 'recebido_cd';
+    if (['in_review','under_review','inspection'].includes(s)) return 'em_inspecao';
+    if (['cancelled','refunded','closed','delivered'].includes(s)) return 'encerrado';
+    return 'pendente';
+  }
+
   async function addReturnEvent(req, {
     returnId, type, title = null, message = null, meta = null,
     created_by = 'ml-sync', idemp_key = null
@@ -63,7 +73,8 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   }
 
-  async function ensureReturnByOrder(req, { order_id, sku = null, created_by = 'ml-sync' }) {
+  // agora aceita loja_nome
+  async function ensureReturnByOrder(req, { order_id, sku = null, loja_nome = null, created_by = 'ml-sync' }) {
     const q = qOf(req);
     const { rows } = await q(
       `SELECT id FROM devolucoes WHERE id_venda::text = $1 LIMIT 1`,
@@ -73,9 +84,9 @@ module.exports = function registerMlSync(app, opts = {}) {
 
     const ins = await q(`
       INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
-      VALUES ($1, $2, 'Mercado Livre', $3)
+      VALUES ($1, $2, $3, $4)
       RETURNING id
-    `, [String(order_id), sku || null, created_by]);
+    `, [String(order_id), sku || null, loja_nome || 'Mercado Livre', created_by]);
 
     const id = ins.rows[0].id;
 
@@ -84,7 +95,7 @@ module.exports = function registerMlSync(app, opts = {}) {
       type: 'ml-sync',
       title: 'Criação por ML Sync',
       message: `Stub criado a partir da API do Mercado Livre (order ${order_id})`,
-      meta: { order_id },
+      meta: { order_id, loja_nome: loja_nome || 'Mercado Livre' },
       idemp_key: `ml-sync:create:${order_id}`
     });
 
@@ -99,7 +110,6 @@ module.exports = function registerMlSync(app, opts = {}) {
     fromIso, toIso, status, siteId, limitPerPage = 200, max = 2000
   }) {
     const used = [];
-
     const collect = [];
     let totalFetched = 0;
 
@@ -282,6 +292,7 @@ module.exports = function registerMlSync(app, opts = {}) {
         .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
       const { http, account } = await getAuthedAxios(req);
+      const lojaNome = account?.nickname ? `Mercado Livre · ${account.nickname}` : 'Mercado Livre';
 
       const paramsUsed = [];
       const claimMap = new Map();
@@ -331,25 +342,35 @@ module.exports = function registerMlSync(app, opts = {}) {
 
           if (!order_id) continue;
 
-          const rawStatus = String(ret?.status || '').toLowerCase();
-          const status = /delivered|cancelled|closed|finaliz/.test(rawStatus) ? 'encerrado' : 'pendente';
-
+          const status = mapReturnStatus(ret);
           const sku = normalizeSku(it, claimDet);
 
-          const returnId = await ensureReturnByOrder(req, { order_id, sku, created_by: 'ml-sync' });
+          // garante a devolução local (passando loja_nome)
+          const returnId = await ensureReturnByOrder(req, {
+            order_id,
+            sku,
+            loja_nome: lojaNome,
+            created_by: 'ml-sync'
+          });
 
           if (!dry) {
             await qOf(req)(
               `UPDATE devolucoes
                  SET status = COALESCE($1, status),
                      sku    = COALESCE($2, sku),
+                     loja_nome = CASE
+                       WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
+                         THEN COALESCE($3, loja_nome)
+                       ELSE loja_nome
+                     END,
                      updated_at = now()
-               WHERE id = $3`,
-              [status, sku, returnId]
+               WHERE id = $4`,
+              [status, sku, lojaNome, returnId]
             );
             updated++;
           }
 
+          // evento idempotente
           const idemp = `ml-claim:${claimId}:${order_id}`;
           if (!dry) {
             await addReturnEvent(req, {
@@ -361,8 +382,8 @@ module.exports = function registerMlSync(app, opts = {}) {
                 claim_id: claimId,
                 order_id,
                 return_id: ret?.id || null,
-                return_status: rawStatus,
-                status_money: ret?.status_money || null
+                return_status: String(ret?.status || ''),
+                loja_nome: lojaNome
               },
               idemp_key: idemp
             });
@@ -382,7 +403,7 @@ module.exports = function registerMlSync(app, opts = {}) {
 
       if (!silent) {
         console.log('[ml-sync] import', {
-          from: fromIso, to: toIso, statuses: statusList, total, processed, updated, events, errors
+          from: fromIso, to: toIso, statuses: statusList, total, processed, updated, events, errors, paramsUsed
         });
       }
 

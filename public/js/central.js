@@ -92,14 +92,11 @@ async function tryImport(source) {
 
 async function kickstartImport() {
   console.log("[central] Import de returns disparado (kickstart).");
-  // 1) Primeiro tenta returns (em contas que têm /returns/search)
   let done = await tryImport("returns");
-  // 2) Se não der, usa claims (caminho universal)
   if (!done) {
     console.log("[central] Caindo para import por claims…");
     done = await tryImport("claims");
   }
-  // 3) Como alternativa ampla, pode rodar both (ignora onde não existir)
   if (!done) {
     console.log("[central] Tentando import 'both'…");
     done = await tryImport("both");
@@ -152,19 +149,19 @@ function handleNewReclamacoes(rows) {
       seen.add(id);
       showToast({
         title: "Nova reclamação aberta",
-        desc: "Clique para abrir",
+        desc: r.loja_nome ? `${r.loja_nome} — clique para abrir` : "Clique para abrir",
         href: openUrlForId(id)
       });
     }
   });
 }
 
-// “Devoluções a caminho” (dados) — tenta vários status em ordem
+// “Devoluções a caminho” (dados) — prioriza 'a_caminho'
 async function fetchACaminho() {
   const tries = [
-    "recebido_cd",    // quando vier status do ML Logistics
+    "a_caminho",     // novo status (retornos em trânsito)
+    "recebido_cd",
     "em_inspecao",
-    "aprovado",       // quando só temos dados via claims
     "pendente"
   ];
   for (const st of tries) {
@@ -175,24 +172,25 @@ async function fetchACaminho() {
   return [];
 }
 
-// “Devoluções a caminho” (render)
+// “Devoluções a caminho” (render) — inclui loja_nome
 function renderACaminho(rows) {
   const ul = $("#a-caminho");
   ul.innerHTML = "";
-  if (!rows.length) {
-    // mantemos o skeleton vazio, como está no HTML
-    return;
-  }
+  if (!rows.length) return;
+
   rows.forEach((r) => {
     const li     = document.createElement("li");
     const pedido = r.id_venda || r.id || "—";
     const quando = r.updated_at || r.created_at || null;
     const dt     = quando ? new Date(quando).toLocaleDateString("pt-BR") : "—";
+    const loja   = r.loja_nome || "";
+
     li.className = "item";
     li.innerHTML = `
       <span class="pill">${String(r.status || "").replaceAll("_", " ")}</span>
       <span class="id">pacote ${pedido}</span>
       <span class="muted">• ${dt}</span>
+      ${loja ? `<span class="muted">• ${loja}</span>` : ""}
       <a href="devolucao-editar.html?id=${encodeURIComponent(r.id)}">abrir</a>
     `;
     ul.appendChild(li);
