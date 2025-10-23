@@ -178,7 +178,9 @@
     if (!returnId) return;
     const r = await fetch(`/api/returns/${encodeURIComponent(returnId)}`);
     if (!r.ok) throw new Error('Falha ao recarregar registro.');
-    current = await r.json();
+    const data = await r.json();
+    // >>>> FIX: a API pode retornar { item: {...} } ou o objeto direto
+    current = (data && typeof data === 'object' && 'item' in data) ? data.item : data;
     fill(current);
   }
 
