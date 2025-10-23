@@ -24,6 +24,13 @@
     if (el) el.textContent = txt || '';
   };
 
+  const deepGet = (obj, path, def = null) => {
+    if (!obj) return def;
+    try {
+      return path.split('.').reduce((o, k) => (o && k in o ? o[k] : undefined), obj) ?? def;
+    } catch { return def; }
+  };
+
   const getLogPillEl = () => $('pill-log') || $('log_status_pill');
 
   const setLogPill = (text) => {
@@ -70,19 +77,99 @@
     if (sep) sep.hidden = false;
   };
 
-  // ===== Regras (aba Config) =====
-  function getRuleFlags() {
-    try {
-      const s = JSON.parse(localStorage.getItem('rf_settings') || '{}');
-      const r = s.rules || {};
-      return {
-        rejeitadoZero:      r.rejeitadoZero      ?? true,
-        motivoClienteZero:  r.motivoClienteZero  ?? true,
-        cdSomenteFrete:     r.cdSomenteFrete     ?? true,
-      };
-    } catch {
-      return { rejeitadoZero: true, motivoClienteZero: true, cdSomenteFrete: true };
+  // ===== Normalização dos dados vindos da API =====
+  const parseMoney = (v) => {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      // remove R$, pontos de milhar e troca vírgula por ponto
+      const clean = v.replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
+      const n = Number(clean);
+      return isNaN(n) ? 0 : n;
     }
+    return Number(v) || 0;
+  };
+
+  const toISODate = (x) => {
+    if (!x) return '';
+    if (typeof x === 'number') return new Date(x).toISOString().slice(0,10);
+    const s = String(x).trim();
+    // dd/mm/aaaa
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    const d = new Date(s);
+    if (!isNaN(d)) return d.toISOString().slice(0,10);
+    return s.slice(0,10);
+  };
+
+  function normalizeMotivo(raw) {
+    let motivo = raw || '';
+    if (typeof motivo !== 'string') return '';
+    const s = motivo.toLowerCase().replace(/[_\s]+/g, '-');
+    if (s.includes('arrepend') || s.includes('buyer-remorse')) return 'cliente-arrependimento';
+    if (s.includes('endereco') || s.includes('address'))       return 'cliente-endereco-errado';
+    if (s.includes('defe') || s.includes('defect') || s.includes('damaged')) return 'defeito';
+    if (s.includes('avaria') || s.includes('transporte'))      return 'avaria';
+    if (s.includes('incor') || s.includes('errad') || s.includes('wrong-item')) return 'pedido-incorreto';
+    return s; // deixa como veio; se não bater, o select fica sem seleção
+  }
+
+  function normalizeStatus(raw) {
+    if (!raw) return '';
+    const s = String(raw).toLowerCase();
+    if (s.includes('pend')) return 'pendente';
+    if (s.includes('aprov')) return 'aprovado';
+    if (s.includes('rej') || s.includes('neg')) return 'rejeitado';
+    return s;
+  }
+
+  function normalizeReturn(payload) {
+    const data = (payload && typeof payload === 'object' && 'item' in payload) ? payload.item : payload || {};
+    const n = {};
+
+    n.id           = data.id ?? data._id ?? data.return_id ?? null;
+    n.id_venda     = data.id_venda ?? data.pedido_id ?? data.order_id ?? data.numero_pedido ?? null;
+    n.cliente_nome = data.cliente_nome ?? data.cliente ?? data.buyer_name ?? deepGet(data, 'buyer.name') ?? null;
+
+    // tenta extrair o nome real da loja / vendedor
+    n.loja_nome =
+      data.loja_nome ?? data.loja ?? data.store_name ?? data.seller_name ??
+      deepGet(data, 'seller.nickname') ?? deepGet(data, 'ml.order.seller.nickname') ??
+      deepGet(data, 'seller.name') ?? data.plataforma ?? '';
+
+    // status "humano" (select) e "log" (pílula)
+    n.status     = normalizeStatus(data.status ?? data.situacao ?? data.claim_status);
+    n.log_status = data.log_status ?? data.status_log ?? deepGet(data, 'cd.status') ?? data.log ?? '';
+
+    // motivo
+    n.tipo_reclamacao = normalizeMotivo(
+      data.tipo_reclamacao ?? data.motivo ?? data.reason ?? data.claim_reason
+    );
+
+    // datas
+    n.data_compra = data.data_compra ?? data.data_pedido ?? data.created_at ?? data.order_date ?? deepGet(data, 'ml.order.date_created') ?? '';
+
+    // valores
+    n.valor_produto = parseMoney(
+      data.valor_produto ?? data.valor ?? data.valor_prod ?? data.preco ?? deepGet(data, 'totals.produto')
+    );
+    n.valor_frete = parseMoney(
+      data.valor_frete ?? data.frete ?? data.valor_envio ?? deepGet(data, 'totals.frete')
+    );
+
+    // demais campos
+    n.sku          = data.sku ?? data.produto_sku ?? data.item_sku ?? deepGet(data, 'produto.sku') ?? '';
+    n.nfe_numero   = data.nfe_numero ?? data.nfe ?? data.nota_fiscal ?? '';
+    n.nfe_chave    = data.nfe_chave ?? data.chave_nfe ?? '';
+    n.reclamacao   = data.reclamacao ?? data.observacao ?? data.obs ?? '';
+    n.cd_recebido_em  = data.cd_recebido_em ?? deepGet(data, 'cd.recebido_em') ?? deepGet(data, 'cd.receivedAt') ?? deepGet(data, 'cd.recebidoEm') ?? null;
+    n.cd_responsavel  = data.cd_responsavel ?? deepGet(data, 'cd.responsavel') ?? null;
+
+    // aplica formatos finais
+    if (n.data_compra) n.data_compra = toISODate(n.data_compra);
+
+    // devolve o objeto original + normalizados (os normalizados prevalecem)
+    return { ...data, ...n };
   }
 
   // ===== Regras de cálculo (frente) =====
@@ -157,15 +244,15 @@
     if ($('id_venda'))         $('id_venda').value         = d.id_venda || '';
     if ($('cliente_nome'))     $('cliente_nome').value     = d.cliente_nome || '';
     if ($('loja_nome'))        $('loja_nome').value        = d.loja_nome || '';
-    if ($('data_compra'))      $('data_compra').value      = d.data_compra ? String(d.data_compra).slice(0, 10) : '';
-    if ($('status'))           $('status').value           = d.status || '';
+    if ($('data_compra'))      $('data_compra').value      = d.data_compra ? toISODate(d.data_compra) : '';
+    if ($('status'))           $('status').value           = normalizeStatus(d.status) || '';
     if ($('sku'))              $('sku').value              = d.sku || '';
-    if ($('tipo_reclamacao'))  $('tipo_reclamacao').value  = d.tipo_reclamacao || '';
+    if ($('tipo_reclamacao'))  $('tipo_reclamacao').value  = normalizeMotivo(d.tipo_reclamacao) || '';
     if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
     if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
-    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto ?? '') === '' ? '' : Number(d.valor_produto || 0);
-    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  ?? '') === '' ? '' : Number(d.valor_frete  || 0);
+    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto ?? '') === '' ? '' : parseMoney(d.valor_produto);
+    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  ?? '') === '' ? '' : parseMoney(d.valor_frete);
 
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
@@ -179,8 +266,7 @@
     const r = await fetch(`/api/returns/${encodeURIComponent(returnId)}`);
     if (!r.ok) throw new Error('Falha ao recarregar registro.');
     const data = await r.json();
-    // >>>> FIX: a API pode retornar { item: {...} } ou o objeto direto
-    current = (data && typeof data === 'object' && 'item' in data) ? data.item : data;
+    current = normalizeReturn(data);
     fill(current);
   }
 
@@ -234,7 +320,7 @@
     const dlg   = $('dlg-inspecao');
     const title = $('insp-title');
     const sub   = $('insp-sub');
-    const txt   = $('insp-text');
+    thetxt = $('insp-text');
     const btnOk = $('insp-confirm');
     const btnNo = $('insp-cancel');
 
@@ -245,17 +331,14 @@
     sub.textContent   = isApprove
       ? 'Confirme a aprovação da inspeção. Você pode adicionar uma observação.'
       : 'Confirme a reprovação da inspeção. Você pode adicionar uma observação.';
-    
-    if (btnOk) {
-      btnOk.className = isApprove ? 'btn btn--success' : 'btn btn--danger';
-    }
+    if (btnOk) btnOk.className = isApprove ? 'btn btn--success' : 'btn btn--danger';
 
-    txt.value = '';
+    thetxt.value = '';
     dlg.showModal();
 
     const onSubmit = (ev) => {
       ev.preventDefault();
-      const obs = txt.value.trim();
+      const obs = thetxt.value.trim();
       dlg.close();
       runInspect(result, obs);
       cleanup();
@@ -273,7 +356,7 @@
     if (form) form.addEventListener('submit', onSubmit);
     if (btnNo) btnNo.addEventListener('click', onCancel);
 
-    setTimeout(() => txt?.focus(), 0);
+    setTimeout(() => thetxt?.focus(), 0);
   }
 
   function disableHead(disabled) {
@@ -294,12 +377,10 @@
   }
 
   function parecePedidoML(pedido = '') {
-    // pedido numérico com pelo menos 6 dígitos (ML costuma ter 9–12)
     return /^\d{6,}$/.test(String(pedido || ''));
   }
 
   function needsEnrichment(d = {}) {
-    // Se faltar algum campo “essencial”, tentamos enriquecer
     return !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
   }
 
@@ -316,15 +397,10 @@
     try {
       disableHead(true);
       setAutoHint('(atualizando dados do ML…)');
-
-      // 1) claims (status/sku) — janela de 90 dias
       await fetch(`/api/ml/claims/import?days=90&silent=1`).catch(() => null);
-
-      // 2) enriquecer esta devolução com dados do pedido (cliente, data, sku)
       await fetch(`/api/ml/returns/${encodeURIComponent(current.id)}/enrich`, { method: 'POST' })
         .then(r => r.ok ? null : Promise.reject())
         .catch(() => null);
-
       await reloadCurrent();
       toast(reason === 'auto' ? 'Dados atualizados automaticamente.' : 'Dados atualizados do ML.', 'success');
       return true;
@@ -447,7 +523,6 @@
     try {
       await reloadCurrent();
 
-      // enriquecer automaticamente: aceita ML na loja OU pedido numérico “com cara de ML”
       if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) &&
           needsEnrichment(current) && canEnrichNow()) {
         await enrichFromML('auto');
