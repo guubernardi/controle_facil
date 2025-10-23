@@ -19,6 +19,11 @@
     });
   };
 
+  const setAutoHint = (txt) => {
+    const el = $('auto-hint');
+    if (el) el.textContent = txt || '';
+  };
+
   const getLogPillEl = () => $('pill-log') || $('log_status_pill');
 
   const setLogPill = (text) => {
@@ -65,7 +70,7 @@
     if (sep) sep.hidden = false;
   };
 
-  // ===== Regras (vindas da aba "Regras de Custos") =====
+  // ===== Regras (aba Config) =====
   function getRuleFlags() {
     try {
       const s = JSON.parse(localStorage.getItem('rf_settings') || '{}');
@@ -80,7 +85,7 @@
     }
   }
 
-  // ===== Regras de cálculo =====
+  // ===== Regras de cálculo (frente) =====
   function calcTotalByRules(d) {
     const st   = String(d.status || '').toLowerCase();
     const mot  = String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
@@ -97,7 +102,7 @@
   // ===== Estado =====
   let current = {};
 
-  // ===== Resumo (card à esquerda) =====
+  // ===== Resumo (card) =====
   function updateSummary(d) {
     const rs = $('resumo-status');
     const rl = $('resumo-log');
@@ -270,12 +275,52 @@
   }
 
   function disableHead(disabled) {
-    ['btn-salvar', 'btn-recebido', 'btn-insp-aprova', 'btn-insp-reprova',
+    ['btn-salvar', 'btn-enrich', 'btn-insp-aprova', 'btn-insp-reprova',
      'rq-receber', 'rq-aprovar', 'rq-reprovar'
     ].forEach(id => {
       const el = $(id); 
       if (el) el.disabled = !!disabled;
     });
+  }
+
+  // ====== ENRIQUECIMENTO AUTOMÁTICO (ML) ======
+  const ENRICH_TTL_MS = 10 * 60 * 1000; // 10 minutos
+
+  function lojaEhML(nome = '') {
+    const s = String(nome).toLowerCase();
+    return s.includes('mercado') || s.includes('meli') || s.includes('ml');
+  }
+
+  function needsEnrichment(d = {}) {
+    // Se faltar algum campo “essencial”, tentamos enriquecer
+    return !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
+  }
+
+  async function enrichFromML(reason = 'auto') {
+    if (!current?.id_venda) return false;
+    try {
+      disableHead(true);
+      setAutoHint('(atualizando dados do ML…)');
+      // importa últimos 90 dias (mesma janela do Central)
+      const url = `/api/ml/claims/import?days=90&silent=1`;
+      await fetch(url).then(() => null).catch(() => null);
+      await reloadCurrent();
+      toast(reason === 'auto' ? 'Dados atualizados automaticamente.' : 'Dados atualizados do ML.', 'success');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setAutoHint('');
+      disableHead(false);
+    }
+  }
+
+  function canEnrichNow() {
+    const key = `rf_enrich_${returnId}`;
+    const last = Number(localStorage.getItem(key) || 0);
+    const ok = !last || (Date.now() - last) > ENRICH_TTL_MS;
+    if (ok) localStorage.setItem(key, String(Date.now()));
+    return ok;
   }
 
   // ==== Dialog Recebido no CD ====
@@ -389,6 +434,11 @@
     try {
       await reloadCurrent();
 
+      // enriquecer automaticamente se a loja for ML e faltarem dados
+      if (lojaEhML(current.loja_nome) && needsEnrichment(current) && canEnrichNow()) {
+        await enrichFromML('auto');
+      }
+
       const ls = String(current.log_status || '').toLowerCase();
       if (ls === 'aprovado_cd' || ls === 'reprovado_cd') {
         const btnA = $('btn-insp-aprova');
@@ -429,6 +479,14 @@
 
   const btnSalvar = $('btn-salvar');
   if (btnSalvar) btnSalvar.addEventListener('click', save);
+
+  // Botão manual de enriquecimento (ML)
+  const btnEnrich = $('btn-enrich');
+  if (btnEnrich) {
+    btnEnrich.addEventListener('click', async () => {
+      await enrichFromML('manual');
+    });
+  }
 
   // ===== TIMELINE =====
   async function fetchEvents(id, limit = 100, offset = 0) {

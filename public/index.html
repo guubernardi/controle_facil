@@ -22,6 +22,13 @@
 </head>
 
 <body class="index-page" data-page="devolucoes">
+  <!-- PAGE LOADER (compatível com central) -->
+  <div id="pageLoaderOverlay" class="page-loader-overlay" aria-hidden="true" style="display:none;">
+    <div class="page-loader-spinner" role="status" aria-live="polite" aria-label="Carregando">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    </div>
+  </div>
+
   <!-- SIDEBAR -->
   <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
     <div class="sidebar-header">
@@ -122,7 +129,7 @@
 
   <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-  <!-- HEADER (sem botão de nova devolução) -->
+  <!-- HEADER -->
   <header id="cabecalho" class="cabecalho">
     <div class="container">
       <div class="cabecalho-conteudo">
@@ -276,7 +283,6 @@
             </svg>
             <h3 class="titulo-vazio">Nenhuma devolução encontrada</h3>
             <p id="descricao-vazia" class="descricao-vazio">Sincronize com o Mercado Livre ou ajuste os filtros de pesquisa</p>
-            <!-- Botão de sincronização (ou único lugar com este id) -->
             <button id="btn-sync-ml" class="botao botao-principal" type="button" style="margin-top: 1.5rem;">
               Sincronizar com ML
             </button>
@@ -295,7 +301,7 @@
     </div>
   </main>
 
-  <!-- TOAST -->
+  <!-- TOAST (local) -->
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">
     <div class="toast-icone" aria-hidden="true">
       <svg viewBox="0 0 16 16" fill="currentColor"></svg>
@@ -306,7 +312,10 @@
     </div>
   </div>
 
-  <!-- MODAL: DETALHES (mantido) -->
+  <!-- TOAST CONTAINER GLOBAL (compatível com central.js) -->
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- MODAL: DETALHES -->
   <div id="modal-detalhes" class="modal" role="dialog" aria-modal="true" aria-labelledby="detTitulo" hidden>
     <div class="modal-card modal-lg" role="document">
       <div class="modal-header">
@@ -400,6 +409,18 @@
   <!-- Scripts -->
   <script src="/js/auth-guard.js"></script>
   <script src="js/navigation.js"></script>
+  <!-- PageLoader helper (compatível com central) -->
+  <script>
+    // helper simples para expor window.PageLoader caso o CSS exista
+    (function () {
+      const overlay = document.getElementById('pageLoaderOverlay');
+      if (!overlay) return;
+      window.PageLoader = {
+        hold(ms = 600) { overlay.style.display = 'flex'; if (ms) setTimeout(() => {}, ms); },
+        done() { overlay.style.display = 'none'; }
+      };
+    })();
+  </script>
   <script type="module" src="js/index.js"></script>
 </body>
 </html>
