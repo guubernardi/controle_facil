@@ -81,12 +81,15 @@ app.get('/', (req, res) => {
   return res.redirect('/login.html');
 });
 
-/** SSE (opcional) */
+/** SSE (antes do middleware que força Content-Type JSON) */
 try {
   const events = require('./events');
   if (typeof events?.sse === 'function') {
+    // novo endpoint esperado pelo front
+    app.get('/api/events', events.sse);
+    // alias legado
     app.get('/events', events.sse);
-    console.log('[BOOT] SSE /events habilitado');
+    console.log('[BOOT] SSE habilitado em /api/events (alias: /events)');
   } else {
     console.warn('[BOOT] SSE desabilitado: função sse não encontrada em ./events');
   }
@@ -94,8 +97,9 @@ try {
   console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
 }
 
-/** Cabeçalho JSON nas rotas /api (ANTES de montar rotas) */
+/** Cabeçalho JSON nas rotas /api (depois do SSE) */
 app.use('/api', (_req, res, next) => {
+  // não força para SSE pois /api/events já foi montado acima
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   next();
 });
@@ -295,8 +299,14 @@ try {
 
 /* ========= Chat por Devolução (mensagens) ========= */
 try {
-  const returnsMessages = require('./routes/returns-messages');
-  app.use('/api', returnsMessages);
+  const registerReturnMessages = require('./routes/returns-messages');
+  if (typeof registerReturnMessages === 'function') {
+    // novo padrão (função registradora)
+    registerReturnMessages(app);
+  } else {
+    // compatibilidade caso exporte um Router
+    app.use('/api', registerReturnMessages);
+  }
   console.log('[BOOT] Rotas Chat por Devolução registradas (/api/returns/:id/messages)');
 } catch (e) {
   console.warn('[BOOT] Rotas Chat por Devolução não carregadas (opcional):', e?.message || e);
@@ -403,6 +413,7 @@ app.get('/api/_debug/tenant', async (req, res) => {
 
 /* ------------------------------------------------------------
  *  Events API — listar eventos por return_id (auditoria)
+ *  (mantido; se houver rota similar em routes/returns, esta ficará abaixo e não conflitará)
  * ------------------------------------------------------------ */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
