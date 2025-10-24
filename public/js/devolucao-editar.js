@@ -27,11 +27,6 @@
   function moneyBRL(v) {
     return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   }
-  function fmtInputNumBR(v){
-    var n = toNum(v);
-    if (!isFinite(n)) return '';
-    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
   function toast(msg, type) {
     type = type || 'info';
     var t = $('toast');
@@ -261,8 +256,9 @@
     if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
     if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
-    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto === null || d.valor_produto === undefined) ? '' : fmtInputNumBR(d.valor_produto);
-    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  === null || d.valor_frete  === undefined) ? '' : fmtInputNumBR(d.valor_frete);
+    // inputs type="number" esperam ponto como decimal - não formatar com vírgula aqui
+    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
+    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
 
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
@@ -448,8 +444,15 @@
 
     return fetch(previewUrl, { headers: { 'Accept': 'application/json' } })
       .then(function (r) {
-        return r.json().then(function (j) {
-          if (!r.ok) throw new Error((j && (j.error || j.message)) || 'Falha ao buscar valores no ML');
+        // Lê como texto e tenta JSON; anexa status em caso de erro
+        return r.text().then(function (txt) {
+          var j = {};
+          try { j = txt ? JSON.parse(txt) : {}; } catch (_e) {}
+          if (!r.ok) {
+            var err = new Error((j && (j.error || j.message)) || ('HTTP ' + r.status));
+            err.status = r.status;
+            throw err;
+          }
           return j;
         });
       })
@@ -463,39 +466,29 @@
               return toNum(obj[k]);
             }
           }
-          return null; // <- importante: diferencia "não veio" de "0"
+          return null; // diferencia "não veio" de "0"
         }
 
-        var product =
-          numFrom(j, ['product','product_amount','amount_product','items_total','item_total','subtotal','total_items']);
-        if (product === null) {
-          product = numFrom(j.amounts || {}, ['product','items','item_total','amount_product']);
-        }
-        if (product === null) {
-          product = numFrom(j.order || {},   ['items_total','subtotal','product','amount_product']);
-        }
+        var product = numFrom(j, ['product','product_amount','amount_product','items_total','item_total','subtotal','total_items']);
+        if (product === null) product = numFrom(j.amounts || {}, ['product','items','item_total','amount_product']);
+        if (product === null) product = numFrom(j.order   || {}, ['items_total','subtotal','product','amount_product']);
 
-        var freight =
-          numFrom(j, ['freight','shipping','shipping_cost','amount_shipping','return_cost','return_amount']);
-        if (freight === null) {
-          freight = numFrom((j.return_cost || {}), ['amount','value']);
-        }
-        if (freight === null) {
-          freight = numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
-        }
+        var freight = numFrom(j, ['freight','shipping','shipping_cost','amount_shipping','return_cost','return_amount']);
+        if (freight === null) freight = numFrom((j.return_cost || {}), ['amount','value']);
+        if (freight === null) freight = numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
 
-        var changed = false;
         var ip = $('valor_produto');
         var ifr = $('valor_frete');
 
-        if (product !== null) {
-          current.valor_produto = product;
-          if (ip) { ip.value = fmtInputNumBR(product); }
+        var changed = false;
+        if (product !== null && toNum(product) !== toNum(current.valor_produto)) {
+          current.valor_produto = toNum(product);
+          if (ip) ip.value = String(current.valor_produto); // type=number => usar ponto
           changed = true;
         }
-        if (freight !== null) {
-          current.valor_frete = freight;
-          if (ifr) { ifr.value = fmtInputNumBR(freight); }
+        if (freight !== null && toNum(freight) !== toNum(current.valor_frete)) {
+          current.valor_frete = toNum(freight);
+          if (ifr) ifr.value = String(current.valor_frete); // type=number => usar ponto
           changed = true;
         }
 
@@ -565,7 +558,12 @@
       })
       .then(function () { return reloadCurrent(); })
       .catch(function (e) {
-        toast(e.message || 'Não foi possível obter valores/dados do ML', 'error');
+        if (e && e.status === 404) {
+          // Sem dados no ML para esta devolução — tratar como aviso leve
+          toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
+        } else {
+          toast(e.message || 'Não foi possível obter valores/dados do ML', 'error');
+        }
       })
       .then(function () {
         setAutoHint('');
