@@ -424,7 +424,6 @@ app.get('/api/_debug/tenant', async (req, res) => {
 
 /* ------------------------------------------------------------
  *  Events API — listar eventos por return_id (auditoria)
- *  (mantido; se houver rota similar em routes/returns, esta ficará abaixo e não conflitará)
  * ------------------------------------------------------------ */
 app.get('/api/returns/:id/events', async (req, res) => {
   try {
@@ -795,6 +794,11 @@ app.get('/api/dashboard', async (req, res) => {
     console.error('GET /api/dashboard erro:', e);
     return res.json(mock());
   }
+});
+
+/* ---------- 404 JSON para qualquer /api não mapeado ---------- */
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
 });
 
 /** ----- Handler de erro final ----- */

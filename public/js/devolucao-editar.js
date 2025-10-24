@@ -27,6 +27,11 @@
   function moneyBRL(v) {
     return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   }
+  function fmtInputNumBR(v){
+    var n = toNum(v);
+    if (!isFinite(n)) return '';
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
   function toast(msg, type) {
     type = type || 'info';
     var t = $('toast');
@@ -256,8 +261,8 @@
     if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
     if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
-    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto === null || d.valor_produto === undefined) ? '' : toNum(d.valor_produto);
-    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  === null || d.valor_frete  === undefined) ? '' : toNum(d.valor_frete);
+    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto === null || d.valor_produto === undefined) ? '' : fmtInputNumBR(d.valor_produto);
+    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  === null || d.valor_frete  === undefined) ? '' : fmtInputNumBR(d.valor_frete);
 
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
@@ -296,7 +301,7 @@
   }
   function reloadCurrent() {
     if (!returnId) return Promise.resolve();
-    return fetch('/api/returns/' + encodeURIComponent(returnId))
+    return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
       .then(safeJson)
       .then(function (j) {
         var data = (j && (j.data || j.item || j.return || j)) || j || {};
@@ -306,9 +311,11 @@
 
   function save() {
     var body = capture();
-    fetch('/api/returns/' + encodeURIComponent(current.id), {
+    var id = current.id || returnId;
+    if (!id) { toast('ID inválido.', 'error'); return; }
+    fetch('/api/returns/' + encodeURIComponent(id), {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(Object.assign({}, body, { updated_by: 'frontend' }))
     })
     .then(function (r) {
@@ -317,24 +324,25 @@
       });
     })
     .then(function(){ return reloadCurrent(); })
-    .then(function(){ toast('Salvo!', 'success'); return refreshTimeline(current.id); })
+    .then(function(){ toast('Salvo!', 'success'); return refreshTimeline(id); })
     .catch(function(e){ toast(e.message || 'Erro ao salvar', 'error'); });
   }
 
   function runInspect(result, observacao) {
     disableHead(true);
     var when = new Date().toISOString();
-    fetch('/api/returns/' + encodeURIComponent(current.id) + '/cd/inspect', {
+    var id = current.id || returnId;
+    fetch('/api/returns/' + encodeURIComponent(id) + '/cd/inspect', {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        'Idempotency-Key': 'inspect-' + current.id + '-' + when + '-' + result
+        'Idempotency-Key': 'inspect-' + id + '-' + when + '-' + result
       },
       body: JSON.stringify({ resultado: result, observacao: observacao || '', updated_by: 'frontend', when: when })
     })
     .then(function(r){ if(!r.ok) return r.json().catch(function(){}) .then(function(e){ throw new Error((e && e.error) || 'Falha na inspeção');}); })
     .then(function(){ return reloadCurrent(); })
-    .then(function(){ toast('Inspeção registrada (' + result + ')!', 'success'); return refreshTimeline(current.id); })
+    .then(function(){ toast('Inspeção registrada (' + result + ')!', 'success'); return refreshTimeline(id); })
     .catch(function(e){ toast(e.message || 'Erro', 'error'); })
     .then(function(){ disableHead(false); });
   }
@@ -438,7 +446,7 @@
     var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/fetch-amounts';
     var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
 
-    return fetch(previewUrl)
+    return fetch(previewUrl, { headers: { 'Accept': 'application/json' } })
       .then(function (r) {
         return r.json().then(function (j) {
           if (!r.ok) throw new Error((j && (j.error || j.message)) || 'Falha ao buscar valores no ML');
@@ -448,43 +456,56 @@
       .then(function (j) {
         // ---- Valores (produto/frete) ----
         function numFrom(obj, keys) {
-          if (!obj) return 0;
+          if (!obj) return null;
           for (var i = 0; i < keys.length; i++) {
             var k = keys[i];
-            if (k in obj && obj[k] != null && obj[k] !== '') return toNum(obj[k]);
+            if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] != null && obj[k] !== '') {
+              return toNum(obj[k]);
+            }
           }
-          return 0;
+          return null; // <- importante: diferencia "não veio" de "0"
         }
 
         var product =
-          numFrom(j, ['product','product_amount','amount_product','items_total','item_total','subtotal','total_items']) ||
-          numFrom(j.amounts || {}, ['product','items','item_total','amount_product']) ||
-          numFrom(j.order || {},   ['items_total','subtotal','product','amount_product']);
+          numFrom(j, ['product','product_amount','amount_product','items_total','item_total','subtotal','total_items']);
+        if (product === null) {
+          product = numFrom(j.amounts || {}, ['product','items','item_total','amount_product']);
+        }
+        if (product === null) {
+          product = numFrom(j.order || {},   ['items_total','subtotal','product','amount_product']);
+        }
 
         var freight =
-          numFrom(j, ['freight','shipping','shipping_cost','amount_shipping','return_cost','return_amount']) ||
-          numFrom((j.return_cost || {}), ['amount','value']) ||
-          numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
+          numFrom(j, ['freight','shipping','shipping_cost','amount_shipping','return_cost','return_amount']);
+        if (freight === null) {
+          freight = numFrom((j.return_cost || {}), ['amount','value']);
+        }
+        if (freight === null) {
+          freight = numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
+        }
 
         var changed = false;
-        if (product > 0) {
+        var ip = $('valor_produto');
+        var ifr = $('valor_frete');
+
+        if (product !== null) {
           current.valor_produto = product;
-          var ip = $('valor_produto');
-          if (ip) { ip.value = String(product).replace('.', ','); changed = true; }
+          if (ip) { ip.value = fmtInputNumBR(product); }
+          changed = true;
         }
-        if (freight >= 0) {
+        if (freight !== null) {
           current.valor_frete = freight;
-          var ifr = $('valor_frete');
-          if (ifr) { ifr.value = String(freight).replace('.', ','); changed = true; }
+          if (ifr) { ifr.value = fmtInputNumBR(freight); }
+          changed = true;
         }
+
         if (changed) {
           recalc();
           updateSummary(Object.assign({}, current, capture()));
           toast(
-            'Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados: ' +
-            (product ? 'produto ' + moneyBRL(product) : '') +
-            (product && freight != null ? ' · ' : '') +
-            (freight != null ? 'frete ' + moneyBRL(freight) : ''),
+            'Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados' +
+            ((product !== null) ? ' · produto ' + moneyBRL(product) : '') +
+            ((freight !== null) ? ' · frete ' + moneyBRL(freight) : ''),
             'success'
           );
         } else {
@@ -533,7 +554,7 @@
         var persistPatch = Promise.resolve();
         if (Object.keys(patch).length) {
           var body = Object.assign({}, patch, { updated_by: 'frontend-auto-enrich' });
-          persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id), {
+          persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -638,10 +659,14 @@
   function fetchEvents(id, limit, offset) {
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
-    return fetch(url).then(safeJson).then(function (j) {
-      var arr = coerceEventsPayload(j);
-      return Array.isArray(arr) ? arr : [];
-    }).catch(function(){ return []; });
+    return fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(safeJson)
+      .then(function (j) {
+        var arr = coerceEventsPayload(j);
+        return Array.isArray(arr) ? arr : [];
+      }).catch(function(){
+        return [];
+      });
   }
 
   function fmtRel(iso) {
