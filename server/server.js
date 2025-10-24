@@ -354,6 +354,17 @@ try {
   console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
 }
 
+/* ========= ML – Enriquecimento de devolução (valores) ========= */
+try {
+  const registerMlEnrich = require('./routes/ml-enrich');
+  if (typeof registerMlEnrich === 'function') {
+    registerMlEnrich(app);
+    console.log('[BOOT] Rota ML Enrich registrada (/api/ml/returns/:id/enrich)');
+  }
+} catch (e) {
+  console.warn('[BOOT] ML Enrich não carregado (opcional):', e?.message || e);
+}
+
 /* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
 try {
   const mlChatRoutes = require('./routes/ml-chat');
