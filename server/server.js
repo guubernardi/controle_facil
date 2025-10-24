@@ -354,15 +354,15 @@ try {
   console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
 }
 
-/* ========= ML – Enriquecimento de devolução (valores) ========= */
+/* ========= ML – Amounts (order + return-cost) ========= */
 try {
-  const registerMlEnrich = require('./routes/ml-enrich');
-  if (typeof registerMlEnrich === 'function') {
-    registerMlEnrich(app);
-    console.log('[BOOT] Rota ML Enrich registrada (/api/ml/returns/:id/enrich)');
+  const registerMlAmounts = require('./routes/ml-amounts'); // <-- NOVA ROTA
+  if (typeof registerMlAmounts === 'function') {
+    registerMlAmounts(app);
+    console.log('[BOOT] Rotas ML Amounts registradas (/api/ml/returns/:id/fetch-amounts)');
   }
 } catch (e) {
-  console.warn('[BOOT] ML Enrich não carregado (opcional):', e?.message || e);
+  console.warn('[BOOT] Rotas ML Amounts não carregadas (opcional):', e?.message || e);
 }
 
 /* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
@@ -775,7 +775,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      WHERE a.sku IS NOT NULL AND A.SKU <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
