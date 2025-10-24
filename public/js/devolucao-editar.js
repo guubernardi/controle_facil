@@ -10,12 +10,16 @@
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return isFinite(v) ? v : 0;
     v = String(v).trim();
+    // remove texto e símbolo de moeda, mantém dígitos, vírgula, ponto e sinal
     v = v.replace(/[^\d.,-]/g, '');
+    // se tiver mais de um ponto, remove pontos de milhar (tudo menos o último)
     var parts = v.split(',');
-    if (parts.length > 2) { v = v.replace(/\./g, ''); }
+    if (parts.length > 2) { v = v.replace(/\./g, ''); } // casos bizarros
     else {
+      // remover pontos de milhar quando vírgula é decimal
       if (v.indexOf(',') >= 0) v = v.replace(/\./g, '');
     }
+    // troca vírgula por ponto (decimal)
     v = v.replace(',', '.');
     var n = parseFloat(v);
     return isNaN(n) ? 0 : n;
@@ -286,6 +290,7 @@
   // ===== API =====
   function safeJson(res){
     if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status));
+    // alguns backends retornam 204 no events
     if (res.status === 204) return {};
     return res.json();
   }
@@ -394,21 +399,9 @@
     return ok;
   }
 
-  // Util pra escolher número em chaves diferentes
-  function numFrom(obj, keys) {
-    if (!obj) return 0;
-    for (var i=0;i<keys.length;i++) {
-      var k = keys[i];
-      if (k in obj && obj[k] != null && obj[k] !== '') return toNum(obj[k]);
-    }
-    return 0;
-  }
-
   /**
-   * Busca valores no back e:
-   * 1) preenche "valor_produto" e/ou "valor_frete" no modal
-   * 2) recalcula o total
-   * 3) dispara persistência (linha do tempo) no back
+   * Chama um ÚNICO endpoint que busca valores (produto + frete) e persiste no back.
+   * Depois apenas recarrega o registro para refletir os números.
    */
   function enrichFromML(reason) {
     reason = reason || 'auto';
@@ -418,10 +411,9 @@
     setAutoHint('(buscando valores no ML…)');
 
     var id = current.id;
-    var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/fetch-amounts';
-    var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
+    var enrichUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
 
-    return fetch(previewUrl)
+    return fetch(enrichUrl, { method: 'POST' })
       .then(function (r) {
         return r.json().then(function (j) {
           if (!r.ok) throw new Error((j && (j.error || j.message)) || 'Falha ao buscar valores no ML');
@@ -429,52 +421,25 @@
         });
       })
       .then(function (j) {
-        // Estruturas possíveis do back:
-        // { product, freight, total, currency }
-        // ou { order:{...}, return_cost:{amount}, amounts:{...} }
-        var product =
-          numFrom(j, ['product','product_amount','amount_product','items_total','item_total','subtotal','total_items']) ||
-          numFrom(j.amounts || {}, ['product','items','item_total','amount_product']) ||
-          numFrom(j.order || {},   ['items_total','subtotal','product','amount_product']);
+        // O endpoint retorna o item atualizado do banco.
+        var item = j.item || j.data || j.return || {};
+        var vp = toNum(item.valor_produto);
+        var vf = toNum(item.valor_frete);
 
-        var freight =
-          numFrom(j, ['freight','shipping','shipping_cost','amount_shipping','return_cost','return_amount']) ||
-          numFrom((j.return_cost || {}), ['amount','value']) ||
-          numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
+        var ip = $('valor_produto');
+        var ifr = $('valor_frete');
+        if (ip && vp >= 0)  ip.value  = String(vp).replace('.', ',');
+        if (ifr && vf >= 0) ifr.value = String(vf).replace('.', ',');
 
-        // Atualiza inputs se obteve valores
-        var changed = false;
+        recalc();
 
-        if (product > 0) {
-          current.valor_produto = product;
-          var ip = $('valor_produto');
-          if (ip) { ip.value = String(product).replace('.', ','); changed = true; }
-        }
-
-        if (freight >= 0) { // frete pode ser 0
-          current.valor_frete = freight;
-          var ifr = $('valor_frete');
-          if (ifr) { ifr.value = String(freight).replace('.', ','); changed = true; }
-        }
-
-        if (changed) {
-          recalc();
-          updateSummary(Object.assign({}, current, capture()));
-          toast(
-            'Valores do ML aplicados: ' +
-            (product ? 'produto ' + moneyBRL(product) : '') +
-            (product && freight != null ? ' · ' : '') +
-            (freight != null ? 'frete ' + moneyBRL(freight) : ''),
-            'success'
-          );
+        if (j.note === 'sem alterações') {
+          toast('Valores do ML já estavam corretos.', 'info');
         } else {
-          toast('Não vieram valores utilizáveis do ML.', 'warn');
+          toast('Valores do ML atualizados!', 'success');
         }
-
-        // Dispara persistência em background
-        return fetch(persistUrl, { method: 'POST' }).catch(function(){});
       })
-      .then(function () { return reloadCurrent(); })
+      .then(function(){ return reloadCurrent(); })
       .catch(function (e) {
         toast(e.message || 'Não foi possível obter valores do ML', 'error');
       })
@@ -696,6 +661,7 @@
     }
     reloadCurrent()
       .then(function () {
+        // Auto (opcional): só roda se precisar e respeita TTL
         if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) && canEnrichNow() && needsEnrichment(current)) {
           return enrichFromML('auto');
         }
