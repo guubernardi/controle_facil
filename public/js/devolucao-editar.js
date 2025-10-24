@@ -399,9 +399,33 @@
     return ok;
   }
 
+  // Helpers p/ enriquecer dados do pedido
+  function pickSkuFromOrder(ord) {
+    if (!ord) return null;
+    var arr = ord.order_items || ord.items || [];
+    var first = arr[0] || {};
+    var it = first.item || first;
+    return (
+      first.seller_sku ||
+      first.variation_sku ||
+      it.seller_sku ||
+      it.sku ||
+      it.id ||
+      null
+    );
+  }
+  function applyIfEmpty(acc, field, value) {
+    if (value == null || value === '') return acc;
+    var cur = current[field];
+    if (cur == null || String(cur).trim() === '') {
+      acc[field] = value;
+    }
+    return acc;
+  }
+
   /**
-   * Chama um ÚNICO endpoint que busca valores (produto + frete) e persiste no back.
-   * Depois apenas recarrega o registro para refletir os números.
+   * Busca valores + pedido no preview, aplica na UI,
+   * persiste evento via /enrich e faz PATCH apenas dos campos que estavam vazios.
    */
   function enrichFromML(reason) {
     reason = reason || 'auto';
@@ -411,9 +435,10 @@
     setAutoHint('(buscando valores no ML…)');
 
     var id = current.id;
-    var enrichUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
+    var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/fetch-amounts';
+    var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
 
-    return fetch(enrichUrl, { method: 'POST' })
+    return fetch(previewUrl)
       .then(function (r) {
         return r.json().then(function (j) {
           if (!r.ok) throw new Error((j && (j.error || j.message)) || 'Falha ao buscar valores no ML');
@@ -421,27 +446,105 @@
         });
       })
       .then(function (j) {
-        // O endpoint retorna o item atualizado do banco.
-        var item = j.item || j.data || j.return || {};
-        var vp = toNum(item.valor_produto);
-        var vf = toNum(item.valor_frete);
-
-        var ip = $('valor_produto');
-        var ifr = $('valor_frete');
-        if (ip && vp >= 0)  ip.value  = String(vp).replace('.', ',');
-        if (ifr && vf >= 0) ifr.value = String(vf).replace('.', ',');
-
-        recalc();
-
-        if (j.note === 'sem alterações') {
-          toast('Valores do ML já estavam corretos.', 'info');
-        } else {
-          toast('Valores do ML atualizados!', 'success');
+        // ---- Valores (produto/frete) ----
+        function numFrom(obj, keys) {
+          if (!obj) return 0;
+          for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            if (k in obj && obj[k] != null && obj[k] !== '') return toNum(obj[k]);
+          }
+          return 0;
         }
+
+        var product =
+          numFrom(j, ['product','product_amount','amount_product','items_total','item_total','subtotal','total_items']) ||
+          numFrom(j.amounts || {}, ['product','items','item_total','amount_product']) ||
+          numFrom(j.order || {},   ['items_total','subtotal','product','amount_product']);
+
+        var freight =
+          numFrom(j, ['freight','shipping','shipping_cost','amount_shipping','return_cost','return_amount']) ||
+          numFrom((j.return_cost || {}), ['amount','value']) ||
+          numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
+
+        var changed = false;
+        if (product > 0) {
+          current.valor_produto = product;
+          var ip = $('valor_produto');
+          if (ip) { ip.value = String(product).replace('.', ','); changed = true; }
+        }
+        if (freight >= 0) {
+          current.valor_frete = freight;
+          var ifr = $('valor_frete');
+          if (ifr) { ifr.value = String(freight).replace('.', ','); changed = true; }
+        }
+        if (changed) {
+          recalc();
+          updateSummary(Object.assign({}, current, capture()));
+          toast(
+            'Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados: ' +
+            (product ? 'produto ' + moneyBRL(product) : '') +
+            (product && freight != null ? ' · ' : '') +
+            (freight != null ? 'frete ' + moneyBRL(freight) : ''),
+            'success'
+          );
+        } else {
+          toast('Valores do ML já estavam corretos.', 'info');
+        }
+
+        // ---- Dados do pedido (apenas se vierem e se campos estiverem vazios) ----
+        var ord = j.order || j.order_info || null;
+        var patch = {};
+        if (ord) {
+          // id_venda
+          applyIfEmpty(patch, 'id_venda', ord.id || ord.order_id);
+
+          // cliente_nome
+          var buyer =
+            (ord.buyer && (ord.buyer.nickname || (ord.buyer.first_name && ord.buyer.last_name ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : ord.buyer.first_name))) ||
+            (ord.buyer && (ord.buyer.name || ord.buyer.email));
+          applyIfEmpty(patch, 'cliente_nome', buyer);
+
+          // loja_nome
+          var sellerNick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || ord.store_nickname || null;
+          var lojaNome   = sellerNick ? ('Mercado Livre · ' + sellerNick) : (ord.site_id ? (siteIdToName(ord.site_id)) : null);
+          applyIfEmpty(patch, 'loja_nome', lojaNome);
+
+          // data_compra
+          var dt = ord.date_created || ord.paid_at || ord.created_at || null;
+          applyIfEmpty(patch, 'data_compra', dt ? String(dt).slice(0, 10) : null);
+
+          // sku
+          var sku = pickSkuFromOrder(ord);
+          applyIfEmpty(patch, 'sku', sku);
+        }
+
+        // Reflete no formulário imediatamente
+        if (Object.keys(patch).length) {
+          if (patch.id_venda && $('id_venda')) $('id_venda').value = patch.id_venda;
+          if (patch.cliente_nome && $('cliente_nome')) $('cliente_nome').value = patch.cliente_nome;
+          if (patch.loja_nome && $('loja_nome')) $('loja_nome').value = patch.loja_nome;
+          if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
+          if (patch.sku && $('sku')) $('sku').value = patch.sku;
+          current = Object.assign({}, current, patch);
+        }
+
+        // ---- Persiste: evento + PATCH opcional ----
+        var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
+        var persistPatch = Promise.resolve();
+        if (Object.keys(patch).length) {
+          var body = Object.assign({}, patch, { updated_by: 'frontend-auto-enrich' });
+          persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).catch(function(){});
+        }
+
+        return Promise.all([persistEvent, persistPatch]);
       })
-      .then(function(){ return reloadCurrent(); })
+      .then(function () { return reloadCurrent(); })
       .catch(function (e) {
-        toast(e.message || 'Não foi possível obter valores do ML', 'error');
+        toast(e.message || 'Não foi possível obter valores/dados do ML', 'error');
       })
       .then(function () {
         setAutoHint('');
@@ -585,13 +688,13 @@
       var rel = created ? fmtRel(created) : '';
 
       item.innerHTML =
-        '<span class="tl-dot" aria-hidden="true"></span>' +
-        '<div class="tl-head">' +
-          '<span class="tl-title">' + iconFor(type) + ' ' + (ev.title || (type === 'status' ? 'Status' : 'Evento')) + '</span>' +
-          '<span class="tl-time" title="' + (created || '') + '">' + rel + '</span>' +
-        '</div>' +
-        (ev.message ? '<div class="tl-msg">' + ev.message + '</div>' : '') +
-        '<div class="tl-meta"></div>';
+      '<span class="tl-dot" aria-hidden="true"></span>' +
+      '<div class="tl-head">' +
+        '<span class="tl-title">' + iconFor(type) + ' ' + (ev.title || (type === 'status' ? 'Status' : 'Evento')) + '</span>' +
+        '<span class="tl-time" title="' + (created || '') + '">' + rel + '</span>' +
+      '</div>' +
+      (ev.message ? ('<div class="tl-msg">' + ev.message + '</div>') : '') + 
+      '<div class="tl-meta"></div>';
 
       var metaBox = item.querySelector('.tl-meta');
       if (meta && meta.status)           metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">status: <b>'+ meta.status +'</b></span>');
