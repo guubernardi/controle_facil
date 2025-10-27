@@ -7,6 +7,12 @@
  * -------------------------------------------------------------
  */
 
+// Polyfill de fetch p/ Node < 18
+if (typeof fetch !== 'function') {
+  // carregamento dinâmico para evitar dependência dura em prod
+  global.fetch = (...args) => import('node-fetch').then(m => m.default(...args));
+}
+
 try {
   if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config({ override: true });
@@ -379,7 +385,9 @@ try {
 try {
   const registerMlEnrich = require('./routes/ml-enrich');
   if (typeof registerMlEnrich === 'function') {
-    registerMlEnrich(app);
+    // suporta assinatura opcional (app, { addReturnEvent })
+    if (registerMlEnrich.length >= 2) registerMlEnrich(app, { addReturnEvent });
+    else registerMlEnrich(app);
     console.log('[BOOT] Rota ML Enrich registrada (/api/ml/returns/:id/enrich)');
   }
 } catch (e) {
