@@ -446,7 +446,16 @@
     setAutoHint('(buscando valores no ML…)');
 
     var id = current.id;
-    var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/fetch-amounts';
+
+    // NOVO: se o usuário digitou o número do pedido (ainda não salvo), manda como override
+    var typedOrderId = $('id_venda') && $('id_venda').value ? $('id_venda').value.trim() : '';
+    var typedClaimId = $('ml_claim_id') && $('ml_claim_id').value ? $('ml_claim_id').value.trim() : '';
+    var params = [];
+    if (typedOrderId) params.push('order_id=' + encodeURIComponent(typedOrderId));
+    if (typedClaimId) params.push('claim_id=' + encodeURIComponent(typedClaimId));
+    var qsOverride = params.length ? ('?' + params.join('&')) : '';
+
+    var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/fetch-amounts' + qsOverride;
     var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
 
     return fetch(previewUrl, { headers: { 'Accept': 'application/json' } })
