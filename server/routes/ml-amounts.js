@@ -3,105 +3,109 @@
 
 const { query } = require('../db');
 
-const ML_BASE = process.env.ML_BASE_URL || 'https://api.mercadolibre.com';
-
-function pickTokenForTenant(_req) {
-  // TODO: se você já salva access_token por loja/tenant, busque aqui.
-  // Por enquanto cai no fallback global:
-  const t = process.env.MELI_OWNER_TOKEN || process.env.ML_ACCESS_TOKEN;
-  if (!t) throw new Error('Falta MELI_OWNER_TOKEN (ou token por loja).');
-  return t;
+function toNumber(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : 0;
 }
-
-async function fetchJson(url, token) {
-  const r = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const msg = j?.message || j?.error || r.statusText;
-    throw new Error(`ML ${r.status}: ${msg}`);
-  }
-  return j;
-}
-
-async function getOrderAmounts(orderId, token) {
-  if (!orderId) return { product: null, shipFromOrder: null };
-  const o = await fetchJson(`${ML_BASE}/orders/${orderId}`, token);
-
-  // bem defensivo: tenta vários campos
-  const items = Array.isArray(o?.order_items) ? o.order_items : [];
-  const product = items.reduce((acc, it) => {
-    const q = Number(it?.quantity || 1);
-    const p = Number(it?.unit_price || it?.full_unit_price || it?.sale_fee || 0);
-    return acc + (isFinite(q * p) ? q * p : 0);
-  }, 0);
-
-  const shipFromOrder =
-    Number(o?.shipping_cost) ||
-    Number(o?.total_shipping) ||
-    Number(o?.shipping?.cost) ||
-    null;
-
-  return { product: isFinite(product) ? product : null, shipFromOrder };
-}
-
-async function getReturnShippingAmount(claimId, token) {
-  if (!claimId) return null;
-  const j = await fetchJson(
-    `${ML_BASE}/post-purchase/v1/claims/${claimId}/charges/return-cost`,
-    token
-  );
-  // docs: { currency_id, amount, [amount_usd] }
-  return Number(j?.amount) || 0;
+function notBlank(v) {
+  return v !== null && v !== undefined && String(v).trim() !== '';
 }
 
 module.exports = function registerMlAmounts(app) {
   /**
-   * POST /api/ml/returns/:id/fetch-amounts
-   * Busca no ML e atualiza devolucoes.valor_produto / valor_frete.
+   * Preview de valores vindos do ML (não grava no banco)
+   * GET /api/ml/returns/:id/fetch-amounts
    */
-  app.post('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
+  app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
 
-      // Carrega a linha para pegar order_id (id_venda) e claim_id (ml_claim_id)
-      const { rows } = await query(
-        `SELECT id, id_venda, ml_claim_id, valor_produto, valor_frete, log_status
-           FROM devolucoes WHERE id=$1 LIMIT 1`,
-        [id]
-      );
+      // carrega a devolução para achar orderId / claimId (nomes de coluna podem variar)
+      const { rows } = await query('SELECT * FROM devolucoes WHERE id=$1 LIMIT 1', [id]);
       if (!rows[0]) return res.status(404).json({ error: 'Não encontrado' });
+      const dev = rows[0];
 
-      const row = rows[0];
-      const token = pickTokenForTenant(req);
+      const orderId = dev.id_venda || dev.order_id || null;
+      const claimId = dev.ml_claim_id || dev.claim_id || null;
 
-      // Produto pelo pedido
-      const { product } = await getOrderAmounts(row.id_venda, token);
+      const token = process.env.MELI_OWNER_TOKEN || process.env.ML_ACCESS_TOKEN;
+      if (!token) {
+        return res.status(400).json({ error: 'MELI_OWNER_TOKEN ausente no servidor' });
+      }
 
-      // Frete de devolução pelo claim
-      const freight = await getReturnShippingAmount(row.ml_claim_id, token);
+      const base = 'https://api.mercadolibre.com';
+      const mget = async (path) => {
+        const r = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` } });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          const msg = j?.message || j?.error || r.statusText;
+          const e = new Error(`${r.status} ${msg}`);
+          e.status = r.status;
+          e.payload = j;
+          throw e;
+        }
+        return j;
+      };
 
-      // Regra: se claim retornou frete, usa; senão mantém o que já tiver
-      const novo_vp = (product != null) ? product : row.valor_produto;
-      const novo_vf = (freight != null) ? freight : row.valor_frete;
+      // ----- ORDER: soma de itens -----
+      let order = null;
+      let itemsTotal = null;
+      if (orderId) {
+        try {
+          const o = await mget(`/orders/${encodeURIComponent(orderId)}`);
+          order = o;
+          const items = Array.isArray(o?.order_items) ? o.order_items : (Array.isArray(o?.items) ? o.items : []);
+          let sum = 0;
+          for (const it of items) {
+            const unit = toNumber(it?.unit_price ?? it?.sale_price ?? it?.price);
+            const qty  = toNumber(it?.quantity ?? 1);
+            sum += unit * (qty || 1);
+          }
+          if (sum > 0) itemsTotal = sum;
+        } catch (e) {
+          console.warn('[ML AMOUNTS] Falha em /orders:', e.message);
+        }
+      }
 
-      const up = await query(
-        `UPDATE devolucoes
-            SET valor_produto = COALESCE($1, valor_produto),
-                valor_frete   = COALESCE($2, valor_frete),
-                updated_at    = now()
-          WHERE id=$3
-          RETURNING *`,
-        [novo_vp, novo_vf, id]
-      );
+      // ----- FRETE: return-cost do claim -----
+      let returnCost = null;
+      if (claimId) {
+        try {
+          returnCost = await mget(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`);
+        } catch (e) {
+          console.warn('[ML AMOUNTS] Falha em return-cost:', e.message);
+        }
+      }
 
-      return res.json({ item: up.rows[0] });
+      // nada encontrado? 404 (front mostra aviso)
+      if (order == null && returnCost == null) {
+        return res.status(404).json({ error: 'Sem dados para esta devolução' });
+      }
+
+      const freight = (returnCost && returnCost.amount != null) ? toNumber(returnCost.amount) : null;
+
+      // resposta com vários aliases que o front já procura
+      res.json({
+        product: itemsTotal,
+        freight,
+        amounts: { product: itemsTotal, freight },
+        order_info: order,
+        order: order ? {
+          id: order.id,
+          date_created: order.date_created,
+          items_total: itemsTotal,
+          buyer: order.buyer,
+          seller: order.seller,
+          site_id: order.site_id
+        } : null,
+        return_cost: returnCost,
+        sources: { order_id: orderId, claim_id: claimId }
+      });
     } catch (e) {
-      console.error('[ML] fetch-amounts erro:', e);
+      console.error('[ML AMOUNTS] erro:', e);
       const reveal = String(process.env.REVEAL_ERRORS ?? 'false').toLowerCase() === 'true';
-      res.status(500).json({ error: reveal ? (e.message || String(e)) : 'Falha ao buscar valores' });
+      res.status(500).json({ error: reveal ? (e?.message || String(e)) : 'Falha ao buscar valores' });
     }
   });
 };
