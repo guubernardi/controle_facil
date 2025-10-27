@@ -38,13 +38,20 @@
   function setLogPill(text) {
     var el = getLogPillEl(); if (!el) return;
     var s = String(text || '').toLowerCase();
+
+    // rótulos amigáveis para as fases novas
+    var label = s === 'preparo_despacho' ? 'Preparo p/ despachar'
+              : s === 'em_transporte'   ? 'Em transporte'
+              : s === 'finalizado'      ? 'Finalizado'
+              : (text || '—');
+
     var cls = 'pill -neutro';
     if (!text) cls = 'pill -neutro';
     else if (s.indexOf('pend') >= 0) cls = 'pill -pendente';
     else if (s.indexOf('aprov') >= 0) cls = 'pill -aprovado';
     else if (s.indexOf('rej') >= 0 || s.indexOf('neg') >= 0 || s.indexOf('reprov') >= 0) cls = 'pill -rejeitado';
     el.className = cls;
-    el.textContent = text || '—';
+    el.textContent = label;
   }
   function setCdInfo(opts) {
     opts = opts || {};
@@ -544,6 +551,35 @@
           null;
         applyIfEmpty(patch, 'tipo_reclamacao', motivo);
 
+        // ---- Fase logística (preparo_despacho, em_transporte, finalizado) ----
+        function inferPhase() {
+          var p = (j.shipping_phase || '').toLowerCase();
+          if (!p) {
+            // tenta inferir por status cru
+            var raw =
+              (j.shipping_status) ||
+              (j.shipping && (j.shipping.status || j.shipping.substatus)) ||
+              (ord && ord.shipping && (ord.shipping.status || ord.shipping.substatus)) ||
+              (Array.isArray(j.shipments) && j.shipments[0] && (j.shipments[0].status || j.shipments[0].substatus)) ||
+              '';
+            raw = String(raw).toLowerCase();
+            if (raw.includes('ready') || raw.includes('handling') || raw.includes('agreed')) p = 'preparo_despacho';
+            else if (raw.includes('shipped') || raw.includes('in_transit') || raw.includes('transit')) p = 'em_transporte';
+            else if (raw.includes('delivered')) p = 'finalizado';
+          }
+          return p || null;
+        }
+        var phase = inferPhase();
+
+        if (phase) {
+          var cur = String(current.log_status || '').toLowerCase();
+          if (!cur || cur === 'nao_recebido' || cur === 'não_recebido' || cur === 'pendente') {
+            current.log_status = phase;
+            setLogPill(phase);
+            patch.log_status = phase; // persiste no PATCH
+          }
+        }
+
         // Reflete no formulário imediatamente
         if (Object.keys(patch).length) {
           if (patch.id_venda && $('id_venda')) $('id_venda').value = patch.id_venda;
@@ -553,7 +589,7 @@
           if (patch.sku && $('sku')) $('sku').value = patch.sku;
           if (patch.tipo_reclamacao && $('tipo_reclamacao')) $('tipo_reclamacao').value = patch.tipo_reclamacao;
           current = Object.assign({}, current, patch);
-          recalc(); // recalcula se só o motivo mudou
+          recalc(); // recalcula se só motivo/log mudaram
         }
 
         // ---- Persiste: evento + PATCH opcional ----
