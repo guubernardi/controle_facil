@@ -1,34 +1,59 @@
-// server/routes/ml-amounts.js
 'use strict';
 
 const { query } = require('../db');
 
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : 0;
-}
-function notBlank(v) {
-  return v !== null && v !== undefined && String(v).trim() !== '';
-}
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : 0; }
+function notBlank(v){ return v !== null && v !== undefined && String(v).trim() !== ''; }
 
 async function tableHasColumns(table, cols) {
   const { rows } = await query(
     `SELECT column_name FROM information_schema.columns
-       WHERE table_schema='public' AND table_name=$1`,
+     WHERE table_schema='public' AND table_name=$1`,
     [table]
   );
   const set = new Set(rows.map(r => r.column_name));
-  const out = {};
-  for (const c of cols) out[c] = set.has(c);
+  const out = {}; for (const c of cols) out[c] = set.has(c);
   return out;
+}
+
+// tenta achar o nickname (ex.: "BUSCOL") em "Mercado Livre · BUSCOL"
+function guessNickFromLoja(lojaNome) {
+  if (!lojaNome) return null;
+  const parts = String(lojaNome).split('·');
+  const nick = (parts[parts.length - 1] || '').trim();
+  return nick || null;
+}
+
+async function getTokenForReturn(dev) {
+  // 1) por nickname no loja_nome -> env MELI_TOKEN_<NICK>
+  const nick = guessNickFromLoja(dev?.loja_nome);
+  if (nick) {
+    const envKey = ('MELI_TOKEN_' + nick.toUpperCase().replace(/[^A-Z0-9]+/g, '_'));
+    if (process.env[envKey]) {
+      return { token: process.env[envKey], tokenFrom: `env:${envKey}`, sellerNick: nick };
+    }
+    // 2) opcional: buscar na tabela ml_accounts por nickname
+    try {
+      const { rows } = await query(
+        `SELECT access_token FROM ml_accounts WHERE LOWER(nickname) = LOWER($1) LIMIT 1`,
+        [nick]
+      );
+      if (rows[0]?.access_token) {
+        return { token: rows[0].access_token, tokenFrom: 'db:ml_accounts.nickname', sellerNick: nick };
+      }
+    } catch (_) {}
+  }
+  // 3) fallback global
+  const fallback = process.env.MELI_OWNER_TOKEN || process.env.ML_ACCESS_TOKEN || null;
+  return { token: fallback, tokenFrom: 'env:MELI_OWNER_TOKEN', sellerNick: nick || null };
 }
 
 module.exports = function registerMlAmounts(app) {
   // GET /api/ml/returns/:id/fetch-amounts[?order_id=...&claim_id=...]
   app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
-    const meta = { steps: [], errors: [] };
+    const meta = { steps: [], errors: [], tokenFrom: null, sellerNick: null };
 
-    function pushErr(where, err) {
+    const pushErr = (where, err) => {
       const info = {
         where,
         message: err?.message || String(err),
@@ -37,44 +62,42 @@ module.exports = function registerMlAmounts(app) {
       };
       meta.errors.push(info);
       console.error('[ML AMOUNTS]', where, info);
-    }
+    };
 
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
 
-      // tenta pegar order/claim do querystring
+      // carrega a devolução para descobrir loja/apelido quando necessário
+      const hasCols = await tableHasColumns('devolucoes', ['id_venda','order_id','claim_id','ml_claim_id','loja_nome']);
+      const { rows: devRows } = await query('SELECT * FROM devolucoes WHERE id=$1', [id]);
+      if (!devRows.length) return res.status(404).json({ error: 'Devolução não encontrada' });
+      const dev = devRows[0];
+
+      // ids vindos por query têm prioridade
       let orderId = (req.query.order_id || '').trim();
       let claimId = (req.query.claim_id || '').trim();
+      if (!orderId) orderId = (hasCols.id_venda && dev.id_venda) || (hasCols.order_id && dev.order_id) || '';
+      if (!claimId) claimId = (hasCols.claim_id && dev.claim_id) || (hasCols.ml_claim_id && dev.ml_claim_id) || '';
 
-      // se não veio, busca na tabela
-      if (!orderId || !claimId) {
-        const has = await tableHasColumns('devolucoes', ['id_venda','order_id','claim_id','ml_claim_id']);
-        const { rows } = await query('SELECT * FROM devolucoes WHERE id=$1', [id]);
-        if (!rows.length) return res.status(404).json({ error: 'Devolução não encontrada' });
-        const d = rows[0];
-        if (!orderId) orderId = (has.id_venda && d.id_venda) || (has.order_id && d.order_id) || '';
-        if (!claimId) claimId = (has.claim_id && d.claim_id) || (has.ml_claim_id && d.ml_claim_id) || '';
-      }
-
-      const token = process.env.MELI_OWNER_TOKEN || process.env.ML_ACCESS_TOKEN;
-      if (!token) return res.status(400).json({ error: 'MELI_OWNER_TOKEN ausente no servidor' });
+      // escolhe token pela loja
+      const { token, tokenFrom, sellerNick } = await getTokenForReturn(dev);
+      meta.tokenFrom  = tokenFrom;
+      meta.sellerNick = sellerNick;
+      if (!token) return res.status(400).json({ error: 'Access token ausente para esta loja', meta });
 
       const base = 'https://api.mercadolibre.com';
       const mget = async (path) => {
         const r = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` } });
-        let j = {};
-        try { j = await r.json(); } catch (_) {}
+        let j = {}; try { j = await r.json(); } catch(_) {}
         if (!r.ok) {
           const e = new Error(`${r.status} ${j?.message || j?.error || r.statusText}`);
-          e.status = r.status;
-          e.payload = j;
-          throw e;
+          e.status = r.status; e.payload = j; throw e;
         }
         return j;
       };
 
-      // ---------- ORDER (valor do produto) ----------
+      // ----- ORDER -> valor do produto -----
       let orderInfo = null;
       let productAmount = null;
 
@@ -83,7 +106,6 @@ module.exports = function registerMlAmounts(app) {
           meta.steps.push({ op: 'GET /orders', orderId });
           const o = await mget(`/orders/${encodeURIComponent(orderId)}`);
           orderInfo = o;
-
           const items = Array.isArray(o?.order_items) ? o.order_items : (Array.isArray(o?.items) ? o.items : []);
           let sum = 0;
           for (const it of items) {
@@ -97,7 +119,7 @@ module.exports = function registerMlAmounts(app) {
         }
       }
 
-      // ---------- CLAIM (custo de devolução / frete) ----------
+      // ----- CLAIM -> custo de devolução (frete) -----
       let returnCost = null;
       if (notBlank(claimId)) {
         try {
@@ -109,7 +131,6 @@ module.exports = function registerMlAmounts(app) {
         }
       }
 
-      // se nada deu pra trazer, dá 404 mais claro
       if (productAmount == null && returnCost == null && meta.errors.length && !orderInfo) {
         return res.status(404).json({ error: 'Sem dados para esta devolução', meta });
       }
@@ -118,10 +139,7 @@ module.exports = function registerMlAmounts(app) {
         ok: true,
         order_id: notBlank(orderId) ? String(orderId) : null,
         claim_id: notBlank(claimId) ? String(claimId) : null,
-        amounts: {
-          product: productAmount,
-          freight: returnCost
-        },
+        amounts: { product: productAmount, freight: returnCost },
         order: orderInfo || null,
         return_cost: returnCost != null ? { amount: returnCost } : null,
         meta
