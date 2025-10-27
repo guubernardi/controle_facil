@@ -145,6 +145,30 @@ const sumOrderProducts = (o) => {
   return sum > 0 ? sum : null;
 };
 
+// ===== NOVOS helpers =====
+function pickFreightFromOrder(order) {
+  if (!order) return null;
+  const cands = [
+    order?.shipping_cost,
+    order?.total_shipping,
+    order?.shipping?.cost?.amount,
+    order?.shipping?.cost,
+    order?.shipping?.shipping_option?.cost,
+  ]
+    .map(n => Number(n))
+    .filter(n => Number.isFinite(n) && n > 0);
+  return cands.length ? cands[0] : null;
+}
+function extractReasonName(claim) {
+  if (!claim) return null;
+  const rid   = claim?.reason_id || claim?.reason?.id || null;
+  const rname = claim?.reason_name || claim?.reason?.name || claim?.reason?.description || null;
+  const norm  = normalizeReason(rid, rname);
+  claim.reason_name_normalized = norm || rname || rid || null;
+  claim.reason_name            = rname || rid || norm || null;
+  return claim.reason_name_normalized || claim.reason_name || null;
+}
+
 module.exports = function registerMlAmounts(app) {
   // GET /api/ml/returns/:id/fetch-amounts[?order_id=...&claim_id=...]
   app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
@@ -172,6 +196,24 @@ module.exports = function registerMlAmounts(app) {
         return res.status(400).json({ error: 'Nenhum access token disponível (verifique ml_accounts ou variáveis MELI_TOKEN_*)', meta });
       }
 
+      // ===== NOVO: tentar descobrir claim pelo order_id
+      if (!notBlank(claimId) && notBlank(orderId)) {
+        try {
+          meta.steps.push({ op: 'GET /claims/search', orderId });
+          const { data } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}`, meta, 'claims-search');
+          const list = Array.isArray(data?.results) ? data.results
+                     : Array.isArray(data?.claims)  ? data.claims
+                     : Array.isArray(data?.data)    ? data.data
+                     : Array.isArray(data)          ? data
+                     : [];
+          const first = list[0] || null;
+          claimId = first?.id || first?.claim_id || (typeof first === 'string' ? first : null) || '';
+          if (claimId) meta.steps.push({ foundClaimId: claimId });
+        } catch (e) {
+          meta.errors.push({ where: 'claims-search', message: e.message, status: e.status || null, payload: e.payload || null });
+        }
+      }
+
       let order = null, claim = null;
       const amounts = {};
 
@@ -185,33 +227,29 @@ module.exports = function registerMlAmounts(app) {
           const prod = sumOrderProducts(order);
           if (prod != null) amounts.product = prod;
         } catch (e) {
-          // se falhar segue – pode ser que só o claim exista
           meta.errors.push({ where: 'orders(final)', message: e.message, status: e.status || null });
         }
       }
 
-      // ---- CLAIM (para motivo e custo de devolução)
+      // ---- CLAIM (para motivo, hint de log e custo de devolução)
       if (notBlank(claimId)) {
         meta.steps.push({ op: 'GET /claims', claimId });
         try {
           const { data, tokenFrom } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}`, meta, 'claim');
           if (!meta.tokenFrom) meta.tokenFrom = tokenFrom;
-          const rid   = data?.reason_id || data?.reason?.id || null;
-          const rname = data?.reason_name || data?.reason?.name || data?.reason?.description || null;
-
           claim = {
             id: data?.id || claimId,
             status: data?.status || null,
             substatus: data?.substatus || null,
-            reason_id: rid || null,
-            reason_name: rname || null,
-            reason_name_normalized: normalizeReason(rid, rname)
+            reason_id: data?.reason_id || data?.reason?.id || null,
+            reason_name: data?.reason_name || data?.reason?.name || data?.reason?.description || null
           };
+          extractReasonName(claim);
         } catch (e) {
           meta.errors.push({ where: 'claim(final)', message: e.message, status: e.status || null });
         }
 
-        // return cost
+        // return cost (frete da devolução)
         try {
           meta.steps.push({ op: 'GET /claims/return-cost', claimId });
           const { data } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`, meta, 'return-cost');
@@ -219,6 +257,12 @@ module.exports = function registerMlAmounts(app) {
         } catch (e) {
           meta.errors.push({ where: 'return-cost(final)', message: e.message, status: e.status || null });
         }
+      }
+
+      // ===== FRETE fallback pelo order
+      if ((amounts.freight == null || amounts.freight === 0) && order) {
+        const f = pickFreightFromOrder(order);
+        if (f != null) amounts.freight = f;
       }
 
       if (!Object.keys(amounts).length && !order && !claim) {
