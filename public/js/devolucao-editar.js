@@ -130,7 +130,11 @@
       j.seller_name || j.store_name || j.shop_name || null;
 
     var buyerName  =
-      (j.buyer && (j.buyer.nickname || j.buyer.name)) ||
+      (j.buyer && (
+        (j.buyer.first_name && j.buyer.last_name ? (j.buyer.first_name + ' ' + j.buyer.last_name) : (j.buyer.name || j.buyer.first_name)) ||
+        j.buyer.nickname
+      )) ||
+      (j.shipping && j.shipping.receiver_address && j.shipping.receiver_address.receiver_name) ||
       j.cliente || j.cliente_nome || j.buyer_name || null;
 
     var dataCompra = firstNonEmpty(j.data_compra, j.order_date, j.date_created, j.paid_at, j.created_at);
@@ -393,7 +397,10 @@
   }
   function parecePedidoML(pedido) { return /^\d{6,}$/.test(String(pedido || '')); }
   function needsEnrichment(d) {
-    return !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
+    // inclui produto/frete ausentes ou zerados
+    var faltamValores = !d || toNum(d.valor_produto) === 0 || toNum(d.valor_frete) === 0;
+    var faltamMetadados = !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
+    return faltamValores || faltamMetadados;
   }
   function canEnrichNow() {
     var key = 'rf_enrich_' + returnId;
@@ -512,10 +519,13 @@
           // id_venda
           applyIfEmpty(patch, 'id_venda', ord.id || ord.order_id);
 
-          // cliente_nome
+          // cliente_nome (prioriza nome; cai para nickname / receiver_name)
           var buyer =
-            (ord.buyer && (ord.buyer.nickname || (ord.buyer.first_name && ord.buyer.last_name ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : ord.buyer.first_name))) ||
-            (ord.buyer && (ord.buyer.name || ord.buyer.email));
+            (ord.buyer && (
+              (ord.buyer.first_name && ord.buyer.last_name ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : (ord.buyer.name || ord.buyer.first_name)) ||
+              ord.buyer.nickname
+            )) ||
+            (ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name);
           applyIfEmpty(patch, 'cliente_nome', buyer);
 
           // loja_nome

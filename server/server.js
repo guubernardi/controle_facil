@@ -81,7 +81,7 @@ app.get('/', (req, res) => {
   return res.redirect('/login.html');
 });
 
-/** SSE (antes do middleware que força Content-Type JSON) */
+/** SSE (antes do middleware que toca Content-Type) */
 try {
   const events = require('./events');
   if (typeof events?.sse === 'function') {
@@ -97,10 +97,21 @@ try {
   console.warn('[BOOT] SSE desabilitado (./events ausente):', e?.message || e);
 }
 
-/** Cabeçalho JSON nas rotas /api (depois do SSE) */
+/**
+ * Patch seguro: ao usar res.json em /api, garante Content-Type JSON
+ * (sem afetar endpoints binários como /api/uploads).
+ */
 app.use('/api', (_req, res, next) => {
-  // não força para SSE pois /api/events já foi montado acima
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (!res.locals.__jsonPatched) {
+    const _json = res.json.bind(res);
+    res.json = (body) => {
+      if (!res.get('Content-Type')) {
+        res.set('Content-Type', 'application/json; charset=utf-8');
+      }
+      return _json(body);
+    };
+    res.locals.__jsonPatched = true;
+  }
   next();
 });
 
@@ -217,14 +228,18 @@ app.use('/api', (req, _res, next) => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
 
-/** addReturnEvent (idempotente) — usa fallback global */
-async function addReturnEvent({
-  returnId, type, title = null, message = null, meta = null,
-  createdBy = 'system', idempKey = null
-}) {
+/** addReturnEvent (idempotente) — respeita RLS se receber req.q */
+async function addReturnEvent(args = {}, req) {
+  const {
+    returnId, type, title = null, message = null, meta = null,
+    createdBy = 'system', idempKey = null, q: injectedQ
+  } = args;
+
+  const q = injectedQ || (req && qOf(req)) || query;
   const metaStr = meta != null ? JSON.stringify(meta) : null;
+
   try {
-    const { rows } = await query(
+    const { rows } = await q(
       `INSERT INTO return_events
          (return_id, type, title, message, meta, created_by, created_at, idemp_key)
        VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
@@ -238,7 +253,7 @@ async function addReturnEvent({
     return ev;
   } catch (e) {
     if (String(e?.code) === '23505' && idempKey) {
-      const { rows } = await query(
+      const { rows } = await q(
         `SELECT id, return_id AS "returnId", type, title, message, meta,
                 created_by AS "createdBy", created_at AS "createdAt",
                 idemp_key AS "idempotencyKey"
@@ -774,7 +789,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      WHERE a.sku IS NOT NULL AND A.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
