@@ -223,6 +223,7 @@ app.use('/api', (req, _res, next) => {
   'ML_CLIENT_SECRET',
   'ML_REDIRECT_URI',
   'MELI_OWNER_TOKEN',
+  'ML_ACCESS_TOKEN',              // <- adicionado (aceito pelos módulos ML)
   'TENANT_TEXT_FALLBACK'
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
@@ -378,6 +379,17 @@ try {
   }
 } catch (e) {
   console.warn('[BOOT] ML Enrich não carregado (opcional):', e?.message || e);
+}
+
+/* ========= ML – Amounts (preview de valores p/ front) ========= */
+try {
+  const registerMlAmounts = require('./routes/ml-amounts');
+  if (typeof registerMlAmounts === 'function') {
+    registerMlAmounts(app);
+    console.log('[BOOT] Rotas ML Amounts registradas (/api/ml/returns/:id/fetch-amounts)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas ML Amounts não carregadas (opcional):', e?.message || e);
 }
 
 /* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
@@ -789,7 +801,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND A.sku <> ''
+      WHERE a.sku IS NOT NULL AND a.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
