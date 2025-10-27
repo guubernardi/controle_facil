@@ -10,16 +10,10 @@
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return isFinite(v) ? v : 0;
     v = String(v).trim();
-    // remove texto e símbolo de moeda, mantém dígitos, vírgula, ponto e sinal
     v = v.replace(/[^\d.,-]/g, '');
-    // se tiver mais de um ponto, remove pontos de milhar (tudo menos o último)
     var parts = v.split(',');
-    if (parts.length > 2) { v = v.replace(/\./g, ''); } // casos bizarros
-    else {
-      // remover pontos de milhar quando vírgula é decimal
-      if (v.indexOf(',') >= 0) v = v.replace(/\./g, '');
-    }
-    // troca vírgula por ponto (decimal)
+    if (parts.length > 2) { v = v.replace(/\./g, ''); }
+    else { if (v.indexOf(',') >= 0) v = v.replace(/\./g, ''); }
     v = v.replace(',', '.');
     var n = parseFloat(v);
     return isNaN(n) ? 0 : n;
@@ -260,7 +254,6 @@
     if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
     if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
-    // inputs type="number" esperam ponto como decimal - não formatar com vírgula aqui
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
 
@@ -295,7 +288,6 @@
   // ===== API =====
   function safeJson(res){
     if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status));
-    // alguns backends retornam 204 no events
     if (res.status === 204) return {};
     return res.json();
   }
@@ -397,7 +389,6 @@
   }
   function parecePedidoML(pedido) { return /^\d{6,}$/.test(String(pedido || '')); }
   function needsEnrichment(d) {
-    // inclui produto/frete ausentes ou zerados
     var faltamValores = !d || toNum(d.valor_produto) === 0 || toNum(d.valor_frete) === 0;
     var faltamMetadados = !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
     return faltamValores || faltamMetadados;
@@ -447,7 +438,7 @@
 
     var id = current.id;
 
-    // NOVO: se o usuário digitou o número do pedido (ainda não salvo), manda como override
+    // permite override digitado na tela (antes de salvar)
     var typedOrderId = $('id_venda') && $('id_venda').value ? $('id_venda').value.trim() : '';
     var typedClaimId = $('ml_claim_id') && $('ml_claim_id').value ? $('ml_claim_id').value.trim() : '';
     var params = [];
@@ -460,7 +451,6 @@
 
     return fetch(previewUrl, { headers: { 'Accept': 'application/json' } })
       .then(function (r) {
-        // Lê como texto e tenta JSON; anexa status em caso de erro
         return r.text().then(function (txt) {
           var j = {};
           try { j = txt ? JSON.parse(txt) : {}; } catch (_e) {}
@@ -499,12 +489,12 @@
         var changed = false;
         if (product !== null && toNum(product) !== toNum(current.valor_produto)) {
           current.valor_produto = toNum(product);
-          if (ip) ip.value = String(current.valor_produto); // type=number => usar ponto
+          if (ip) ip.value = String(current.valor_produto);
           changed = true;
         }
         if (freight !== null && toNum(freight) !== toNum(current.valor_frete)) {
           current.valor_frete = toNum(freight);
-          if (ifr) ifr.value = String(current.valor_frete); // type=number => usar ponto
+          if (ifr) ifr.value = String(current.valor_frete);
           changed = true;
         }
 
@@ -525,10 +515,8 @@
         var ord = j.order || j.order_info || null;
         var patch = {};
         if (ord) {
-          // id_venda
           applyIfEmpty(patch, 'id_venda', ord.id || ord.order_id);
 
-          // cliente_nome (prioriza nome; cai para nickname / receiver_name)
           var buyer =
             (ord.buyer && (
               (ord.buyer.first_name && ord.buyer.last_name ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : (ord.buyer.name || ord.buyer.first_name)) ||
@@ -537,19 +525,24 @@
             (ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name);
           applyIfEmpty(patch, 'cliente_nome', buyer);
 
-          // loja_nome
           var sellerNick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || ord.store_nickname || null;
           var lojaNome   = sellerNick ? ('Mercado Livre · ' + sellerNick) : (ord.site_id ? (siteIdToName(ord.site_id)) : null);
           applyIfEmpty(patch, 'loja_nome', lojaNome);
 
-          // data_compra
           var dt = ord.date_created || ord.paid_at || ord.created_at || null;
           applyIfEmpty(patch, 'data_compra', dt ? String(dt).slice(0, 10) : null);
 
-          // sku
           var sku = pickSkuFromOrder(ord);
           applyIfEmpty(patch, 'sku', sku);
         }
+
+        // ---- Motivo do claim (novo) ----
+        var motivo =
+          j.reason_name ||
+          (j.claim && (j.claim.reason_name ||
+                       (j.claim.reason && (j.claim.reason.name || j.claim.reason.description)))) ||
+          null;
+        applyIfEmpty(patch, 'tipo_reclamacao', motivo);
 
         // Reflete no formulário imediatamente
         if (Object.keys(patch).length) {
@@ -558,7 +551,9 @@
           if (patch.loja_nome && $('loja_nome')) $('loja_nome').value = patch.loja_nome;
           if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
           if (patch.sku && $('sku')) $('sku').value = patch.sku;
+          if (patch.tipo_reclamacao && $('tipo_reclamacao')) $('tipo_reclamacao').value = patch.tipo_reclamacao;
           current = Object.assign({}, current, patch);
+          recalc(); // recalcula se só o motivo mudou
         }
 
         // ---- Persiste: evento + PATCH opcional ----
@@ -578,7 +573,6 @@
       .then(function () { return reloadCurrent(); })
       .catch(function (e) {
         if (e && e.status === 404) {
-          // Sem dados no ML para esta devolução — tratar como aviso leve
           toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
         } else {
           toast(e.message || 'Não foi possível obter valores/dados do ML', 'error');
@@ -717,6 +711,16 @@
     if (!items.length) { if (elEmpty) elEmpty.hidden = false; return; }
     if (elEmpty) elEmpty.hidden = true;
 
+    function reasonFromMeta(meta) {
+      if (!meta) return null;
+      return meta.reason_name ||
+             meta.reason ||
+             meta.tipo_reclamacao ||
+             (meta.claim && (meta.claim.reason_name ||
+                             (meta.claim.reason && (meta.claim.reason.name || meta.claim.reason.description)))) ||
+             null;
+    }
+
     var frag = document.createDocumentFragment();
     items.forEach(function (ev) {
       var type = String(ev.type || 'status').toLowerCase();
@@ -735,7 +739,7 @@
         '<span class="tl-title">' + iconFor(type) + ' ' + (ev.title || (type === 'status' ? 'Status' : 'Evento')) + '</span>' +
         '<span class="tl-time" title="' + (created || '') + '">' + rel + '</span>' +
       '</div>' +
-      (ev.message ? ('<div class="tl-msg">' + ev.message + '</div>') : '') + 
+      (ev.message ? ('<div class="tl-msg">' + ev.message + '</div>') : '') +
       '<div class="tl-meta"></div>';
 
       var metaBox = item.querySelector('.tl-meta');
@@ -745,6 +749,9 @@
       if (meta && meta.cd && meta.cd.receivedAt)   metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">recebido: '+ new Date(meta.cd.receivedAt).toLocaleString('pt-BR') +'</span>');
       if (meta && meta.cd && meta.cd.unreceivedAt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">removido: '+ new Date(meta.cd.unreceivedAt).toLocaleString('pt-BR') +'</span>');
       if (meta && meta.cd && meta.cd.inspectedAt)  metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">inspecionado: '+ new Date(meta.cd.inspectedAt).toLocaleString('pt-BR') +'</span>');
+
+      var reasonTxt = reasonFromMeta(meta);
+      if (reasonTxt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">motivo: <b>'+ reasonTxt +'</b></span>');
 
       frag.appendChild(item);
     });
@@ -806,7 +813,6 @@
     }
     reloadCurrent()
       .then(function () {
-        // Auto (opcional): só roda se precisar e respeita TTL
         if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) && canEnrichNow() && needsEnrichment(current)) {
           return enrichFromML('auto');
         }
