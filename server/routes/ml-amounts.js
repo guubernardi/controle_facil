@@ -61,7 +61,7 @@ async function mget(token, path) {
   return j;
 }
 
-// normaliza o motivo para nomes “amigáveis”
+// melhoramos o nome do motivo para português que “bate” com suas regras do dashboard
 function normalizeReason(reasonId, reasonName) {
   const t = String(reasonName || reasonId || '').toLowerCase();
   if (/tamanho|size/.test(t))       return 'Tamanho incorreto (cliente)';
@@ -71,28 +71,6 @@ function normalizeReason(reasonId, reasonName) {
   if (/defeit|avari|damag|quebrad|faltando|incomplet/.test(t))
                                     return 'Defeito/avaria no produto';
   return reasonName || reasonId || null;
-}
-
-// === NOVO: helpers para status logística -> fase ===
-function pickShippingStatus(payload) {
-  // tenta shipments[0], depois order.shipping
-  const shArr = Array.isArray(payload.shipments) ? payload.shipments : [];
-  const first = shArr[0] || (payload.order && payload.order.shipping) || {};
-  return (first.status || first.substatus || '').toLowerCase() || null;
-}
-function mapToPhase(status) {
-  const s = String(status || '').toLowerCase();
-  if (!s) return null;
-  if (['ready_to_ship', 'handling', 'to_be_agreed', 'invoice_pending', 'cost_exceeded'].includes(s)) {
-    return 'preparo_despacho';
-  }
-  if (['shipped', 'in_transit', 'pending', 'delayed'].includes(s)) {
-    return 'em_transporte';
-  }
-  if (['delivered', 'not_delivered', 'returned', 'canceled', 'cancelled'].includes(s)) {
-    return 'finalizado';
-  }
-  return s; // devolve cru se não couber nos buckets acima
 }
 
 module.exports = function registerMlAmounts(app) {
@@ -124,7 +102,6 @@ module.exports = function registerMlAmounts(app) {
       if (!token) return res.status(400).json({ error: 'Access token ausente para esta loja', meta });
 
       let order = null, claim = null;
-      let shipments = [];
       const amounts = {};
 
       if (notBlank(orderId)) {
@@ -133,16 +110,6 @@ module.exports = function registerMlAmounts(app) {
           order = await mget(token, `/orders/${encodeURIComponent(orderId)}`);
           const prod = sumOrderProducts(order);
           if (prod != null) amounts.product = prod;
-
-          // busca shipping completo (quando existir id)
-          const shipId = order?.shipping?.id || order?.shipping_id;
-          if (shipId) {
-            try {
-              meta.steps.push({ op: 'GET /shipments', id: shipId });
-              const ship = await mget(token, `/shipments/${encodeURIComponent(shipId)}`);
-              if (ship) shipments.push(ship);
-            } catch (e) { fail('shipments', e); }
-          }
         } catch (e) { fail('orders', e); }
       }
 
@@ -150,7 +117,7 @@ module.exports = function registerMlAmounts(app) {
         try {
           meta.steps.push({ op: 'GET /claims', claimId });
           const c = await mget(token, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}`);
-          // reason pode vir em formatos diferentes
+          // Estruturas possíveis de reason variam por conta; cobrimos alguns formatos
           const rid   = c?.reason_id || c?.reason?.id || null;
           const rname = c?.reason_name || c?.reason?.name || c?.reason?.description || null;
           claim = {
@@ -174,21 +141,14 @@ module.exports = function registerMlAmounts(app) {
         return res.status(404).json({ error: 'Sem dados para esta devolução' });
       }
 
-      // === NOVO: shipping_status / shipping_phase
-      const shipping_status = pickShippingStatus({ shipments, order, claim });
-      const shipping_phase  = mapToPhase(shipping_status);
-
       return res.json({
         ok: true,
         order_id: notBlank(orderId) ? orderId : null,
         claim_id: notBlank(claimId) ? claimId : null,
         amounts,
         order,
-        shipments,
         claim,
         reason_name: claim?.reason_name || claim?.reason_name_normalized || null,
-        shipping_status,
-        shipping_phase,
         meta
       });
     } catch (e) {
