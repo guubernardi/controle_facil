@@ -134,6 +134,13 @@ try {
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
+/** >>> NOVO: sessão leve para RBAC no front (exposta antes do guard) */
+app.get('/api/auth/session', (req, res) => {
+  const user = req.session?.user ? { id: req.session.user.id, name: req.session.user.name, role: req.session.user.role } : null;
+  const tenant = req.session?.tenant_id || null;
+  res.json({ user, tenant });
+});
+
 /** -----------------------------------------------------------------
  *  Guard /api — DEPOIS das rotas abertas
  * ----------------------------------------------------------------- */
@@ -418,6 +425,23 @@ try {
   console.warn('[BOOT] Importador ML não carregado (opcional):', e?.message || e);
 }
 
+/* ========= >>> NOVAS ROTAS: PATCH log/tipo + Re-enriquecimento em lote ========= */
+try {
+  const returnsLogRouter  = require('./routes/returns-log');   // PATCH /api/returns/:id/log
+  app.use('/api/returns', returnsLogRouter);
+  console.log('[BOOT] Rota Returns Log registrada (/api/returns/:id/log)');
+} catch (e) {
+  console.warn('[BOOT] Rota Returns Log não carregada (opcional):', e?.message || e);
+}
+
+try {
+  const mlReenrichRouter  = require('./routes/ml-reenrich');   // POST /api/ml/returns/re-enrich
+  app.use('/api/ml', mlReenrichRouter);
+  console.log('[BOOT] Rota ML Re-enrich registrada (/api/ml/returns/re-enrich)');
+} catch (e) {
+  console.warn('[BOOT] Rota ML Re-enrich não carregada (opcional):', e?.message || e);
+}
+
 /* ------------------------------------------------------------
  *  Healthchecks
  * ------------------------------------------------------------ */
@@ -595,233 +619,6 @@ app.get('/api/returns/logs', async (req, res) => {
   } catch (e) {
     console.error('GET /api/returns/logs erro:', e);
     res.status(500).json({ error: 'Falha ao buscar registro.' });
-  }
-});
-
-/* ------------------------------------------------------------
- *  DASHBOARD (dados consolidados)
- * ------------------------------------------------------------ */
-app.get('/api/dashboard', async (req, res) => {
-  const mock = () => {
-    const today = new Date();
-    const daily = Array.from({ length: 30 }).map((_, i) => {
-      const d = new Date(today.getTime() - (29 - i) * 86400000);
-      return { date: d.toISOString().slice(0, 10), prejuizo: Math.round(Math.random() * 2000) };
-    });
-    const monthly = Array.from({ length: 6 }).map((_, i) => {
-      const dt = new Date(today.getFullYear(), today.getMonth() - 5 + i, 1);
-      return { month: dt.toLocaleString('pt-BR', { month: 'short', year: 'numeric' }), prejuizo: Math.round(Math.random() * 8000) };
-    });
-    const status = { pendente: 12, aprovado: 34, rejeitado: 7 };
-    const top_items = Array.from({ length: Number(req.query.limitTop || 5) }).map((_, i) => ({
-      sku: 'SKU-' + (1000 + i),
-      devolucoes: Math.floor(Math.random() * 20) + 1,
-      prejuizo: Math.round(Math.random() * 1500)
-    }));
-    const totals = {
-      total: 120,
-      pendentes: 12,
-      aprovadas: 80,
-      rejeitadas: 28,
-      prejuizo_total: monthly.reduce((s, m) => s + Number(m.prejuizo || 0), 0)
-    };
-    return { daily, monthly, status, top_items, totals };
-  };
-
-  try {
-    const q = qOf(req);
-    const { from, to, limitTop = '5' } = req.query;
-    const lim = Math.max(1, Math.min(parseInt(limitTop, 10) || 5, 20));
-
-    const now = new Date();
-    const defaultTo = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString().slice(0, 10);
-    const defaultFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29).toISOString().slice(0, 10);
-
-    const pFrom = from || defaultFrom;
-    const pTo   = to   || defaultTo;
-
-    const cols = await tableHasColumns('devolucoes', ['tipo_reclamacao','reclamacao','log_status','valor_produto','valor_frete','status','created_at','sku'], req);
-
-    if (!cols.created_at) {
-      return res.json(mock());
-    }
-
-    const params = [pFrom, pTo];
-
-    const qDaily = await q(
-      `
-      WITH base AS (
-        SELECT
-          created_at::date AS day,
-          LOWER(COALESCE(status,'')) AS st,
-          LOWER(COALESCE(log_status,'')) AS ls,
-          COALESCE(valor_produto,0) AS vp,
-          COALESCE(valor_frete,0) AS vf,
-          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
-        FROM devolucoes
-        WHERE created_at >= $1 AND created_at < $2
-      ),
-      calc AS (
-        SELECT day,
-          CASE
-            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
-            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
-            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
-            ELSE vp + vf
-          END::numeric(12,2) AS custo
-        FROM base
-      )
-      SELECT day::text AS date, COALESCE(SUM(custo),0)::numeric AS prejuizo
-      FROM calc
-      GROUP BY 1
-      ORDER BY 1
-      `,
-      params
-    );
-
-    const qMonthly = await q(
-      `
-      WITH base AS (
-        SELECT
-          date_trunc('month', created_at)::date AS m,
-          LOWER(COALESCE(status,'')) AS st,
-          LOWER(COALESCE(log_status,'')) AS ls,
-          COALESCE(valor_produto,0) AS vp,
-          COALESCE(valor_frete,0) AS vf,
-          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
-        FROM devolucoes
-        WHERE created_at >= $1 AND created_at < $2
-      ),
-      calc AS (
-        SELECT m,
-          CASE
-            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
-            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
-            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
-            ELSE vp + vf
-          END::numeric(12,2) AS custo
-        FROM base
-      )
-      SELECT to_char(m, 'Mon YYYY') AS month, COALESCE(SUM(custo),0)::numeric AS prejuizo
-      FROM calc
-      GROUP BY 1
-      ORDER BY MIN(m)
-      `,
-      params
-    );
-
-    const qStatus = await q(
-      `
-      WITH base AS (
-        SELECT LOWER(COALESCE(status,'')) AS st
-        FROM devolucoes
-        WHERE created_at >= $1 AND created_at < $2
-      )
-      SELECT
-        SUM(CASE WHEN st LIKE '%pend%' THEN 1 ELSE 0 END)::int  AS pendente,
-        SUM(CASE WHEN st LIKE '%aprov%' THEN 1 ELSE 0 END)::int AS aprovado,
-        SUM(CASE WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 1 ELSE 0 END)::int AS rejeitado
-      FROM base
-      `,
-      params
-    );
-
-    const qTotals = await q(
-      `
-      WITH base AS (
-        SELECT
-          LOWER(COALESCE(status,'')) AS st,
-          LOWER(COALESCE(log_status,'')) AS ls,
-          COALESCE(valor_produto,0) AS vp,
-          COALESCE(valor_frete,0) AS vf,
-          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo
-        FROM devolucoes
-        WHERE created_at >= $1 AND created_at < $2
-      ),
-      calc AS (
-        SELECT
-          CASE
-            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
-            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
-            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
-            ELSE vp + vf
-          END::numeric(12,2) AS custo,
-          st
-        FROM base
-      )
-      SELECT
-        (SELECT COUNT(*)::int FROM calc)                                               AS total,
-        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%pend%')                        AS pendentes,
-        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%aprov%')                       AS aprovadas,
-        (SELECT COUNT(*)::int FROM calc WHERE st LIKE '%rej%' OR st LIKE '%neg%')      AS rejeitadas,
-        (SELECT COALESCE(SUM(custo),0)::numeric FROM calc)                              AS prejuizo_total
-      `,
-      params
-    );
-
-    const qTop = await q(
-      `
-      WITH base AS (
-        SELECT
-          sku,
-          COALESCE(tipo_reclamacao, reclamacao, '') AS motivo,
-          LOWER(COALESCE(status,'')) AS st,
-          LOWER(COALESCE(log_status,'')) AS ls,
-          COALESCE(valor_produto,0) AS vp,
-          COALESCE(valor_frete,0) AS vf,
-          created_at
-        FROM devolucoes
-        WHERE created_at >= $1 AND created_at < $2
-      ),
-      calc AS (
-        SELECT
-          sku,
-          motivo,
-          CASE
-            WHEN st LIKE '%rej%' OR st LIKE '%neg%' THEN 0
-            WHEN LOWER(motivo) ~ '(arrepend|cliente|nao serviu|não serviu|mudou de ideia|compra errad|tamanho|cor errad|engano)' THEN 0
-            WHEN ls IN ('recebido_cd','em_inspecao') THEN vf
-            ELSE vp + vf
-          END::numeric(12,2) AS custo
-        FROM base
-      ),
-      agg AS (
-        SELECT
-          sku,
-          COUNT(*)::int AS devolucoes,
-          COALESCE(SUM(custo),0)::numeric AS prejuizo
-        FROM calc
-        GROUP BY sku
-      ),
-      motivo_rank AS (
-        SELECT
-          sku, motivo,
-          ROW_NUMBER() OVER (PARTITION BY sku ORDER BY COUNT(*) DESC) AS rn
-        FROM calc
-        GROUP BY sku, motivo
-      )
-      SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
-      FROM agg a
-      LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND A.sku <> ''
-      ORDER BY a.devolucoes DESC, a.prejuizo DESC
-      LIMIT $3
-      `,
-      [pFrom, pTo, lim]
-    );
-
-    const data = {
-      daily: qDaily.rows,
-      monthly: qMonthly.rows,
-      status: qStatus.rows[0] || { pendente: 0, aprovado: 0, rejeitado: 0 },
-      top_items: qTop.rows,
-      totals: qTotals.rows[0] || { total: 0, pendentes: 0, aprovadas: 0, rejeitadas: 0, prejuizo_total: 0 }
-    };
-
-    return res.json(data);
-  } catch (e) {
-    console.error('GET /api/dashboard erro:', e);
-    return res.json(mock());
   }
 });
 
