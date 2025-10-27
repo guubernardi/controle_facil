@@ -85,9 +85,7 @@ app.get('/', (req, res) => {
 try {
   const events = require('./events');
   if (typeof events?.sse === 'function') {
-    // novo endpoint esperado pelo front
     app.get('/api/events', events.sse);
-    // alias legado
     app.get('/events', events.sse);
     console.log('[BOOT] SSE habilitado em /api/events (alias: /events)');
   } else {
@@ -117,7 +115,7 @@ app.use('/api', (_req, res, next) => {
 
 /* ========= Auth - Registro (rotas PÚBLICAS) — MONTE PRIMEIRO ========= */
 try {
-  const registerAuthRegister = require('./routes/auth-register'); // expõe /api/auth/check-email e /api/auth/register
+  const registerAuthRegister = require('./routes/auth-register');
   if (typeof registerAuthRegister === 'function') {
     registerAuthRegister(app);
     console.log('[BOOT] Rotas Auth Register registradas (/api/auth/register, /api/auth/check-email)');
@@ -140,9 +138,8 @@ app.use('/api', (req, res, next) => {
   const isOpen =
     p === '/health' ||
     p === '/db/ping' ||
-    origLower.startsWith('/api/auth/'); // libera /api/auth/* (register, check-email, login, me, logout)
+    origLower.startsWith('/api/auth/');
 
-  // Exceção segura: job interno chama /api/ml/claims/import com token
   const jobHeader = req.get('x-job-token');
   const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   const isJob     = origLower.startsWith('/api/ml/claims/import') && jobHeader && jobToken && jobHeader === jobToken;
@@ -223,7 +220,6 @@ app.use('/api', (req, _res, next) => {
   'ML_CLIENT_SECRET',
   'ML_REDIRECT_URI',
   'MELI_OWNER_TOKEN',
-  'ML_ACCESS_TOKEN',              // <- adicionado (aceito pelos módulos ML)
   'TENANT_TEXT_FALLBACK'
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
@@ -317,10 +313,8 @@ try {
 try {
   const registerReturnMessages = require('./routes/returns-messages');
   if (typeof registerReturnMessages === 'function') {
-    // novo padrão (função registradora)
     registerReturnMessages(app);
   } else {
-    // compatibilidade caso exporte um Router
     app.use('/api', registerReturnMessages);
   }
   console.log('[BOOT] Rotas Chat por Devolução registradas (/api/returns/:id/messages)');
@@ -370,6 +364,17 @@ try {
   console.warn('[BOOT] Rotas ML API não carregadas (opcional):', e?.message || e);
 }
 
+/* ========= ML – Amounts (preview de valores) ========= */
+try {
+  const registerMlAmounts = require('./routes/ml-amounts');
+  if (typeof registerMlAmounts === 'function') {
+    registerMlAmounts(app);
+    console.log('[BOOT] Rotas ML Amounts registradas (/api/ml/returns/:id/fetch-amounts)');
+  }
+} catch (e) {
+  console.warn('[BOOT] Rotas ML Amounts não carregadas (opcional):', e?.message || e);
+}
+
 /* ========= ML – Enriquecimento de devolução (valores) ========= */
 try {
   const registerMlEnrich = require('./routes/ml-enrich');
@@ -379,17 +384,6 @@ try {
   }
 } catch (e) {
   console.warn('[BOOT] ML Enrich não carregado (opcional):', e?.message || e);
-}
-
-/* ========= ML – Amounts (preview de valores p/ front) ========= */
-try {
-  const registerMlAmounts = require('./routes/ml-amounts');
-  if (typeof registerMlAmounts === 'function') {
-    registerMlAmounts(app);
-    console.log('[BOOT] Rotas ML Amounts registradas (/api/ml/returns/:id/fetch-amounts)');
-  }
-} catch (e) {
-  console.warn('[BOOT] Rotas ML Amounts não carregadas (opcional):', e?.message || e);
 }
 
 /* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
@@ -801,7 +795,7 @@ app.get('/api/dashboard', async (req, res) => {
       SELECT a.sku, a.devolucoes, a.prejuizo, mr.motivo
       FROM agg a
       LEFT JOIN motivo_rank mr ON mr.sku = a.sku AND mr.rn = 1
-      WHERE a.sku IS NOT NULL AND a.sku <> ''
+      WHERE a.sku IS NOT NULL AND A.sku <> ''
       ORDER BY a.devolucoes DESC, a.prejuizo DESC
       LIMIT $3
       `,
