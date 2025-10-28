@@ -1,7 +1,7 @@
 {
   "name": "devolucoes-buscou",
   "version": "0.1.0",
-  "description": "",
+  "description": "Controle/Retorno Fácil — servidor Express + PostgreSQL",
   "private": true,
   "type": "commonjs",
   "main": "server/server.js",
@@ -10,7 +10,7 @@
     "dev": "nodemon server/server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
   "dependencies": {
     "axios": "^1.7.7",
