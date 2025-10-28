@@ -8,11 +8,10 @@
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return isFinite(v) ? v : 0;
-    v = String(v).trim();
-    v = v.replace(/[^\d.,-]/g, '');
+    v = String(v).trim().replace(/[^\d.,-]/g, '');
     var parts = v.split(',');
-    if (parts.length > 2) { v = v.replace(/\./g, ''); }
-    else { if (v.indexOf(',') >= 0) v = v.replace(/\./g, ''); }
+    if (parts.length > 2) v = v.replace(/\./g, '');
+    else if (v.indexOf(',') >= 0) v = v.replace(/\./g, '');
     v = v.replace(',', '.');
     var n = parseFloat(v);
     return isNaN(n) ? 0 : n;
@@ -192,7 +191,6 @@
   function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
   function norm(s){ return stripAcc(String(s||'').toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim()); }
 
-  // --- Novas funções: chave -> rótulo, seleção por chave ---
   function labelFromReasonKey(key){
     switch(String(key||'').toLowerCase()){
       case 'cliente_arrependimento': return 'Cliente: arrependimento';
@@ -239,8 +237,6 @@
     if (ok && opts.lock) lockMotivo(true, '(ML)');
     return ok;
   }
-
-  // Fallback por texto
   function mapMotivoLabel(text){
     var t = norm(text);
     if (!t) return '';
@@ -297,14 +293,24 @@
     if ($('data_compra'))      $('data_compra').value      = d.data_compra ? String(d.data_compra).slice(0,10) : '';
     if ($('status'))           $('status').value           = d.status || '';
     if ($('sku'))              $('sku').value              = d.sku || '';
-    if ($('tipo_reclamacao'))  $('tipo_reclamacao').value  = d.tipo_reclamacao || '';
     if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
     if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
-    // 👉 só tenta ajustar o select se vier motivo; NÃO desbloqueia aqui
-    if (d.tipo_reclamacao) setMotivoFromText(d.tipo_reclamacao, { lock:false });
+
+    // Motivo: primeiro tentamos mapear/selecionar por texto amigável;
+    // se vier um código (ex.: PDD9939), criamos uma option dinâmica para não “sumir”.
+    var sel = $('tipo_reclamacao');
+    if (sel) {
+      var ok = setMotivoFromText(d.tipo_reclamacao || '', { lock:false });
+      if (!ok && d.tipo_reclamacao) { // código cru
+        ensureMotivoOption(sel, d.tipo_reclamacao);
+        sel.value = d.tipo_reclamacao;
+      }
+    }
+
+    lockMotivo(false);
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
     updateSummary(d); recalc();
@@ -492,18 +498,22 @@
           applyIfEmpty(patch, 'sku', sku);
         }
 
-        // ---- Motivo do claim (usa reason_key se vier) ----
+        // ---- Motivo do claim (sempre persistir rótulo amigável) ----
         var reasonKey = j.reason_key || (j.claim && j.claim.reason_key) || null;
         var motivoTxt = j.reason_name ||
                         (j.claim && (j.claim.reason_name ||
                                      (j.claim.reason && (j.claim.reason.name || j.claim.reason.description)))) || null;
 
+        var finalLabel = null;
         if (reasonKey) {
+          finalLabel = labelFromReasonKey(reasonKey);
           setMotivoFromKey(reasonKey, { lock:true });
-          patch.tipo_reclamacao = labelFromReasonKey(reasonKey);
         } else if (motivoTxt) {
-          applyIfEmpty(patch, 'tipo_reclamacao', motivoTxt);
-          setMotivoFromText(motivoTxt, { lock:true });
+          finalLabel = mapMotivoLabel(motivoTxt) || motivoTxt;
+          setMotivoFromText(finalLabel, { lock:true });
+        }
+        if (finalLabel) {
+          patch.tipo_reclamacao = finalLabel; // <- sempre grava rótulo
         }
 
         // ---- Log sugerido (pré/transporte/recebido) ----
@@ -523,7 +533,9 @@
           if (patch.loja_nome && $('loja_nome')) $('loja_nome').value = patch.loja_nome;
           if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
           if (patch.sku && $('sku')) $('sku').value = patch.sku;
-          // tipo_reclamacao já aplicado/lockado acima
+          if (patch.tipo_reclamacao) {
+            // já selecionado acima
+          }
           current = Object.assign({}, current, patch);
           recalc();
         }
