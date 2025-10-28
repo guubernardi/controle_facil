@@ -1,4 +1,4 @@
-// server/routes/ml-amounts.js
+// server/routes/ml-amounts.js — busca amounts, motivo (normalizado), claim via order, e frete fallback
 'use strict';
 
 const { query } = require('../db');
@@ -145,7 +145,7 @@ const sumOrderProducts = (o) => {
   return sum > 0 ? sum : null;
 };
 
-// ===== NOVOS helpers =====
+// ===== helpers extras =====
 function pickFreightFromOrder(order) {
   if (!order) return null;
   const cands = [
@@ -196,7 +196,7 @@ module.exports = function registerMlAmounts(app) {
         return res.status(400).json({ error: 'Nenhum access token disponível (verifique ml_accounts ou variáveis MELI_TOKEN_*)', meta });
       }
 
-      // ===== NOVO: tentar descobrir claim pelo order_id
+      // tentar descobrir claim pelo order_id
       if (!notBlank(claimId) && notBlank(orderId)) {
         try {
           meta.steps.push({ op: 'GET /claims/search', orderId });
@@ -217,7 +217,7 @@ module.exports = function registerMlAmounts(app) {
       let order = null, claim = null;
       const amounts = {};
 
-      // ---- ORDER (para valor produto e metadados)
+      // ORDER (produto e metadados)
       if (notBlank(orderId)) {
         meta.steps.push({ op: 'GET /orders', orderId });
         try {
@@ -231,7 +231,7 @@ module.exports = function registerMlAmounts(app) {
         }
       }
 
-      // ---- CLAIM (para motivo, hint de log e custo de devolução)
+      // CLAIM (motivo, hint e custo de devolução)
       if (notBlank(claimId)) {
         meta.steps.push({ op: 'GET /claims', claimId });
         try {
@@ -259,7 +259,7 @@ module.exports = function registerMlAmounts(app) {
         }
       }
 
-      // ===== FRETE fallback pelo order
+      // FRETE fallback pelo order
       if ((amounts.freight == null || amounts.freight === 0) && order) {
         const f = pickFreightFromOrder(order);
         if (f != null) amounts.freight = f;
@@ -269,7 +269,7 @@ module.exports = function registerMlAmounts(app) {
         return res.status(404).json({ error: 'Sem dados para esta devolução', meta });
       }
 
-      // sugestão de log (em_preparacao / em_transporte / recebido_cd …)
+      // sugestão de log (pré/transporte/recebido)
       const logHint = claim ? mapClaimToLog(claim.status, claim.substatus) : null;
 
       return res.json({
