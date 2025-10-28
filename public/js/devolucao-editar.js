@@ -285,6 +285,23 @@
     }
   }
 
+  // ==== Motivo: detecção de código e mapa local opcional ====
+  function isReasonCode(v){
+    return /^[A-Z]{2,}\d{3,}$/i.test(String(v||'').trim());
+  }
+  // Ajuste livre: adicione/edite os códigos que você conhece
+  var CODE_TO_LABEL = {
+    // exemplos (edite conforme sua operação real)
+    'PDD9939': 'Pedido incorreto',
+    'PDD9904': 'Produto com defeito',
+    'PDD9905': 'Avaria no transporte',
+    'PDD9906': 'Cliente: arrependimento',
+    'PDD9907': 'Cliente: endereço errado'
+  };
+  function labelFromCode(code){
+    return CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
+  }
+
   function fill(d){
     var dvId=$('dv-id'); if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
     if ($('id_venda'))         $('id_venda').value         = d.id_venda || '';
@@ -299,20 +316,34 @@
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
 
-    // Motivo: primeiro tentamos mapear/selecionar por texto amigável;
-    // se vier um código (ex.: PDD9939), criamos uma option dinâmica para não “sumir”.
+    // Motivo:
+    // - Se vier código (ex.: PDD9939), tenta traduzir localmente; se não souber, trava e aguarda enrich.
+    // - Se vier texto, aplica o mapeador regex e seleciona o rótulo amigável.
     var sel = $('tipo_reclamacao');
     if (sel) {
-      var ok = setMotivoFromText(d.tipo_reclamacao || '', { lock:false });
-      if (!ok && d.tipo_reclamacao) { // código cru
-        ensureMotivoOption(sel, d.tipo_reclamacao);
-        sel.value = d.tipo_reclamacao;
+      var mot = d.tipo_reclamacao || '';
+      if (isReasonCode(mot)) {
+        var lbl = labelFromCode(mot);
+        if (lbl) {
+          selectMotivoLabel(sel, lbl);
+          lockMotivo(true, '(ML)');
+        } else {
+          sel.value = '';
+          lockMotivo(true, '(aguardando ML)');
+          setAutoHint('Motivo veio como código do ML; convertendo…');
+        }
+      } else {
+        var ok = setMotivoFromText(mot, { lock:false });
+        if (!ok && mot) {
+          ensureMotivoOption(sel, mot);
+          sel.value = mot;
+        }
       }
     }
 
-    lockMotivo(false);
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
+    lockMotivo(false);
     updateSummary(d); recalc();
   }
 
@@ -481,7 +512,7 @@
           applyIfEmpty(patch, 'id_venda', ord.id || ord.order_id);
           var buyer =
             (ord.buyer && (
-              (ord.buyer.first_name && ord.buyer.last_name ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : (ord.buyer.name || ord.buyer.first_name)) ||
+              (ord.buyer.first_name && ord.buyer.last_name ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : (ord.buyer.first_name || ord.buyer.name)) ||
               ord.buyer.nickname
             )) ||
             (ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name);
@@ -533,9 +564,6 @@
           if (patch.loja_nome && $('loja_nome')) $('loja_nome').value = patch.loja_nome;
           if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
           if (patch.sku && $('sku')) $('sku').value = patch.sku;
-          if (patch.tipo_reclamacao) {
-            // já selecionado acima
-          }
           current = Object.assign({}, current, patch);
           recalc();
         }
@@ -703,7 +731,15 @@
     }
     reloadCurrent()
       .then(function(){
-        if ((lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda)) && canEnrichNow() && needsEnrichment(current)) {
+        var needMotivoConvert = isReasonCode(current.tipo_reclamacao);
+        var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda);
+
+        if (needMotivoConvert) {
+          // força enriquecer para traduzir o código em rótulo humano
+          return enrichFromML('motivo');
+        }
+
+        if (podeML && canEnrichNow() && needsEnrichment(current)) {
           return enrichFromML('auto');
         }
       })
