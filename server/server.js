@@ -22,14 +22,34 @@ try {
   console.log('[BOOT] dotenv não carregado (ok em produção)');
 }
 
-const express   = require('express');
-const path      = require('path');
-const { query } = require('./db'); // fallback
-const session   = require('express-session');
-const ConnectPg = require('connect-pg-simple')(session);
+const express    = require('express');
+const path       = require('path');
+const helmet     = require('helmet');
+const cors       = require('cors');
+const rateLimit  = require('express-rate-limit');
+const session    = require('express-session');
+const ConnectPg  = require('connect-pg-simple')(session);
+const { query }  = require('./db'); // fallback
 
 const app = express();
 app.disable('x-powered-by');
+
+/** ================== Segurança base ================== */
+app.use(helmet({
+  contentSecurityPolicy: false, // para não quebrar inline scripts do front atual
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  referrerPolicy: { policy: 'no-referrer' }
+}));
+
+/** ================== CORS (apenas dev) ================== */
+if (process.env.NODE_ENV !== 'production') {
+  app.use(cors({
+    origin: true,           // ecoa origem do navegador
+    credentials: true,      // permite cookie de sessão
+    methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+    allowedHeaders: ['Content-Type','Accept','Idempotency-Key','x-job-token']
+  }));
+}
 
 /** Parsers globais (ANTES das rotas) */
 app.use(express.json({ limit: '1mb' }));
@@ -53,7 +73,7 @@ const sessCookie = {
   httpOnly: true,
   sameSite: 'lax',
   secure: process.env.NODE_ENV === 'production',
-  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }),
+  ...(reloginOnClose ? {} : { maxAge: 12 * 60 * 60 * 1000 }), // 12h
 };
 
 app.use(session({
@@ -62,7 +82,7 @@ app.use(session({
     createTableIfMissing: true,
     tableName: 'session'
   }),
-  name: 'rf.sid',
+  name: process.env.SESSION_NAME || 'cf.sid',
   secret: process.env.SESSION_SECRET || 'dev-change-me',
   resave: false,
   saveUninitialized: false,
@@ -119,7 +139,7 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
-/* ========= Auth - Registro (rotas PÚBLICAS) — MONTE PRIMEIRO ========= */
+/* ========= Auth Register (público/optativo) ========= */
 try {
   const registerAuthRegister = require('./routes/auth-register');
   if (typeof registerAuthRegister === 'function') {
@@ -130,15 +150,30 @@ try {
   console.warn('[BOOT] Rotas Auth Register não carregadas (opcional):', e?.message || e);
 }
 
-/** Rotas de autenticação gerais (podem ter guard interno) — MONTE DEPOIS */
+/** ========== Rate limit no login (5 tentativas / 15min p/ IP) ========== */
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.ip
+});
+app.use('/api/auth/login', loginLimiter);
+
+/** ========== Rotas de autenticação gerais ========== */
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
-/** >>> NOVO: sessão leve para RBAC no front (exposta antes do guard) */
+/** Sessão leve/ME p/ front (antes do guard) */
 app.get('/api/auth/session', (req, res) => {
-  const user = req.session?.user ? { id: req.session.user.id, name: req.session.user.name, role: req.session.user.role } : null;
-  const tenant = req.session?.tenant_id || null;
-  res.json({ user, tenant });
+  const u = req.session?.user || null;
+  res.json(u ? { id: u.id, nome: u.nome, email: u.email, roles: u.roles || [] } : null);
+});
+// Compat com requisito: /api/auth/me
+app.get('/api/auth/me', (req, res) => {
+  const u = req.session?.user || null;
+  if (!u) return res.status(401).json({ error: 'unauthorized' });
+  res.json({ id: u.id, nome: u.nome, email: u.email, roles: u.roles || [] });
 });
 
 /** -----------------------------------------------------------------
@@ -174,6 +209,17 @@ try {
   console.log('[BOOT] Tenant RLS habilitado em /api');
 } catch (e) {
   console.warn('[BOOT] Tenant RLS não carregado (./middleware/tenant-mw):', e?.message || e);
+}
+
+/** --------- RBAC enforce nas rotas /api PATCH --------- */
+try {
+  const { rbacEnforce } = require('./middlewares/auth'); // se existir
+  if (typeof rbacEnforce === 'function') {
+    app.use('/api', rbacEnforce());
+    console.log('[BOOT] RBAC enforce aplicado em /api (PATCH rules)');
+  }
+} catch (e) {
+  console.warn('[BOOT] RBAC middleware não encontrado (./middlewares/auth):', e?.message || e);
 }
 
 /** --------- Helpers --------- */
@@ -425,7 +471,7 @@ try {
   console.warn('[BOOT] Importador ML não carregado (opcional):', e?.message || e);
 }
 
-/* ========= >>> NOVAS ROTAS: PATCH log/tipo + Re-enriquecimento em lote ========= */
+/* ========= >>> Rotas auxiliares ========= */
 try {
   const returnsLogRouter  = require('./routes/returns-log');   // PATCH /api/returns/:id/log
   app.use('/api/returns', returnsLogRouter);
