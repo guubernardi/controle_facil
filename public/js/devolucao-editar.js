@@ -291,7 +291,6 @@
   }
   // Ajuste livre: adicione/edite os códigos que você conhece
   var CODE_TO_LABEL = {
-    // exemplos (edite conforme sua operação real)
     'PDD9939': 'Pedido incorreto',
     'PDD9904': 'Produto com defeito',
     'PDD9905': 'Avaria no transporte',
@@ -316,9 +315,7 @@
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
 
-    // Motivo:
-    // - Se vier código (ex.: PDD9939), tenta traduzir localmente; se não souber, trava e aguarda enrich.
-    // - Se vier texto, aplica o mapeador regex e seleciona o rótulo amigável.
+    // Motivo
     var sel = $('tipo_reclamacao');
     if (sel) {
       var mot = d.tipo_reclamacao || '';
@@ -568,11 +565,21 @@
           recalc();
         }
 
-        // ---- Evento + PATCH opcional ----
+        // ---- Evento + PATCH (FIX: inclui valores) ----
         var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
+        var amountsPatch = {};
+        if (product !== null) amountsPatch.valor_produto = toNum(product);
+        if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
+
         var persistPatch = Promise.resolve();
-        if (Object.keys(patch).length || logHint) {
-          var body = Object.assign({}, patch, (logHint ? { log_status: current.log_status } : {}), { updated_by: 'frontend-auto-enrich' });
+        if (Object.keys(patch).length || Object.keys(amountsPatch).length || logHint) {
+          var body = Object.assign(
+            {},
+            patch,
+            amountsPatch,                                    // <<< fixa sumiço após reload
+            (logHint ? { log_status: current.log_status } : {}),
+            { updated_by: 'frontend-auto-enrich' }
+          );
           persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).catch(function(){});
