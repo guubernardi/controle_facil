@@ -1,4 +1,4 @@
-// server/routes/ml-amounts.js — busca amounts, motivo (normalizado + key), claim via order, e frete fallback
+// server/routes/ml-amounts.js — busca amounts, motivo (normalizado + key + code), claim via order, e frete fallback
 'use strict';
 
 const { query } = require('../db');
@@ -102,6 +102,7 @@ async function mgetWithAnyToken(tokens, path, meta, tag) {
     } catch (e) {
       lastErr = e;
       meta.errors.push({ where: `${tag} via ${t.source}`, message: e.message, status: e.status || null, payload: e.payload || null });
+      // segue tentando com o próximo token
     }
   }
   if (lastErr) throw lastErr;
@@ -120,7 +121,12 @@ function normalizeReason(reasonId, reasonName) {
   return reasonName || reasonId || null;
 }
 function normalizeKey(s='') {
-  return String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+  // remove acentos, caixa baixa
+  try {
+    return String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+  } catch {
+    return String(s).toLowerCase();
+  }
 }
 // -> chave canônica para casar com o select do front
 function reasonKeyFromName(name='') {
@@ -175,15 +181,22 @@ function pickFreightFromOrder(order) {
     .filter(n => Number.isFinite(n) && n > 0);
   return cands.length ? cands[0] : null;
 }
+
+// Preenche campos derivados do motivo e retorna o melhor nome
 function extractReasonFields(claim) {
   if (!claim) return null;
   const rid   = claim?.reason_id || claim?.reason?.id || null;
   const rname = claim?.reason_name || claim?.reason?.name || claim?.reason?.description || null;
   const norm  = normalizeReason(rid, rname);
   const best  = norm || rname || rid || null;
+
   claim.reason_name_normalized = norm || rname || rid || null;
   claim.reason_name            = rname || rid || norm || null;
-  claim.reason_key             = reasonKeyFromName(best || '');
+
+  // prioridade: se vier do ML, usa; senão deriva do texto
+  const providedKey            = claim?.reason_key || (claim?.reason && claim.reason.key) || null;
+  claim.reason_key             = providedKey || reasonKeyFromName(best || '');
+
   return best;
 }
 
@@ -260,7 +273,8 @@ module.exports = function registerMlAmounts(app) {
             status: data?.status || null,
             substatus: data?.substatus || null,
             reason_id: data?.reason_id || data?.reason?.id || null,
-            reason_name: data?.reason_name || data?.reason?.name || data?.reason?.description || null
+            reason_name: data?.reason_name || data?.reason?.name || data?.reason?.description || null,
+            reason_key: data?.reason_key || data?.reason?.key || null
           };
           extractReasonFields(claim);
         } catch (e) {
@@ -297,8 +311,10 @@ module.exports = function registerMlAmounts(app) {
         amounts,
         order,
         claim,
+        // aliases amigáveis para o front:
+        reason_code: (claim && claim.reason_id) || null,                     // ex.: PDD9939
         reason_name: (claim && (claim.reason_name_normalized || claim.reason_name)) || null,
-        reason_key:  (claim && claim.reason_key) || null, // <- chave canônica pro front
+        reason_key:  (claim && claim.reason_key) || null,                    // chave canônica para mapear no select
         log_status_suggested: logHint,
         meta
       });
