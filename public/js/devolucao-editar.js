@@ -240,7 +240,7 @@
     return ok;
   }
 
-  // Retorna um rótulo exatamente igual às opções do select (fallback por texto)
+  // Fallback por texto
   function mapMotivoLabel(text){
     var t = norm(text);
     if (!t) return '';
@@ -303,8 +303,8 @@
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
-    setMotivoFromText(d.tipo_reclamacao || '', { lock:false });
-    lockMotivo(false);
+    // 👉 só tenta ajustar o select se vier motivo; NÃO desbloqueia aqui
+    if (d.tipo_reclamacao) setMotivoFromText(d.tipo_reclamacao, { lock:false });
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
     updateSummary(d); recalc();
@@ -499,11 +499,9 @@
                                      (j.claim.reason && (j.claim.reason.name || j.claim.reason.description)))) || null;
 
         if (reasonKey) {
-          // Seleciona pelo mapa oficial
           setMotivoFromKey(reasonKey, { lock:true });
           patch.tipo_reclamacao = labelFromReasonKey(reasonKey);
         } else if (motivoTxt) {
-          // Fallback por texto, com lock
           applyIfEmpty(patch, 'tipo_reclamacao', motivoTxt);
           setMotivoFromText(motivoTxt, { lock:true });
         }
@@ -525,9 +523,7 @@
           if (patch.loja_nome && $('loja_nome')) $('loja_nome').value = patch.loja_nome;
           if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
           if (patch.sku && $('sku')) $('sku').value = patch.sku;
-          if (patch.tipo_reclamacao) {
-            // já selecionado acima
-          }
+          // tipo_reclamacao já aplicado/lockado acima
           current = Object.assign({}, current, patch);
           recalc();
         }
