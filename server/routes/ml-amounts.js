@@ -1,4 +1,4 @@
-// server/routes/ml-amounts.js — busca amounts, motivo (normalizado), claim via order, e frete fallback
+// server/routes/ml-amounts.js — busca amounts, motivo (normalizado + key), claim via order, e frete fallback
 'use strict';
 
 const { query } = require('../db');
@@ -102,14 +102,13 @@ async function mgetWithAnyToken(tokens, path, meta, tag) {
     } catch (e) {
       lastErr = e;
       meta.errors.push({ where: `${tag} via ${t.source}`, message: e.message, status: e.status || null, payload: e.payload || null });
-      // segue tentando com o próximo token
     }
   }
   if (lastErr) throw lastErr;
   throw new Error('no_token_available');
 }
 
-// melhoramos o nome do motivo para PT
+// ===== Motivo (normalizado e chave canônica) =====
 function normalizeReason(reasonId, reasonName) {
   const t = String(reasonName || reasonId || '').toLowerCase();
   if (/tamanho|size/.test(t))       return 'Tamanho incorreto (cliente)';
@@ -119,6 +118,23 @@ function normalizeReason(reasonId, reasonName) {
   if (/defeit|avari|damag|quebrad|faltando|incomplet/.test(t))
                                      return 'Defeito/avaria no produto';
   return reasonName || reasonId || null;
+}
+function normalizeKey(s='') {
+  return String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+}
+// -> chave canônica para casar com o select do front
+function reasonKeyFromName(name='') {
+  const s = normalizeKey(name);
+  const has = kw => s.includes(kw);
+
+  if (has('arrepend')) return 'cliente_arrependimento';
+  if (has('endereco errado') || has('endereco incorreto') || has('ausencia') || has('destinatario ausente'))
+    return 'cliente_endereco_errado';
+  if (has('defeit') || has('avari') || has('danific') || has('quebrad') || has('faltando') || has('incomplet'))
+    return 'produto_defeito';
+  if (has('transporte')) return 'avaria_transporte';
+  if (has('pedido incorreto') || has('produto errado')) return 'pedido_incorreto';
+  return null;
 }
 
 // mapeia status/substatus do claim para um “log” amigável
@@ -159,14 +175,16 @@ function pickFreightFromOrder(order) {
     .filter(n => Number.isFinite(n) && n > 0);
   return cands.length ? cands[0] : null;
 }
-function extractReasonName(claim) {
+function extractReasonFields(claim) {
   if (!claim) return null;
   const rid   = claim?.reason_id || claim?.reason?.id || null;
   const rname = claim?.reason_name || claim?.reason?.name || claim?.reason?.description || null;
   const norm  = normalizeReason(rid, rname);
+  const best  = norm || rname || rid || null;
   claim.reason_name_normalized = norm || rname || rid || null;
   claim.reason_name            = rname || rid || norm || null;
-  return claim.reason_name_normalized || claim.reason_name || null;
+  claim.reason_key             = reasonKeyFromName(best || '');
+  return best;
 }
 
 module.exports = function registerMlAmounts(app) {
@@ -244,7 +262,7 @@ module.exports = function registerMlAmounts(app) {
             reason_id: data?.reason_id || data?.reason?.id || null,
             reason_name: data?.reason_name || data?.reason?.name || data?.reason?.description || null
           };
-          extractReasonName(claim);
+          extractReasonFields(claim);
         } catch (e) {
           meta.errors.push({ where: 'claim(final)', message: e.message, status: e.status || null });
         }
@@ -280,6 +298,7 @@ module.exports = function registerMlAmounts(app) {
         order,
         claim,
         reason_name: (claim && (claim.reason_name_normalized || claim.reason_name)) || null,
+        reason_key:  (claim && claim.reason_key) || null, // <- chave canônica pro front
         log_status_suggested: logHint,
         meta
       });

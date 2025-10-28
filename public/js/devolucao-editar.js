@@ -192,81 +192,83 @@
   function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
   function norm(s){ return stripAcc(String(s||'').toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim()); }
 
-  // Retorna um rótulo exatamente igual às opções do select
-  function mapMotivoLabel(text){
-    var t = norm(text);
-    if (!t) return '';
-
-    // cliente (arrependimento / tamanho / cor / nao serviu / compra errada / mudou de ideia)
-    if (/(arrepend|nao serv|não serv|mudou de ideia|compra errad|tamanho|size|cor|color)/.test(t))
-      return 'Cliente: arrependimento';
-
-    // cliente endereço/ausência
-    if (/(endereco|endereço|address|ausencia|ausência|receptor)/.test(t))
-      return 'Cliente: endereço errado';
-
-    // produto defeito/avaria/faltando
-    if (/(defeit|avari|quebrad|danific|faltand|incomplet)/.test(t))
-      return 'Produto com defeito';
-
-    // avaria no transporte
-    if (/(transporte|logistic|logistica|shipping damage|avaria no transporte)/.test(t))
-      return 'Avaria no transporte';
-
-    // item errado/pedido incorreto
-    if (/(pedido incorret|produto errad|item errad|sku incorret|wrong item)/.test(t))
-      return 'Pedido incorreto';
-
-    // fallback: se não bater, fica como veio (vamos tentar criar option dinâmica)
-    return text || '';
+  // --- Novas funções: chave -> rótulo, seleção por chave ---
+  function labelFromReasonKey(key){
+    switch(String(key||'').toLowerCase()){
+      case 'cliente_arrependimento': return 'Cliente: arrependimento';
+      case 'cliente_endereco_errado': return 'Cliente: endereço errado';
+      case 'produto_defeito':        return 'Produto com defeito';
+      case 'avaria_transporte':      return 'Avaria no transporte';
+      case 'pedido_incorreto':       return 'Pedido incorreto';
+      default: return '';
+    }
   }
-
   function ensureMotivoOption(selectEl, label){
     if (!selectEl || !label) return;
     var wanted = norm(label);
     for (var i=0;i<selectEl.options.length;i++){
       var opt = selectEl.options[i];
-      if (norm(opt.text) === wanted || norm(opt.value) === wanted) return; // já existe
+      if (norm(opt.text) === wanted || norm(opt.value) === wanted) return;
     }
     var o = document.createElement('option');
     o.text = label; o.value = label;
     selectEl.appendChild(o);
   }
-
-  function setMotivoFromText(text, opts){
+  function selectMotivoLabel(sel, label){
+    if (!sel || !label) return false;
+    ensureMotivoOption(sel, label);
+    var ok = false, wanted = norm(label);
+    for (var i=0;i<sel.options.length;i++){
+      var opt = sel.options[i];
+      if (norm(opt.text) === wanted || norm(opt.value) === wanted){ sel.value = opt.value; ok = true; break; }
+    }
+    if (!ok) sel.value = label;
+    sel.dispatchEvent(new Event('change'));
+    return true;
+  }
+  function setMotivoFromKey(key, opts){
     opts = opts || {};
     var sel = $('tipo_reclamacao'); if (!sel) return false;
-
-    // Se o usuário alterar manualmente, desbloqueia
     if (!sel.__lockBound){
       sel.addEventListener('change', function(){ lockMotivo(false); });
       sel.__lockBound = true;
     }
-
-    var label = mapMotivoLabel(text || '');
+    var label = labelFromReasonKey(key);
     if (!label) return false;
-
-    ensureMotivoOption(sel, label);
-
-    var selected = false;
-    for (var i=0;i<sel.options.length;i++){
-      var opt = sel.options[i];
-      if (norm(opt.text) === norm(label) || norm(opt.value) === norm(label)){
-        sel.value = opt.value;
-        selected = true;
-        break;
-      }
-    }
-    if (!selected){
-      // último recurso
-      sel.value = label;
-    }
-
-    if (opts.lock) lockMotivo(true, '(ML)');
-    sel.dispatchEvent(new Event('change'));
-    return true;
+    var ok = selectMotivoLabel(sel, label);
+    if (ok && opts.lock) lockMotivo(true, '(ML)');
+    return ok;
   }
 
+  // Retorna um rótulo exatamente igual às opções do select (fallback por texto)
+  function mapMotivoLabel(text){
+    var t = norm(text);
+    if (!t) return '';
+    if (/(arrepend|nao serv|não serv|mudou de ideia|compra errad|tamanho|size|cor|color)/.test(t))
+      return 'Cliente: arrependimento';
+    if (/(endereco|endereço|address|ausencia|ausência|receptor)/.test(t))
+      return 'Cliente: endereço errado';
+    if (/(defeit|avari|quebrad|danific|faltand|incomplet)/.test(t))
+      return 'Produto com defeito';
+    if (/(transporte|logistic|logistica|shipping damage|avaria no transporte)/.test(t))
+      return 'Avaria no transporte';
+    if (/(pedido incorret|produto errad|item errad|sku incorret|wrong item)/.test(t))
+      return 'Pedido incorreto';
+    return text || '';
+  }
+  function setMotivoFromText(text, opts){
+    opts = opts || {};
+    var sel = $('tipo_reclamacao'); if (!sel) return false;
+    if (!sel.__lockBound){
+      sel.addEventListener('change', function(){ lockMotivo(false); });
+      sel.__lockBound = true;
+    }
+    var label = mapMotivoLabel(text || '');
+    if (!label) return false;
+    var ok = selectMotivoLabel(sel, label);
+    if (ok && opts.lock) lockMotivo(true, '(ML)');
+    return ok;
+  }
   function lockMotivo(lock, hint){
     var sel = $('tipo_reclamacao'); if (!sel) return;
     sel.disabled = !!lock;
@@ -301,7 +303,7 @@
     if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
-    setMotivoFromText(d.tipo_reclamacao || '', { lock:false }); // garante seleção correta do select
+    setMotivoFromText(d.tipo_reclamacao || '', { lock:false });
     lockMotivo(false);
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
@@ -490,14 +492,20 @@
           applyIfEmpty(patch, 'sku', sku);
         }
 
-        // ---- Motivo do claim (novo) ----
-        var motivo = j.reason_name ||
-                     (j.claim && (j.claim.reason_name ||
-                                  (j.claim.reason && (j.claim.reason.name || j.claim.reason.description)))) || null;
+        // ---- Motivo do claim (usa reason_key se vier) ----
+        var reasonKey = j.reason_key || (j.claim && j.claim.reason_key) || null;
+        var motivoTxt = j.reason_name ||
+                        (j.claim && (j.claim.reason_name ||
+                                     (j.claim.reason && (j.claim.reason.name || j.claim.reason.description)))) || null;
 
-        if (motivo) {
-          applyIfEmpty(patch, 'tipo_reclamacao', motivo);
-          setMotivoFromText(motivo, { lock:true }); // auto + trava (ML)
+        if (reasonKey) {
+          // Seleciona pelo mapa oficial
+          setMotivoFromKey(reasonKey, { lock:true });
+          patch.tipo_reclamacao = labelFromReasonKey(reasonKey);
+        } else if (motivoTxt) {
+          // Fallback por texto, com lock
+          applyIfEmpty(patch, 'tipo_reclamacao', motivoTxt);
+          setMotivoFromText(motivoTxt, { lock:true });
         }
 
         // ---- Log sugerido (pré/transporte/recebido) ----
@@ -518,7 +526,7 @@
           if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
           if (patch.sku && $('sku')) $('sku').value = patch.sku;
           if (patch.tipo_reclamacao) {
-            // já fizemos setMotivoFromText acima com lock
+            // já selecionado acima
           }
           current = Object.assign({}, current, patch);
           recalc();
