@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — map de motivo (código → rótulo), lock quando vier do ML, frete & log hint
+// /public/js/devolucao-editar.js — motivo por código/claim (sem enrich) + enrich ML; inclui PDD9944 → "Defeito de produção"
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -72,6 +72,7 @@
   // ===== Normalização de payload =====
   function siteIdToName(siteId){ var map={MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre'}; return map[siteId] || 'Mercado Livre'; }
   function firstNonEmpty(){ for (var i=0;i<arguments.length;i++){ var v=arguments[i]; if(v!==undefined && v!==null && String(v).trim()!=='') return v; } return null; }
+
   function findWarehouseReceivedAt(j){
     try {
       var sh = j.shipments || j.shipping || [];
@@ -86,108 +87,40 @@
     return null;
   }
 
-  function normalize(j){
-    var sellerName =
-      (j.seller && (j.seller.nickname || j.seller.name || j.seller.nick_name)) ||
-      j.seller_nickname || j.sellerNick || j.seller_nick || j.nickname ||
-      j.seller_name || j.store_name || j.shop_name || null;
+  // ---- motivoFromAny: pega motivo de vários lugares (inclui claim/claims[]) ----
+  function motivoFromAny(j){
+    if (!j || typeof j !== 'object') return null;
+    var c0 = Array.isArray(j.claims) && j.claims.length ? j.claims[0] : (j.claim || null);
 
-    var buyerName  =
-      (j.buyer && (
-        (j.buyer.first_name && j.buyer.last_name ? (j.buyer.first_name + ' ' + j.buyer.last_name) : (j.buyer.name || j.buyer.first_name)) ||
-        j.buyer.nickname
-      )) ||
-      (j.shipping && j.shipping.receiver_address && j.shipping.receiver_address.receiver_name) ||
-      j.cliente || j.cliente_nome || j.buyer_name || null;
+    function pick(){
+      for (var i=0;i<arguments.length;i++){
+        var v = arguments[i];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+      }
+      return null;
+    }
 
-    var dataCompra = firstNonEmpty(j.data_compra, j.order_date, j.date_created, j.paid_at, j.created_at);
-    var motivo     = firstNonEmpty(j.tipo_reclamacao, j.reclamacao, j.reason_name, j.reason, j.reason_id, j.motivo, j.motivo_cliente);
-    var logAtual   = firstNonEmpty(j.log_status, j.log, j.current_log, j.log_atual, j.status_log, j.status);
-
-    var lojaNome   = firstNonEmpty(
-      j.loja_nome, j.loja, sellerName, j.store_nickname, j.store_nick, j.seller_nickname, j.nickname,
-      (j.site_id ? siteIdToName(j.site_id) : null)
+    var byText = pick(
+      j.tipo_reclamacao, j.reclamacao, j.motivo, j.motivo_cliente,
+      j.reason_name, (j.reason && j.reason.name), j.reason, j.reason_description
     );
+    if (byText) return byText;
 
-    var recebCdEm  = firstNonEmpty(j.cd_recebido_em, j.recebido_em, j.warehouse_received_at, findWarehouseReceivedAt(j));
-    var recebResp  = firstNonEmpty(j.cd_responsavel, j.warehouse_responsavel, j.recebido_por);
-
-    var totals = j.totals || j.amounts || j.summary || {};
-    var vpFromTotals = firstNonEmpty(totals.product, totals.products, totals.items, totals.item_total, totals.valor_produto, totals.valor_produtos, totals.produto, totals.subtotal_items);
-    var vfFromTotals = firstNonEmpty(totals.freight, totals.frete, totals.shipping, totals.shipping_cost, totals.logistics, totals.logistic_cost);
-
-    var vpRaw = firstNonEmpty(
-      j.valor_produto, j.valor_produtos, j.valor_item, j.produto_valor, j.valor, j.valor_total, j.total_produto,
-      j.product_value, j.item_value, j.price, j.unit_price, j.amount_item, j.item_amount, j.amount, j.subtotal,
-      j.refund_value, j.refund_amount, vpFromTotals
+    var byCode = pick(
+      j.reason_code, j.sub_reason_code, j.substatus, j.reason_id,
+      (j.reason && (j.reason.code || j.reason.id)),
+      c0 && (c0.reason_code || c0.sub_reason_code || c0.substatus || c0.reason_id),
+      (c0 && c0.reason && (c0.reason.code || c0.reason.id))
     );
-    var vfRaw = firstNonEmpty(
-      j.valor_frete, j.frete, j.shipping_value, j.shipping_cost, j.valor_envio, j.valorFrete, j.custo_envio,
-      j.frete_valor, j.logistics_cost, j.logistic_cost, j.shipping_amount, j.amount_shipping, vfFromTotals
+    if (byCode) return byCode;
+
+    var byClaimText = pick(
+      c0 && (c0.reason_name || (c0.reason && (c0.reason.name || c0.reason.description)))
     );
-
-    return {
-      raw: j,
-      id:           firstNonEmpty(j.id, j.return_id, j._id),
-      id_venda:     firstNonEmpty(j.id_venda, j.order_id, j.resource_id, j.mco_order_id),
-      cliente_nome: buyerName,
-      loja_nome:    lojaNome,
-      data_compra:  dataCompra,
-      status:       firstNonEmpty(j.status, j.situacao),
-      sku:          firstNonEmpty(j.sku, j.item_sku, j.item_id),
-      tipo_reclamacao: motivo,
-      nfe_numero:   firstNonEmpty(j.nfe_numero, j.invoice_number),
-      nfe_chave:    firstNonEmpty(j.nfe_chave, j.invoice_key),
-      reclamacao:   firstNonEmpty(j.reclamacao, j.obs, j.observacoes, j.observacao),
-      valor_produto: toNum(vpRaw),
-      valor_frete:   toNum(vfRaw),
-      log_status:    logAtual,
-      cd_recebido_em: recebCdEm,
-      cd_responsavel: recebResp
-    };
+    return byClaimText;
   }
 
-  var current = {};
-
-  function updateSummary(d){
-    var rs=$('resumo-status'), rl=$('resumo-log'), rc=$('resumo-cd'), rp=$('resumo-prod'), rf=$('resumo-frete'), rt=$('resumo-total');
-    if (rs) rs.textContent = (d.status || '—').toLowerCase();
-    if (rl) rl.textContent = (d.log_status || '—').toLowerCase();
-    if (rc) rc.textContent = d.cd_recebido_em ? 'recebido' : 'não recebido';
-    if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
-    if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
-    if (rt) rt.textContent = moneyBRL(calcTotalByRules(d));
-  }
-
-  function capture(){
-    return {
-      id_venda:        $('id_venda') ? $('id_venda').value.trim() : null,
-      cliente_nome:    $('cliente_nome') ? $('cliente_nome').value.trim() : null,
-      loja_nome:       $('loja_nome') ? $('loja_nome').value.trim() : null,
-      data_compra:     $('data_compra') ? $('data_compra').value : null,
-      status:          $('status') ? $('status').value : null,
-      sku:             $('sku') ? $('sku').value.trim() : null,
-      tipo_reclamacao: $('tipo_reclamacao') ? $('tipo_reclamacao').value : null,
-      nfe_numero:      $('nfe_numero') ? $('nfe_numero').value.trim() : null,
-      nfe_chave:       $('nfe_chave') ? $('nfe_chave').value.trim() : null,
-      reclamacao:      $('reclamacao') ? $('reclamacao').value.trim() : null,
-      valor_produto:   toNum($('valor_produto') ? $('valor_produto').value : 0),
-      valor_frete:     toNum($('valor_frete') ? $('valor_frete').value : 0),
-      log_status:      current.log_status || null,
-      cd_recebido_em:  current.cd_recebido_em || null
-    };
-  }
-
-  function recalc(){
-    var d = capture();
-    var eProd=$('ml-prod'), eFrete=$('ml-frete'), eTotal=$('ml-total');
-    if (eProd)  eProd.textContent  = moneyBRL(d.valor_produto);
-    if (eFrete) eFrete.textContent = moneyBRL(d.valor_frete);
-    if (eTotal) eTotal.textContent = moneyBRL(calcTotalByRules(d));
-    updateSummary(Object.assign({}, current, d));
-  }
-
-  // ===== Motivo (select): mapeamento (código/regex) & lock =====
+  // ==== Motivo: utils de mapeamento/lock ====
   function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
   function norm(s){ return stripAcc(String(s||'').toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim()); }
 
@@ -223,19 +156,6 @@
     if (!ok) sel.value = label;
     sel.dispatchEvent(new Event('change'));
     return true;
-  }
-  function setMotivoFromKey(key, opts){
-    opts = opts || {};
-    var sel = $('tipo_reclamacao'); if (!sel) return false;
-    if (!sel.__lockBound){
-      sel.addEventListener('change', function(){ lockMotivo(false); });
-      sel.__lockBound = true;
-    }
-    var label = labelFromReasonKey(key);
-    if (!label) return false;
-    var ok = selectMotivoLabel(sel, label);
-    if (ok && opts.lock) lockMotivo(true, '(ML)');
-    return ok;
   }
   function mapMotivoLabel(text){
     var t = norm(text);
@@ -285,207 +205,152 @@
     }
   }
 
-  // ==== Motivo por CÓDIGO (PDD****) ====
+  // ==== CÓDIGOS → RÓTULOS ====
   function isReasonCode(v){ return /^[A-Z]{2,}\d{3,}$/i.test(String(v||'').trim()); }
-
-  // Adapte livremente (adicione seus códigos conhecidos aqui)
   var CODE_TO_LABEL = {
     'PDD9939': 'Pedido incorreto',
     'PDD9904': 'Produto com defeito',
     'PDD9905': 'Avaria no transporte',
     'PDD9906': 'Cliente: arrependimento',
     'PDD9907': 'Cliente: endereço errado',
-    'PDD9944': 'Defeito de produção' // solicitado
+    'PDD9944': 'Defeito de produção'
   };
   function labelFromCode(code){
     return CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
   }
 
-  // Extrai o melhor rótulo possível do payload do ML (prioridade: código → key → nome), cobrindo claim/claims[]
+  // Extrai rótulo de um payload do ML (código → key → texto)
   function reasonLabelFromMLPayload(j){
     if (!j || typeof j !== 'object') return null;
+    var c0 = Array.isArray(j.claims) && j.claims.length ? j.claims[0] : (j.claim || null);
 
-    function push(arr, v){ if (v !== undefined && v !== null && String(v).trim() !== '') arr.push(v); }
-    var codes = [];
-    // campos diretos
-    push(codes, j.tipo_reclamacao); // pode vir PDD****
-    push(codes, j.reason_code); push(codes, j.reason_id); push(codes, j.substatus); push(codes, j.sub_status); push(codes, j.code);
-    if (j.reason && typeof j.reason === 'object') { push(codes, j.reason.code); push(codes, j.reason.id); }
-
-    // claim único
-    var c = j.claim || null;
-    if (c) {
-      push(codes, c.reason_code); push(codes, c.reason_id); push(codes, c.substatus); push(codes, c.sub_reason_code);
-      if (c.reason && typeof c.reason === 'object') { push(codes, c.reason.code); push(codes, c.reason.id); }
-    }
-
-    // claims[]
-    var cs = Array.isArray(j.claims) ? j.claims : [];
-    if (cs.length) {
-      var c0 = cs[0] || {};
-      push(codes, c0.reason_code); push(codes, c0.reason_id); push(codes, c0.substatus); push(codes, c0.sub_reason_code);
-      if (c0.reason && typeof c0.reason === 'object') { push(codes, c0.reason.code); push(codes, c0.reason.id); }
-    }
+    var codes = [
+      j.tipo_reclamacao, j.reason_code, j.reason_id, j.sub_reason_code, j.substatus,
+      (j.reason && (j.reason.code || j.reason.id)),
+      c0 && (c0.reason_code || c0.reason_id || c0.sub_reason_code || c0.substatus),
+      (c0 && c0.reason && (c0.reason.code || c0.reason.id))
+    ].filter(Boolean);
 
     for (var i=0;i<codes.length;i++){
-      var code = codes[i];
-      if (code && isReasonCode(code)) {
-        var lbl = labelFromCode(code);
-        if (lbl) return lbl;
+      if (isReasonCode(codes[i])) {
+        var lbl = labelFromCode(codes[i]); if (lbl) return lbl;
       }
     }
 
-    // keys
-    var keys = [];
-    push(keys, j.reason_key);
-    if (c) push(keys, c.reason_key);
-    if (cs.length) push(keys, (cs[0] && cs[0].reason_key));
-    for (var k=0;k<keys.length;k++){
-      var key = keys[k];
-      if (key) {
-        var byKey = labelFromReasonKey(key);
-        if (byKey) return byKey;
-      }
+    var key = j.reason_key || (c0 && c0.reason_key);
+    if (key) {
+      var byKey = labelFromReasonKey(key);
+      if (byKey) return byKey;
     }
 
-    // textos
-    var texts = [];
-    push(texts, j.reason_name); push(texts, j.reason_description); push(texts, j.reason);
-    if (j.reason && typeof j.reason === 'object') { push(texts, j.reason.name); push(texts, j.reason.description); }
-    if (c) { push(texts, c.reason_name); if (c.reason){ push(texts, c.reason.name); push(texts, c.reason.description); } }
-    if (cs.length) {
-      var rc = cs[0] || {};
-      push(texts, rc.reason_name);
-      if (rc.reason) { push(texts, rc.reason.name); push(texts, rc.reason.description); }
-    }
-
-    for (var t=0;t<texts.length;t++){
-      var txt = texts[t];
-      if (txt && String(txt).trim() !== '') return mapMotivoLabel(txt) || String(txt);
-    }
+    var txt = j.reason_name || (j.reason && (j.reason.name || j.reason.description)) ||
+              (c0 && (c0.reason_name || (c0.reason && (c0.reason.name || c0.reason.description))));
+    if (txt) return mapMotivoLabel(txt) || txt;
     return null;
   }
 
-  function fill(d){
-    var dvId=$('dv-id'); if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
-    if ($('id_venda'))         $('id_venda').value         = d.id_venda || '';
-    if ($('cliente_nome'))     $('cliente_nome').value     = d.cliente_nome || '';
-    if ($('loja_nome'))        $('loja_nome').value        = d.loja_nome || '';
-    if ($('data_compra'))      $('data_compra').value      = d.data_compra ? String(d.data_compra).slice(0,10) : '';
-    if ($('status'))           $('status').value           = d.status || '';
-    if ($('sku'))              $('sku').value              = d.sku || '';
-    if ($('nfe_numero'))       $('nfe_numero').value       = d.nfe_numero || '';
-    if ($('nfe_chave'))        $('nfe_chave').value        = d.nfe_chave || '';
-    if ($('reclamacao'))       $('reclamacao').value       = d.reclamacao || '';
-    if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
-    if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
+  function normalize(j){
+    var sellerName =
+      (j.seller && (j.seller.nickname || j.seller.name || j.seller.nick_name)) ||
+      j.seller_nickname || j.sellerNick || j.seller_nick || j.nickname ||
+      j.seller_name || j.store_name || j.shop_name || null;
 
-    // Motivo
-    var sel = $('tipo_reclamacao');
-    var locked = false;
-    if (sel) {
-      var mot = d.tipo_reclamacao || '';
-      if (isReasonCode(mot)) {
-        var lbl = labelFromCode(mot);
-        if (lbl) {
-          selectMotivoLabel(sel, lbl);
-          lockMotivo(true, '(ML)');
-          locked = true;
-        } else {
-          sel.value = '';
-          lockMotivo(true, '(aguardando ML)');
-          setAutoHint('Motivo veio como código do ML; convertendo…');
-          locked = true;
-        }
-      } else if (mot) {
-        var ok = setMotivoFromText(mot, { lock:false });
-        if (!ok) { ensureMotivoOption(sel, mot); sel.value = mot; }
-      }
-    }
+    var buyerName  =
+      (j.buyer && (
+        (j.buyer.first_name && j.buyer.last_name ? (j.buyer.first_name + ' ' + j.buyer.last_name) : (j.buyer.name || j.buyer.first_name)) ||
+        j.buyer.nickname
+      )) ||
+      (j.shipping && j.shipping.receiver_address && j.shipping.receiver_address.receiver_name) ||
+      j.cliente || j.cliente_nome || j.buyer_name || null;
 
-    setLogPill(d.log_status || '—');
-    setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
-    if (!locked) lockMotivo(false);
-    updateSummary(d); recalc();
+    var dataCompra = firstNonEmpty(j.data_compra, j.order_date, j.date_created, j.paid_at, j.created_at);
+
+    // >>> motivo robusto
+    var motivo = motivoFromAny(j);
+
+    var logAtual   = firstNonEmpty(j.log_status, j.log, j.current_log, j.log_atual, j.status_log, j.status);
+
+    var lojaNome   = firstNonEmpty(
+      j.loja_nome, j.loja, sellerName, j.store_nickname, j.store_nick, j.seller_nickname, j.nickname,
+      (j.site_id ? siteIdToName(j.site_id) : null)
+    );
+
+    var recebCdEm  = firstNonEmpty(j.cd_recebido_em, j.recebido_em, j.warehouse_received_at, findWarehouseReceivedAt(j));
+    var recebResp  = firstNonEmpty(j.cd_responsavel, j.warehouse_responsavel, j.recebido_por);
+
+    var totals = j.totals || j.amounts || j.summary || {};
+    var vpFromTotals = firstNonEmpty(totals.product, totals.products, totals.items, totals.item_total, totals.valor_produto, totals.valor_produtos, totals.produto, totals.subtotal_items);
+    var vfFromTotals = firstNonEmpty(totals.freight, totals.frete, totals.shipping, totals.shipping_cost, totals.logistics, totals.logistic_cost);
+
+    var vpRaw = firstNonEmpty(
+      j.valor_produto, j.valor_produtos, j.valor_item, j.produto_valor, j.valor, j.valor_total, j.total_produto,
+      j.product_value, j.item_value, j.price, j.unit_price, j.amount_item, j.item_amount, j.amount, j.subtotal,
+      j.refund_value, j.refund_amount, vpFromTotals
+    );
+    var vfRaw = firstNonEmpty(
+      j.valor_frete, j.frete, j.shipping_value, j.shipping_cost, j.valor_envio, j.valorFrete, j.custo_envio,
+      j.frete_valor, j.logistics_cost, j.logistic_cost, j.shipping_amount, j.amount_shipping, vfFromTotals
+    );
+
+    return {
+      raw: j,
+      id:           firstNonEmpty(j.id, j.return_id, j._id),
+      id_venda:     firstNonEmpty(j.id_venda, j.order_id, j.resource_id, j.mco_order_id),
+      cliente_nome: buyerName,
+      loja_nome:    lojaNome,
+      data_compra:  dataCompra,
+      status:       firstNonEmpty(j.status, j.situacao),
+      sku:          firstNonEmpty(j.sku, j.item_sku, j.item_id),
+      tipo_reclamacao: motivo, // <<< já pode vir código ou texto
+      nfe_numero:   firstNonEmpty(j.nfe_numero, j.invoice_number),
+      nfe_chave:    firstNonEmpty(j.nfe_chave, j.invoice_key),
+      reclamacao:   firstNonEmpty(j.reclamacao, j.obs, j.observacoes, j.observacao),
+      valor_produto: toNum(vpRaw),
+      valor_frete:   toNum(vfRaw),
+      log_status:    logAtual,
+      cd_recebido_em: recebCdEm,
+      cd_responsavel: recebResp
+    };
   }
 
-  // Debug opcional (?debug=1)
-  function showDebug(raw, normd){
-    if (!qs.has('debug')) return;
-    var pre = document.createElement('details');
-    pre.open = true; pre.style.margin = '12px 0';
-    pre.innerHTML = '<summary style="cursor:pointer">Debug: payload recebido / normalizado</summary>' +
-      '<pre style="white-space:pre-wrap;font-size:12px;background:#f7f7f8;border:1px solid #e6e6eb;padding:10px;border-radius:8px;overflow:auto;max-height:320px"></pre>';
-    var main = document.querySelector('.page-wrap');
-    if (main) main.insertBefore(pre, main.firstChild);
-    try { pre.querySelector('pre').textContent = JSON.stringify({raw: raw, normalized: normd}, null, 2); } catch(e){}
-  }
-  function normalizeAndSet(j){ var n = normalize(j); current = n; try{ console.debug('[devolucao-editar] raw->norm', j, n);}catch(e){} fill(n); showDebug(j,n); }
+  var current = {};
 
-  // ===== API =====
-  function safeJson(res){ if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status)); if (res.status === 204) return {}; return res.json(); }
-  function reloadCurrent(){
-    if (!returnId) return Promise.resolve();
-    return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
-      .then(safeJson)
-      .then(function (j) { var data = (j && (j.data || j.item || j.return || j)) || j || {}; normalizeAndSet(data); });
+  function updateSummary(d){
+    var rs=$('resumo-status'), rl=$('resumo-log'), rc=$('resumo-cd'), rp=$('resumo-prod'), rf=$('resumo-frete'), rt=$('resumo-total');
+    if (rs) rs.textContent = (d.status || '—').toLowerCase();
+    if (rl) rl.textContent = (d.log_status || '—').toLowerCase();
+    if (rc) rc.textContent = d.cd_recebido_em ? 'recebido' : 'não recebido';
+    if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
+    if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
+    if (rt) rt.textContent = moneyBRL(calcTotalByRules(d));
   }
 
-  function save(){
-    var body = capture();
-    var id = current.id || returnId;
-    if (!id) { toast('ID inválido.', 'error'); return; }
-    fetch('/api/returns/' + encodeURIComponent(id), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify(Object.assign({}, body, { updated_by: 'frontend' }))
-    })
-    .then(function (r) {
-      if(!r.ok) return r.json().catch(function(){}).then(function(e){ throw new Error((e && e.error) || 'Falha ao salvar'); });
-    })
-    .then(function(){ return reloadCurrent(); })
-    .then(function(){ toast('Salvo!', 'success'); return refreshTimeline(id); })
-    .catch(function(e){ toast(e.message || 'Erro ao salvar', 'error'); });
+  function capture(){
+    return {
+      id_venda:        $('id_venda') ? $('id_venda').value.trim() : null,
+      cliente_nome:    $('cliente_nome') ? $('cliente_nome').value.trim() : null,
+      loja_nome:       $('loja_nome') ? $('loja_nome').value.trim() : null,
+      data_compra:     $('data_compra') ? $('data_compra').value : null,
+      status:          $('status') ? $('status').value : null,
+      sku:             $('sku') ? $('sku').value.trim() : null,
+      tipo_reclamacao: $('tipo_reclamacao') ? $('tipo_reclamacao').value : null,
+      nfe_numero:      $('nfe_numero') ? $('nfe_numero').value.trim() : null,
+      nfe_chave:       $('nfe_chave') ? $('nfe_chave').value.trim() : null,
+      reclamacao:      $('reclamacao') ? $('reclamacao').value.trim() : null,
+      valor_produto:   toNum($('valor_produto') ? $('valor_produto').value : 0),
+      valor_frete:     toNum($('valor_frete') ? $('valor_frete').value : 0),
+      log_status:      current.log_status || null,
+      cd_recebido_em:  current.cd_recebido_em || null
+    };
   }
 
-  function runInspect(result, observacao){
-    disableHead(true);
-    var when = new Date().toISOString();
-    var id = current.id || returnId;
-    fetch('/api/returns/' + encodeURIComponent(id) + '/cd/inspect', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'inspect-' + id + '-' + when + '-' + result },
-      body: JSON.stringify({ resultado: result, observacao: observacao || '', updated_by: 'frontend', when: when })
-    })
-    .then(function(r){ if(!r.ok) return r.json().catch(function(){}) .then(function(e){ throw new Error((e && e.error) || 'Falha na inspeção');}); })
-    .then(function(){ return reloadCurrent(); })
-    .then(function(){ toast('Inspeção registrada (' + result + ')!', 'success'); return refreshTimeline(id); })
-    .catch(function(e){ toast(e.message || 'Erro', 'error'); })
-    .then(function(){ disableHead(false); });
-  }
-
-  function openInspectDialog(result){
-    var dlg=$('dlg-inspecao'), title=$('insp-title'), sub=$('insp-sub'), txt=$('insp-text'), btnOk=$('insp-confirm'), btnNo=$('insp-cancel');
-    if (!dlg) return;
-    var isApprove = result === 'aprovado';
-    title.textContent = isApprove ? 'Aprovar inspeção' : 'Reprovar inspeção';
-    sub.textContent   = isApprove ? 'Confirme a aprovação da inspeção. Você pode adicionar uma observação.' :
-                                    'Confirme a reprovação da inspeção. Você pode adicionar uma observação.';
-    if (btnOk) btnOk.className = isApprove ? 'btn btn--success' : 'btn btn--danger';
-    if (txt) txt.value = ''; dlg.showModal();
-
-    function onSubmit(ev){ ev.preventDefault(); var obs=(txt && txt.value ? txt.value.trim() : ''); dlg.close(); runInspect(result, obs); cleanup(); }
-    function onCancel(){ dlg.close(); cleanup(); }
-    function cleanup(){ var form=$('insp-form'); if (form) form.removeEventListener('submit', onSubmit); if (btnNo) btnNo.removeEventListener('click', onCancel); }
-
-    var form=$('insp-form'); if (form) form.addEventListener('submit', onSubmit);
-    if (btnNo) btnNo.addEventListener('click', onCancel);
-    setTimeout(function(){ if (txt) txt.focus(); }, 0);
-  }
-
-  function disableHead(disabled){
-    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar']
-      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
+  function recalc(){
+    var d = capture();
+    var eProd=$('ml-prod'), eFrete=$('ml-frete'), eTotal=$('ml-total');
+    if (eProd)  eProd.textContent  = moneyBRL(d.valor_produto);
+    if (eFrete) eFrete.textContent = moneyBRL(d.valor_frete);
+    if (eTotal) eTotal.textContent = moneyBRL(calcTotalByRules(d));
+    updateSummary(Object.assign({}, current, d));
   }
 
   // ===== ENRIQUECIMENTO (ML) =====
@@ -619,7 +484,7 @@
           recalc();
         }
 
-        // ---- Evento + PATCH (inclui valores p/ não sumirem após reload) ----
+        // ---- Evento + PATCH (inclui valores) ----
         var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
@@ -627,13 +492,7 @@
 
         var persistPatch = Promise.resolve();
         if (Object.keys(patch).length || Object.keys(amountsPatch).length || logHint) {
-          var body = Object.assign(
-            {},
-            patch,
-            amountsPatch,
-            (logHint ? { log_status: current.log_status } : {}),
-            { updated_by: 'frontend-auto-enrich' }
-          );
+          var body = Object.assign({}, patch, amountsPatch, (logHint ? { log_status: current.log_status } : {}), { updated_by: 'frontend-auto-enrich' });
           persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).catch(function(){});
@@ -654,8 +513,9 @@
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      .then(safeJson)
-      .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; }).catch(function(){ return []; });
+      .then(function(res){ if (!res.ok) throw new Error('HTTP '+res.status); return res.json(); })
+      .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; })
+      .catch(function(){ return []; });
   }
   function fmtRel(iso){
     var d = new Date(iso); if (isNaN(d)) return '';
@@ -724,6 +584,10 @@
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
   // ===== Listeners =====
+  function disableHead(disabled){
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar']
+      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
+  }
   ['valor_produto','valor_frete','status','tipo_reclamacao'].forEach(function(id){
     var el=$(id); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc);
   });
@@ -737,17 +601,31 @@
   var btnEnrich=$('btn-enrich'); if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
 
   // ===== Load inicial =====
+  function applyMotivoFromCurrentRawIfEmpty(){
+    var sel = $('tipo_reclamacao'); if (!sel) return;
+    if (sel.value && sel.value.trim() !== '') return; // já tem
+    var lbl = reasonLabelFromMLPayload(current.raw || {}) || current.tipo_reclamacao;
+    if (!lbl) return;
+    if (isReasonCode(lbl)) {
+      var mapped = labelFromCode(lbl);
+      if (mapped) lbl = mapped;
+    }
+    setMotivoFromText(lbl, { lock:true });
+  }
+
   function load(){
     if (!returnId) {
       var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>ID não informado.</b></div>'; return;
     }
     reloadCurrent()
       .then(function(){
-        var needMotivoConvert = isReasonCode(current.tipo_reclamacao);
+        // tenta preencher motivo mesmo SEM enrich (ex.: veio só o código)
+        applyMotivoFromCurrentRawIfEmpty();
+
+        var needMotivoConvert = !!(current.tipo_reclamacao && isReasonCode(current.tipo_reclamacao));
         var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda);
 
         if (needMotivoConvert) {
-          // força enriquecer para traduzir o código em rótulo humano
           return enrichFromML('motivo');
         }
         if (podeML && canEnrichNow() && needsEnrichment(current)) {
