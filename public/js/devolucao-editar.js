@@ -528,28 +528,52 @@
     .then(function(){ disableHead(false); });
   }
 
+  // >>>>>>> CORRIGIDO: suporta #dlg-recebido (rcd-*) e #dlg-receber (rcv-*)
   function openReceiveDialog(){
-    var dlg = $('dlg-receber');
-    if (dlg && dlg.showModal) {
-      var inputNome = $('rcv-name');
-      var inputQuando = $('rcv-when');
-      var btnOk = $('rcv-confirm');
-      var btnNo = $('rcv-cancel');
+    var dlg     = $('dlg-recebido') || $('dlg-receber');
+    if (dlg && (dlg.showModal || dlg.removeAttribute)) {
+      var inputNome   = $('rcd-resp') || $('rcv-name');
+      var inputQuando = $('rcd-when') || $('rcv-when');
+      var btnNo       = $('rcd-cancel') || $('rcv-cancel');
+      var form        = $('rcd-form')   || $('rcv-form');
+
+      // define data/hora local no formato do <input type="datetime-local">
       if (inputNome) inputNome.value = '';
-      if (inputQuando) inputQuando.value = new Date().toISOString().slice(0,16); // local datetime (sem TZ)
-      function submit(ev){ ev && ev.preventDefault(); var nome = (inputNome && inputNome.value || '').trim(); var whenLocal = inputQuando && inputQuando.value; dlg.close(); runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null); cleanup(); }
-      function cancel(){ dlg.close(); cleanup(); }
-      function cleanup(){ var form=$('rcv-form'); if (form) form.removeEventListener('submit', submit); if (btnNo) btnNo.removeEventListener('click', cancel); }
-      var form=$('rcv-form'); if (form) form.addEventListener('submit', submit);
+      if (inputQuando){
+        var tzFix = new Date(Date.now() - new Date().getTimezoneOffset()*60000)
+                      .toISOString().slice(0,16); // yyyy-MM-ddTHH:mm
+        inputQuando.value = tzFix;
+      }
+
+      function submit(ev){
+        ev && ev.preventDefault();
+        var nome = (inputNome && inputNome.value || '').trim();
+        var whenLocal = inputQuando && inputQuando.value;
+        if (dlg.close) dlg.close(); else dlg.setAttribute('hidden','');
+        runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null);
+        cleanup();
+      }
+      function cancel(){
+        if (dlg.close) dlg.close(); else dlg.setAttribute('hidden','');
+        cleanup();
+      }
+      function cleanup(){
+        if (form)  form.removeEventListener('submit', submit);
+        if (btnNo) btnNo.removeEventListener('click', cancel);
+      }
+      if (form)  form.addEventListener('submit', submit);
       if (btnNo) btnNo.addEventListener('click', cancel);
-      dlg.showModal();
+
+      if (dlg.showModal) dlg.showModal(); else dlg.removeAttribute('hidden');
       setTimeout(function(){ inputNome && inputNome.focus(); }, 0);
       return;
     }
-    // Fallback: sem dialog → prompt
+
+    // Fallback: sem <dialog> → prompt()
     var nome = prompt('Quem recebeu no CD? (nome/assinatura)');
     if (nome !== null) runReceive(String(nome).trim());
   }
+  // <<<<<<< CORRIGIDO
 
   // ===== ENRIQUECIMENTO (ML) =====
   var ENRICH_TTL_MS = 10 * 60 * 1000;
