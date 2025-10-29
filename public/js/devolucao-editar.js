@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — auto-map de motivo (select), lock quando vier do ML, frete & log hint
+// /public/js/devolucao-editar.js — map de motivo (código → rótulo), lock quando vier do ML, frete & log hint
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -187,7 +187,7 @@
     updateSummary(Object.assign({}, current, d));
   }
 
-  // ====== Motivo (select) — mapeamento & travamento quando vier do ML ======
+  // ===== Motivo (select): mapeamento (código/regex) & lock =====
   function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
   function norm(s){ return stripAcc(String(s||'').toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim()); }
 
@@ -285,20 +285,42 @@
     }
   }
 
-  // ==== Motivo: detecção de código e mapa local opcional ====
-  function isReasonCode(v){
-    return /^[A-Z]{2,}\d{3,}$/i.test(String(v||'').trim());
-  }
-  // Ajuste livre: adicione/edite os códigos que você conhece
+  // ==== Motivo por CÓDIGO (PDD****) ====
+  function isReasonCode(v){ return /^[A-Z]{2,}\d{3,}$/i.test(String(v||'').trim()); }
+
+  // Adapte livremente (adicione seus códigos conhecidos aqui)
   var CODE_TO_LABEL = {
     'PDD9939': 'Pedido incorreto',
     'PDD9904': 'Produto com defeito',
     'PDD9905': 'Avaria no transporte',
     'PDD9906': 'Cliente: arrependimento',
-    'PDD9907': 'Cliente: endereço errado'
+    'PDD9907': 'Cliente: endereço errado',
+    'PDD9944': 'Defeito de produção' // ← pedido pelo Gustavo
   };
   function labelFromCode(code){
     return CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
+  }
+
+  // Extrai o melhor rótulo possível do payload do ML (prioridade: código → key → nome)
+  function reasonLabelFromMLPayload(j){
+    var code = firstNonEmpty(
+      j.reason_code, j.reason_id,
+      (j.claim && (j.claim.reason_code || j.claim.reason_id || j.claim.sub_reason_code))
+    );
+    if (code && isReasonCode(code)) {
+      var lbl = labelFromCode(code);
+      if (lbl) return lbl;
+    }
+    var key = j.reason_key || (j.claim && j.claim.reason_key);
+    if (key) {
+      var byKey = labelFromReasonKey(key);
+      if (byKey) return byKey;
+    }
+    var txt = j.reason_name ||
+              (j.claim && (j.claim.reason_name ||
+                           (j.claim.reason && (j.claim.reason.name || j.claim.reason.description))));
+    if (txt) return mapMotivoLabel(txt) || txt;
+    return null;
   }
 
   function fill(d){
@@ -317,6 +339,7 @@
 
     // Motivo
     var sel = $('tipo_reclamacao');
+    var locked = false;
     if (sel) {
       var mot = d.tipo_reclamacao || '';
       if (isReasonCode(mot)) {
@@ -324,23 +347,23 @@
         if (lbl) {
           selectMotivoLabel(sel, lbl);
           lockMotivo(true, '(ML)');
+          locked = true;
         } else {
+          // manter travado até enriquecer e traduzir
           sel.value = '';
           lockMotivo(true, '(aguardando ML)');
           setAutoHint('Motivo veio como código do ML; convertendo…');
+          locked = true;
         }
-      } else {
+      } else if (mot) {
         var ok = setMotivoFromText(mot, { lock:false });
-        if (!ok && mot) {
-          ensureMotivoOption(sel, mot);
-          sel.value = mot;
-        }
+        if (!ok) { ensureMotivoOption(sel, mot); sel.value = mot; }
       }
     }
 
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
-    lockMotivo(false);
+    if (!locked) lockMotivo(false);
     updateSummary(d); recalc();
   }
 
@@ -526,22 +549,11 @@
           applyIfEmpty(patch, 'sku', sku);
         }
 
-        // ---- Motivo do claim (sempre persistir rótulo amigável) ----
-        var reasonKey = j.reason_key || (j.claim && j.claim.reason_key) || null;
-        var motivoTxt = j.reason_name ||
-                        (j.claim && (j.claim.reason_name ||
-                                     (j.claim.reason && (j.claim.reason.name || j.claim.reason.description)))) || null;
-
-        var finalLabel = null;
-        if (reasonKey) {
-          finalLabel = labelFromReasonKey(reasonKey);
-          setMotivoFromKey(reasonKey, { lock:true });
-        } else if (motivoTxt) {
-          finalLabel = mapMotivoLabel(motivoTxt) || motivoTxt;
-          setMotivoFromText(finalLabel, { lock:true });
-        }
+        // ---- Motivo (PRIORIDADE: código → key → nome) ----
+        var finalLabel = reasonLabelFromMLPayload(j);
         if (finalLabel) {
-          patch.tipo_reclamacao = finalLabel; // <- sempre grava rótulo
+          setMotivoFromText(finalLabel, { lock:true });
+          patch.tipo_reclamacao = finalLabel; // persistir rótulo amigável
         }
 
         // ---- Log sugerido (pré/transporte/recebido) ----
@@ -565,21 +577,11 @@
           recalc();
         }
 
-        // ---- Evento + PATCH (FIX: inclui valores) ----
+        // ---- Evento + PATCH opcional ----
         var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
-        var amountsPatch = {};
-        if (product !== null) amountsPatch.valor_produto = toNum(product);
-        if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
-
         var persistPatch = Promise.resolve();
-        if (Object.keys(patch).length || Object.keys(amountsPatch).length || logHint) {
-          var body = Object.assign(
-            {},
-            patch,
-            amountsPatch,                                    // <<< fixa sumiço após reload
-            (logHint ? { log_status: current.log_status } : {}),
-            { updated_by: 'frontend-auto-enrich' }
-          );
+        if (Object.keys(patch).length || logHint) {
+          var body = Object.assign({}, patch, (logHint ? { log_status: current.log_status } : {}), { updated_by: 'frontend-auto-enrich' });
           persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).catch(function(){});
@@ -592,55 +594,6 @@
         else toast(e.message || 'Não foi possível obter valores/dados do ML', 'error');
       })
       .then(function(){ setAutoHint(''); disableHead(false); });
-  }
-
-  // ==== Dialog Recebido no CD ====
-  var btnRecebido=$('rq-receber'), dlgR=$('dlg-recebido'), inpResp=$('rcd-resp'), inpWhen=$('rcd-when'), btnSaveR=$('rcd-save'), btnUnset=$('rcd-unset'), rcdCancel=$('rcd-cancel');
-  if (rcdCancel) rcdCancel.addEventListener('click', function(){ if (dlgR) dlgR.close(); });
-  function pad(n){ return String(n).padStart(2,'0'); }
-
-  if (btnRecebido) {
-    btnRecebido.addEventListener('click', function () {
-      var lastResp = localStorage.getItem('cd_responsavel') || '';
-      if (inpResp) inpResp.value = lastResp;
-      var now = new Date();
-      if (inpWhen) inpWhen.value = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + 'T' + pad(now.getHours()) + ':' + pad(now.getMinutes());
-      if (dlgR) dlgR.showModal();
-    });
-  }
-
-  if (btnSaveR) {
-    btnSaveR.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      if (!returnId) return toast('ID da devolução não encontrado.', 'error');
-      var responsavel = (inpResp && inpResp.value ? inpResp.value.trim() : '') || 'cd';
-      localStorage.setItem('cd_responsavel', responsavel);
-      var whenIso = new Date().toISOString();
-      if (inpWhen && inpWhen.value) { var d = new Date(inpWhen.value); if (!isNaN(d)) whenIso = d.toISOString(); }
-      var headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'receive-' + returnId + '-' + Date.now() };
-      fetch('/api/returns/' + encodeURIComponent(returnId) + '/cd/receive', { method: 'PATCH', headers: headers, body: JSON.stringify({ responsavel: responsavel, when: whenIso, updated_by: 'frontend' }) })
-      .then(function(r){ if(!r.ok) return r.json().catch(function(){ return { error:'Falha no PATCH'}; }).then(function(err){ throw new Error(err.error || 'Falha'); }); })
-      .then(function(){ return reloadCurrent(); })
-      .then(function(){ toast('Recebimento no CD atualizado!', 'success'); if (dlgR) dlgR.close(); return refreshTimeline(returnId); })
-      .catch(function(e){ toast(e.message || 'Erro ao registrar recebimento.', 'error'); });
-    });
-  }
-
-  if (btnUnset) {
-    btnUnset.addEventListener('click', function () {
-      if (!returnId) return toast('ID da devolução não encontrado.', 'error');
-      var responsavel = (inpResp && inpResp.value ? inpResp.value.trim() : '') || 'cd';
-      var whenIso = new Date().toISOString();
-      if (inpWhen && inpWhen.value) { var d = new Date(inpWhen.value); if (!isNaN(d)) whenIso = d.toISOString(); }
-      var headers = { 'Content-Type': 'application/json', 'Idempotency-Key': 'unreceive-' + returnId + '-' + Date.now() };
-      fetch('/api/returns/' + encodeURIComponent(returnId) + '/cd/unreceive', {
-        method: 'PATCH', headers: headers, body: JSON.stringify({ responsavel: responsavel, when: whenIso, updated_by: 'frontend' })
-      })
-      .then(function(r){ if(!r.ok) return r.json().catch(function(){ return { error:'Falha no PATCH'}; }).then(function(err){ throw new Error(err.error || 'Falha'); }); })
-      .then(function(){ return reloadCurrent(); })
-      .then(function(){ toast('Marcação de recebido removida.', 'success'); if (dlgR) dlgR.close(); return refreshTimeline(returnId); })
-      .catch(function(e){ toast(e.message || 'Erro ao remover marcação.', 'error'); });
-    });
   }
 
   // ===== TIMELINE =====
@@ -745,7 +698,6 @@
           // força enriquecer para traduzir o código em rótulo humano
           return enrichFromML('motivo');
         }
-
         if (podeML && canEnrichNow() && needsEnrichment(current)) {
           return enrichFromML('auto');
         }
