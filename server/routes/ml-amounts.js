@@ -1,12 +1,13 @@
-// server/routes/ml-amounts.js — busca amounts, motivo (normalizado + key + code), claim via order, e frete fallback
+// server/routes/ml-amounts.js — amounts + motivo (label/key/code) + claim via order + frete fallback
 'use strict';
 
 const { query } = require('../db');
 
+/* ======================= utils básicos ======================= */
 function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : 0; }
 function notBlank(v){ return v !== null && v !== undefined && String(v).trim() !== ''; }
 
-// -- columns helper
+/** Verifica colunas existentes na tabela (evita quebras em bases antigas) */
 async function tableHasColumns(table, cols) {
   const { rows } = await query(
     `SELECT column_name FROM information_schema.columns
@@ -18,7 +19,7 @@ async function tableHasColumns(table, cols) {
   return out;
 }
 
-// tenta achar o nickname no "loja_nome" (ex.: "Mercado Livre · BUSCOU")
+/** tenta achar o nickname no "loja_nome" (ex.: "Mercado Livre · BUSCOU") */
 function guessNickFromLoja(lojaNome) {
   if (!lojaNome) return null;
   const parts = String(lojaNome).split('·');
@@ -26,7 +27,7 @@ function guessNickFromLoja(lojaNome) {
   return nick || null;
 }
 
-// ================== TOKENS (pool dinâmico) ==================
+/* ======================= pool de tokens ======================= */
 async function listDbTokens() {
   try {
     const { rows } = await query(
@@ -81,7 +82,7 @@ async function buildTokenPool(dev) {
   return { pool, guessedNick: nick || null };
 }
 
-// ================== HTTP ML ==================
+/* ======================= HTTP ML ======================= */
 async function mget(token, path) {
   const base = 'https://api.mercadolibre.com';
   const r = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` } });
@@ -102,60 +103,155 @@ async function mgetWithAnyToken(tokens, path, meta, tag) {
     } catch (e) {
       lastErr = e;
       meta.errors.push({ where: `${tag} via ${t.source}`, message: e.message, status: e.status || null, payload: e.payload || null });
-      // segue tentando com o próximo token
+      // tenta próximo token
     }
   }
   if (lastErr) throw lastErr;
   throw new Error('no_token_available');
 }
 
-// ===== Motivo (normalizado e chave canônica) =====
-function normalizeReason(reasonId, reasonName) {
-  const t = String(reasonName || reasonId || '').toLowerCase();
-  if (/tamanho|size/.test(t))       return 'Tamanho incorreto (cliente)';
-  if (/cor|color/.test(t))          return 'Cor errada (cliente)';
-  if (/arrepend|didn.?t like|no me gust|engano|mistake|compra errad|nao serviu|não serviu/.test(t))
-                                     return 'Arrependimento do cliente';
-  if (/defeit|avari|damag|quebrad|faltando|incomplet/.test(t))
-                                     return 'Defeito/avaria no produto';
-  return reasonName || reasonId || null;
+/* ======================= Motivo (server side) ======================= */
+function isReasonCode(v){ return /^[A-Z]{2,}\d{3,}$/i.test(String(v||'').trim()); }
+
+const CODE_TO_LABEL = {
+  PDD9939: 'Pedido incorreto',
+  PDD9904: 'Produto com defeito',
+  PDD9905: 'Avaria no transporte',
+  PDD9906: 'Cliente: arrependimento',
+  PDD9907: 'Cliente: endereço errado',
+  PDD9944: 'Defeito de produção',
+};
+function labelFromCode(code){
+  const k = String(code||'').toUpperCase();
+  return CODE_TO_LABEL[k] || null;
 }
-function normalizeKey(s='') {
-  // remove acentos, caixa baixa
-  try {
-    return String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
-  } catch {
-    return String(s).toLowerCase();
+function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
+function norm(s){ return stripAcc(String(s||'').toLowerCase()); }
+
+function labelFromKey(key){
+  switch(String(key||'').toLowerCase()){
+    // cliente
+    case 'cliente_arrependimento':
+    case 'buyer_remorse':
+    case 'changed_mind':
+    case 'doesnt_fit':
+    case 'size_issue':
+      return 'Cliente: arrependimento';
+    case 'cliente_endereco_errado':
+    case 'wrong_address_buyer':
+    case 'recipient_absent':
+    case 'absent_receiver':
+    case 'didnt_pickup':
+      return 'Cliente: endereço errado';
+    // produto
+    case 'produto_defeito':
+    case 'product_defective':
+    case 'broken':
+    case 'damaged':
+    case 'incomplete':
+    case 'missing_parts':
+    case 'quality_issue':
+      return 'Produto com defeito';
+    // transporte
+    case 'avaria_transporte':
+    case 'damaged_in_transit':
+    case 'shipping_damage':
+    case 'carrier_damage':
+      return 'Avaria no transporte';
+    // pedido errado
+    case 'pedido_incorreto':
+    case 'wrong_item':
+    case 'different_from_publication':
+    case 'not_as_described':
+    case 'mixed_order':
+      return 'Pedido incorreto';
+    default: return null;
   }
 }
-// -> chave canônica para casar com o select do front
-function reasonKeyFromName(name='') {
-  const s = normalizeKey(name);
-  const has = kw => s.includes(kw);
 
-  if (has('arrepend')) return 'cliente_arrependimento';
-  if (has('endereco errado') || has('endereco incorreto') || has('ausencia') || has('destinatario ausente'))
-    return 'cliente_endereco_errado';
-  if (has('defeit') || has('avari') || has('danific') || has('quebrad') || has('faltando') || has('incomplet'))
-    return 'produto_defeito';
-  if (has('transporte')) return 'avaria_transporte';
-  if (has('pedido incorreto') || has('produto errado')) return 'pedido_incorreto';
+function labelFromText(text){
+  const t = norm(text||'');
+  if (!t) return null;
+  // cliente
+  if (/(arrepend|desist|nao serv|não serv|mudou de ideia|tamanho|size|color|cor|didn t like|changed mind|buyer remorse)/.test(t)) return 'Cliente: arrependimento';
+  if (/(endereco|endereço|address|ausenc|receptor|recipient absent|absent receiver|wrong address|didn t pick up|pickup)/.test(t)) return 'Cliente: endereço errado';
+  // produto
+  if (/(defeit|avari|quebrad|danific|faltand|incomplet|missing|broken|damaged|defective|quality)/.test(t)) return 'Produto com defeito';
+  // transporte
+  if (/(transporte|logistic|logistica|shipping damage|carrier damage|in transit)/.test(t)) return 'Avaria no transporte';
+  // pedido errado
+  if (/(pedido incorret|produto errad|item errad|sku incorret|wrong item|different from|not as described|mixed order)/.test(t)) return 'Pedido incorreto';
   return null;
 }
 
-// mapeia status/substatus do claim para um “log” amigável
-function mapClaimToLog(status, substatus) {
-  const s  = String(status   || '').toLowerCase();
-  const ss = String(substatus|| '').toLowerCase();
-  if (/prep|prepar|embaland/.test(ss))                 return 'em_preparacao';
-  if (/ready|etiq|label|pronto/.test(ss))              return 'pronto_envio';
-  if (/transit|transporte|enviado/.test(ss))           return 'em_transporte';
-  if (/delivered|entreg|arrived|recebid/.test(ss))     return 'recebido_cd';
-  if (s === 'closed')                                  return 'fechado';
-  return null;
+/** Extrai melhor rótulo do “root” (aceita claim / claims[0] / reason_* soltos) */
+function deriveReason(root){
+  if (!root || typeof root !== 'object') return { code:null, key:null, text:null, label:null };
+
+  const bag = { codes:[], keys:[], texts:[] };
+  const push = (arr, v) => { if (v!==undefined && v!==null && String(v).trim()!=='') arr.push(v); };
+
+  // Top-level
+  push(bag.codes, root.reason_code || root.reason_id || root.substatus || root.sub_status || root.code || root.tipo_reclamacao);
+  push(bag.keys,  root.reason_key);
+  push(bag.texts, root.reason_name || root.reason_description || root.reason);
+
+  // Nested 'reason'
+  if (root.reason && typeof root.reason === 'object') {
+    push(bag.codes, root.reason.code || root.reason.id);
+    push(bag.keys,  root.reason.key);
+    push(bag.texts, root.reason.name || root.reason.description);
+  }
+
+  // claim / claims[0]
+  const claim = root.claim || root.ml_claim || null;
+  const claims = Array.isArray(root.claims) ? root.claims : [];
+  const c0 = claims[0] || {};
+  const claimBlock = [claim, c0].filter(Boolean);
+  for (const c of claimBlock) {
+    push(bag.codes, c.reason_code || c.reason_id || c.substatus || c.sub_reason_code);
+    push(bag.keys,  c.reason_key || (c.reason && c.reason.key));
+    if (c.reason && typeof c.reason === 'object') {
+      push(bag.codes, c.reason.code || c.reason.id);
+      push(bag.keys,  c.reason.key);
+      push(bag.texts, c.reason.name || c.reason.description);
+    }
+    push(bag.texts, c.reason_name);
+  }
+
+  // return/details/meta
+  if (root.return && typeof root.return === 'object') {
+    push(bag.texts, root.return.reason || root.return.reason_name || root.return.reason_description);
+  }
+  if (root.details && typeof root.details === 'object') {
+    push(bag.keys,  root.details.reason_key);
+    push(bag.texts, root.details.reason || root.details.reason_name);
+  }
+  if (root.meta && typeof root.meta === 'object') {
+    push(bag.texts, root.meta.reason || root.meta.reason_name);
+  }
+
+  // Decide na ordem: código -> key -> texto
+  for (const code of bag.codes) {
+    if (code && isReasonCode(code)) {
+      const lbl = labelFromCode(code);
+      if (lbl) return { code, key:null, text:null, label:lbl };
+    }
+  }
+  for (const key of bag.keys) {
+    if (!key) continue;
+    const lbl = labelFromKey(key);
+    if (lbl) return { code:null, key, text:null, label:lbl };
+  }
+  for (const txt of bag.texts) {
+    if (!txt) continue;
+    const lbl = labelFromText(txt) || String(txt);
+    if (lbl) return { code:null, key:null, text:txt, label:lbl };
+  }
+  return { code:null, key:null, text:null, label:null };
 }
 
-// soma itens do pedido quando o total dos itens não vier
+/* ========== helpers de pedido/frete e claim extras ========== */
 const getOrderItems = (o) => Array.isArray(o?.order_items) ? o.order_items : (Array.isArray(o?.items) ? o.items : []);
 const sumOrderProducts = (o) => {
   let sum = 0;
@@ -167,7 +263,6 @@ const sumOrderProducts = (o) => {
   return sum > 0 ? sum : null;
 };
 
-// ===== helpers extras =====
 function pickFreightFromOrder(order) {
   if (!order) return null;
   const cands = [
@@ -187,19 +282,29 @@ function extractReasonFields(claim) {
   if (!claim) return null;
   const rid   = claim?.reason_id || claim?.reason?.id || null;
   const rname = claim?.reason_name || claim?.reason?.name || claim?.reason?.description || null;
-  const norm  = normalizeReason(rid, rname);
-  const best  = norm || rname || rid || null;
 
-  claim.reason_name_normalized = norm || rname || rid || null;
-  claim.reason_name            = rname || rid || norm || null;
+  claim.reason_name = rname || rid || null;
 
   // prioridade: se vier do ML, usa; senão deriva do texto
-  const providedKey            = claim?.reason_key || (claim?.reason && claim.reason.key) || null;
-  claim.reason_key             = providedKey || reasonKeyFromName(best || '');
+  const providedKey  = claim?.reason_key || (claim?.reason && claim.reason.key) || null;
+  claim.reason_key   = providedKey || null; // (label final será oferecido por reason_label)
 
-  return best;
+  return claim.reason_name || claim.reason_key || claim.reason_id || null;
 }
 
+// mapeia status/substatus do claim para um “log” amigável
+function mapClaimToLog(status, substatus) {
+  const s  = String(status   || '').toLowerCase();
+  const ss = String(substatus|| '').toLowerCase();
+  if (/prep|prepar|embaland/.test(ss))                 return 'em_preparacao';
+  if (/ready|etiq|label|pronto/.test(ss))              return 'pronto_envio';
+  if (/transit|transporte|enviado/.test(ss))           return 'em_transporte';
+  if (/delivered|entreg|arrived|recebid/.test(ss))     return 'recebido_cd';
+  if (s === 'closed')                                  return 'fechado';
+  return null;
+}
+
+/* ======================= rota ======================= */
 module.exports = function registerMlAmounts(app) {
   // GET /api/ml/returns/:id/fetch-amounts[?order_id=...&claim_id=...]
   app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
@@ -285,7 +390,14 @@ module.exports = function registerMlAmounts(app) {
         try {
           meta.steps.push({ op: 'GET /claims/return-cost', claimId });
           const { data } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`, meta, 'return-cost');
-          if (data && data.amount != null) amounts.freight = toNumber(data.amount);
+          const cand = [
+            data?.amount,
+            data?.value,
+            data?.total,
+            data?.charge?.amount,
+            data?.amount?.amount
+          ].map(n => Number(n)).find(n => Number.isFinite(n) && n >= 0);
+          if (Number.isFinite(cand)) amounts.freight = cand;
         } catch (e) {
           meta.errors.push({ where: 'return-cost(final)', message: e.message, status: e.status || null });
         }
@@ -304,6 +416,9 @@ module.exports = function registerMlAmounts(app) {
       // sugestão de log (pré/transporte/recebido)
       const logHint = claim ? mapClaimToLog(claim.status, claim.substatus) : null;
 
+      // ----- Motivo (label + code/key/text) pronto pro front -----
+      const reasonObj = deriveReason({ claim });
+
       return res.json({
         ok: true,
         order_id: notBlank(orderId) ? orderId : null,
@@ -312,9 +427,10 @@ module.exports = function registerMlAmounts(app) {
         order,
         claim,
         // aliases amigáveis para o front:
-        reason_code: (claim && claim.reason_id) || null,                     // ex.: PDD9939
-        reason_name: (claim && (claim.reason_name_normalized || claim.reason_name)) || null,
-        reason_key:  (claim && claim.reason_key) || null,                    // chave canônica para mapear no select
+        reason_label: reasonObj.label || null,                               // <- rótulo humano: "Cliente: arrependimento"
+        reason_code:  (reasonObj.code  ?? claim?.reason_id) || null,         // ex.: PDD9939
+        reason_key:   (reasonObj.key   ?? claim?.reason_key) || null,        // chave canônica (quando houver)
+        reason_text:  (reasonObj.text  ?? claim?.reason_name) || null,       // texto cru (fallback)
         log_status_suggested: logHint,
         meta
       });

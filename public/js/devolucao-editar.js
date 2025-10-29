@@ -350,18 +350,31 @@
     return CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
   }
 
-  // Extrai melhor rótulo do payload ML (código → key → texto) cobrindo claim/claims/return/details/meta
+  // Extrai melhor rótulo do payload ML/servidor (PRIMEIRO usa reason_label do backend)
   function reasonLabelFromMLPayload(root){
     if (!root || typeof root !== 'object') return null;
-    var j = root;
-    function push(arr, v){ if (v !== undefined && v !== null && String(v).trim() !== '') arr.push(v); }
+
+    // 0) Novo: se o backend já mandou reason_label, usa direto
+    if (root.reason_label) return root.reason_label;
+    if (root.claim && root.claim.reason_label) return root.claim.reason_label;
+
+    // 0.1) Se veio a key canônica, tenta mapear
+    if (root.reason_key) {
+      var byKey = labelFromReasonKey(root.reason_key);
+      if (byKey) return byKey;
+    }
+    if (root.claim && root.claim.reason_key) {
+      var byKey2 = labelFromReasonKey(root.claim.reason_key);
+      if (byKey2) return byKey2;
+    }
 
     // 1) Códigos
+    var j = root;
+    function push(arr, v){ if (v !== undefined && v !== null && String(v).trim() !== '') arr.push(v); }
     var codes = [];
     push(codes, j.tipo_reclamacao);
     push(codes, j.reason_code); push(codes, j.reason_id); push(codes, j.substatus); push(codes, j.sub_status); push(codes, j.code);
     if (j.reason && typeof j.reason === 'object') { push(codes, j.reason.code); push(codes, j.reason.id); }
-
     var claim = j.claim || j.ml_claim || null;
     if (claim) {
       push(codes, claim.reason_code); push(codes, claim.reason_id); push(codes, claim.substatus); push(codes, claim.sub_reason_code);
@@ -381,7 +394,7 @@
       }
     }
 
-    // 2) Keys
+    // 2) Keys (fallback)
     var keys = [];
     push(keys, j.reason_key);
     if (claim) push(keys, claim.reason_key);
@@ -390,8 +403,8 @@
     for (var k=0;k<keys.length;k++){
       var key = keys[k];
       if (key) {
-        var byKey = labelFromReasonKey(key);
-        if (byKey) return byKey;
+        var byKey3 = labelFromReasonKey(key);
+        if (byKey3) return byKey3;
       }
     }
 
@@ -528,7 +541,7 @@
     .then(function(){ disableHead(false); });
   }
 
-  // >>>>>>> CORRIGIDO: suporta #dlg-recebido (rcd-*) e #dlg-receber (rcv-*)
+  // >>>>>>> SUPORTE a #dlg-recebido (rcd-*) e #dlg-receber (rcv-*)
   function openReceiveDialog(){
     var dlg     = $('dlg-recebido') || $('dlg-receber');
     if (dlg && (dlg.showModal || dlg.removeAttribute)) {
@@ -537,11 +550,9 @@
       var btnNo       = $('rcd-cancel') || $('rcv-cancel');
       var form        = $('rcd-form')   || $('rcv-form');
 
-      // define data/hora local no formato do <input type="datetime-local">
       if (inputNome) inputNome.value = '';
       if (inputQuando){
-        var tzFix = new Date(Date.now() - new Date().getTimezoneOffset()*60000)
-                      .toISOString().slice(0,16); // yyyy-MM-ddTHH:mm
+        var tzFix = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
         inputQuando.value = tzFix;
       }
 
@@ -569,11 +580,10 @@
       return;
     }
 
-    // Fallback: sem <dialog> → prompt()
     var nome = prompt('Quem recebeu no CD? (nome/assinatura)');
     if (nome !== null) runReceive(String(nome).trim());
   }
-  // <<<<<<< CORRIGIDO
+  // <<<<<<<
 
   // ===== ENRIQUECIMENTO (ML) =====
   var ENRICH_TTL_MS = 10 * 60 * 1000;
@@ -680,11 +690,26 @@
           applyIfEmpty(patch, 'sku', sku);
         }
 
-        // ---- Motivo (PRIORIDADE: código → key → nome) ----
-        var finalLabel = reasonLabelFromMLPayload(j);
+        // ---- Motivo (preferência para campos do backend) ----
+        var finalLabel =
+          j.reason_label ||
+          (j.reason_key ? labelFromReasonKey(j.reason_key) : '') ||
+          (j.reason_code ? labelFromCode(j.reason_code) : '') ||
+          reasonLabelFromMLPayload(j); // heurística final
+
         if (finalLabel) {
           setMotivoFromText(finalLabel, { lock:true });
           patch.tipo_reclamacao = finalLabel; // persistir rótulo amigável
+        } else if (j.claim && (j.claim.reason_key || j.claim.reason_id || j.claim.reason_name)) {
+          // fallback para claim interno, se por algum motivo o topo não veio
+          var lbl2 =
+            (j.claim.reason_key && labelFromReasonKey(j.claim.reason_key)) ||
+            (j.claim.reason_id && labelFromCode(j.claim.reason_id)) ||
+            (j.claim.reason_name && mapMotivoLabel(j.claim.reason_name)) || '';
+          if (lbl2) {
+            setMotivoFromText(lbl2, { lock:true });
+            patch.tipo_reclamacao = lbl2;
+          }
         }
 
         // ---- Log sugerido (pré/transporte/recebido) ----
