@@ -462,9 +462,11 @@
           lockMotivo(true, '(ML)');
           locked = true; setOk = true;
         } else {
-          sel.value = '';
-          lockMotivo(true, '(aguardando ML)');
-          setAutoHint('Motivo veio como código do ML; convertendo…');
+          // HOTFIX: mostre o código PDD**** no select enquanto converte
+          ensureMotivoOption(sel, mot);
+          sel.value = mot;
+          lockMotivo(true, '(ML: código)');
+          setAutoHint('Motivo (código ML) exibido provisoriamente. Convertendo…');
           locked = true;
         }
       } else if (mot) {
