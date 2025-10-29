@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — motivo robusto (código/key/texto), fallback de select (#tipo_reclamacao|#motivo), lock ML, frete & log hint
+// /public/js/devolucao-editar.js — motivo robusto + receber no CD (com fallback), lock ML, frete & log hint
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -11,8 +11,6 @@
         || $('motivo')
         || document.querySelector('#tipo_reclamacao, #motivo, select[name="tipo_reclamacao"], select[name="motivo"]');
   }
-
-  function val(el){ return el ? el.value : null; }
 
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
@@ -169,6 +167,7 @@
   }
 
   function capture(){
+    var selMot = getMotivoSelect();
     return {
       id_venda:        $('id_venda') ? $('id_venda').value.trim() : null,
       cliente_nome:    $('cliente_nome') ? $('cliente_nome').value.trim() : null,
@@ -176,7 +175,7 @@
       data_compra:     $('data_compra') ? $('data_compra').value : null,
       status:          $('status') ? $('status').value : null,
       sku:             $('sku') ? $('sku').value.trim() : null,
-      tipo_reclamacao: (function(){ var s=getMotivoSelect(); return s ? s.value : null; })(),
+      tipo_reclamacao: selMot ? selMot.value : null,
       nfe_numero:      $('nfe_numero') ? $('nfe_numero').value.trim() : null,
       nfe_chave:       $('nfe_chave') ? $('nfe_chave').value.trim() : null,
       reclamacao:      $('reclamacao') ? $('reclamacao').value.trim() : null,
@@ -206,7 +205,6 @@
       case 'cliente_arrependimento':
       case 'buyer_remorse':
       case 'changed_mind':
-      case 'didnt_like':
       case 'doesnt_fit':
       case 'size_issue':
         return 'Cliente: arrependimento';
@@ -356,8 +354,6 @@
   function reasonLabelFromMLPayload(root){
     if (!root || typeof root !== 'object') return null;
     var j = root;
-
-    // Helper para empilhar candidatos
     function push(arr, v){ if (v !== undefined && v !== null && String(v).trim() !== '') arr.push(v); }
 
     // 1) Códigos
@@ -443,6 +439,7 @@
     // Motivo
     var sel = getMotivoSelect();
     var locked = false;
+    var setOk = false;
     if (sel) {
       var mot = d.tipo_reclamacao || '';
       if (isReasonCode(mot)) {
@@ -450,7 +447,7 @@
         if (lbl) {
           selectMotivoLabel(sel, lbl);
           lockMotivo(true, '(ML)');
-          locked = true;
+          locked = true; setOk = true;
         } else {
           sel.value = '';
           lockMotivo(true, '(aguardando ML)');
@@ -458,8 +455,12 @@
           locked = true;
         }
       } else if (mot) {
-        var ok = setMotivoFromText(mot, { lock:false });
-        if (!ok) { ensureMotivoOption(sel, mot); sel.value = mot; }
+        setOk = setMotivoFromText(mot, { lock:false });
+        if (!setOk) { ensureMotivoOption(sel, mot); sel.value = mot; setOk = true; }
+      }
+      // Fallback: tentar pelas observações (reclamacao) se ainda não setou
+      if (!setOk && d.reclamacao) {
+        setOk = setMotivoFromText(d.reclamacao, { lock:false });
       }
     }
 
@@ -509,44 +510,45 @@
     .catch(function(e){ toast(e.message || 'Erro ao salvar', 'error'); });
   }
 
-  function runInspect(result, observacao){
-    disableHead(true);
-    var when = new Date().toISOString();
+  // ===== Recebimento no CD =====
+  function runReceive(responsavel, whenIso){
     var id = current.id || returnId;
-    fetch('/api/returns/' + encodeURIComponent(id) + '/cd/inspect', {
+    if (!id) return;
+    var when = whenIso || new Date().toISOString();
+    disableHead(true);
+    return fetch('/api/returns/' + encodeURIComponent(id) + '/cd/receive', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'inspect-' + id + '-' + when + '-' + result },
-      body: JSON.stringify({ resultado: result, observacao: observacao || '', updated_by: 'frontend', when: when })
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'receive-' + id + '-' + when },
+      body: JSON.stringify({ responsavel: responsavel || '', when: when, updated_by: 'frontend' })
     })
-    .then(function(r){ if(!r.ok) return r.json().catch(function(){}) .then(function(e){ throw new Error((e && e.error) || 'Falha na inspeção');}); })
+    .then(function(r){ if(!r.ok) return r.json().catch(function(){}) .then(function(e){ throw new Error((e && e.error) || 'Falha ao marcar recebido');}); })
     .then(function(){ return reloadCurrent(); })
-    .then(function(){ toast('Inspeção registrada (' + result + ')!', 'success'); return refreshTimeline(id); })
-    .catch(function(e){ toast(e.message || 'Erro', 'error'); })
+    .then(function(){ toast('Recebido no CD registrado!', 'success'); return refreshTimeline(id); })
+    .catch(function(e){ toast(e.message || 'Erro ao marcar recebido', 'error'); })
     .then(function(){ disableHead(false); });
   }
 
-  function openInspectDialog(result){
-    var dlg=$('dlg-inspecao'), title=$('insp-title'), sub=$('insp-sub'), txt=$('insp-text'), btnOk=$('insp-confirm'), btnNo=$('insp-cancel');
-    if (!dlg) return;
-    var isApprove = result === 'aprovado';
-    title.textContent = isApprove ? 'Aprovar inspeção' : 'Reprovar inspeção';
-    sub.textContent   = isApprove ? 'Confirme a aprovação da inspeção. Você pode adicionar uma observação.' :
-                                    'Confirme a reprovação da inspeção. Você pode adicionar uma observação.';
-    if (btnOk) btnOk.className = isApprove ? 'btn btn--success' : 'btn btn--danger';
-    if (txt) txt.value = ''; dlg.showModal();
-
-    function onSubmit(ev){ ev.preventDefault(); var obs=(txt && txt.value ? txt.value.trim() : ''); dlg.close(); runInspect(result, obs); cleanup(); }
-    function onCancel(){ dlg.close(); cleanup(); }
-    function cleanup(){ var form=$('insp-form'); if (form) form.removeEventListener('submit', onSubmit); if (btnNo) btnNo.removeEventListener('click', onCancel); }
-
-    var form=$('insp-form'); if (form) form.addEventListener('submit', onSubmit);
-    if (btnNo) btnNo.addEventListener('click', onCancel);
-    setTimeout(function(){ if (txt) txt.focus(); }, 0);
-  }
-
-  function disableHead(disabled){
-    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar']
-      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
+  function openReceiveDialog(){
+    var dlg = $('dlg-receber');
+    if (dlg && dlg.showModal) {
+      var inputNome = $('rcv-name');
+      var inputQuando = $('rcv-when');
+      var btnOk = $('rcv-confirm');
+      var btnNo = $('rcv-cancel');
+      if (inputNome) inputNome.value = '';
+      if (inputQuando) inputQuando.value = new Date().toISOString().slice(0,16); // local datetime (sem TZ)
+      function submit(ev){ ev && ev.preventDefault(); var nome = (inputNome && inputNome.value || '').trim(); var whenLocal = inputQuando && inputQuando.value; dlg.close(); runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null); cleanup(); }
+      function cancel(){ dlg.close(); cleanup(); }
+      function cleanup(){ var form=$('rcv-form'); if (form) form.removeEventListener('submit', submit); if (btnNo) btnNo.removeEventListener('click', cancel); }
+      var form=$('rcv-form'); if (form) form.addEventListener('submit', submit);
+      if (btnNo) btnNo.addEventListener('click', cancel);
+      dlg.showModal();
+      setTimeout(function(){ inputNome && inputNome.focus(); }, 0);
+      return;
+    }
+    // Fallback: sem dialog → prompt
+    var nome = prompt('Quem recebeu no CD? (nome/assinatura)');
+    if (nome !== null) runReceive(String(nome).trim());
   }
 
   // ===== ENRIQUECIMENTO (ML) =====
@@ -798,8 +800,17 @@
   var rqA=$('rq-aprovar'), rqR=$('rq-reprovar');
   if (rqA) rqA.addEventListener('click', function(){ openInspectDialog('aprovado'); });
   if (rqR) rqR.addEventListener('click', function(){ openInspectDialog('rejeitado'); });
+
+  var rqRec=$('rq-receber'); // botão "Marcar como recebido"
+  if (rqRec) rqRec.addEventListener('click', openReceiveDialog);
+
   var btnSalvar=$('btn-salvar'); if (btnSalvar) btnSalvar.addEventListener('click', save);
   var btnEnrich=$('btn-enrich'); if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
+
+  function disableHead(disabled){
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar']
+      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
+  }
 
   // ===== Load inicial =====
   function load(){
