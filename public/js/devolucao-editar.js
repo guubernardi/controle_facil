@@ -295,31 +295,74 @@
     'PDD9905': 'Avaria no transporte',
     'PDD9906': 'Cliente: arrependimento',
     'PDD9907': 'Cliente: endereço errado',
-    'PDD9944': 'Defeito de produção' // ← pedido pelo Gustavo
+    'PDD9944': 'Defeito de produção' // solicitado
   };
   function labelFromCode(code){
     return CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
   }
 
-  // Extrai o melhor rótulo possível do payload do ML (prioridade: código → key → nome)
+  // Extrai o melhor rótulo possível do payload do ML (prioridade: código → key → nome), cobrindo claim/claims[]
   function reasonLabelFromMLPayload(j){
-    var code = firstNonEmpty(
-      j.reason_code, j.reason_id,
-      (j.claim && (j.claim.reason_code || j.claim.reason_id || j.claim.sub_reason_code))
-    );
-    if (code && isReasonCode(code)) {
-      var lbl = labelFromCode(code);
-      if (lbl) return lbl;
+    if (!j || typeof j !== 'object') return null;
+
+    function push(arr, v){ if (v !== undefined && v !== null && String(v).trim() !== '') arr.push(v); }
+    var codes = [];
+    // campos diretos
+    push(codes, j.tipo_reclamacao); // pode vir PDD****
+    push(codes, j.reason_code); push(codes, j.reason_id); push(codes, j.substatus); push(codes, j.sub_status); push(codes, j.code);
+    if (j.reason && typeof j.reason === 'object') { push(codes, j.reason.code); push(codes, j.reason.id); }
+
+    // claim único
+    var c = j.claim || null;
+    if (c) {
+      push(codes, c.reason_code); push(codes, c.reason_id); push(codes, c.substatus); push(codes, c.sub_reason_code);
+      if (c.reason && typeof c.reason === 'object') { push(codes, c.reason.code); push(codes, c.reason.id); }
     }
-    var key = j.reason_key || (j.claim && j.claim.reason_key);
-    if (key) {
-      var byKey = labelFromReasonKey(key);
-      if (byKey) return byKey;
+
+    // claims[]
+    var cs = Array.isArray(j.claims) ? j.claims : [];
+    if (cs.length) {
+      var c0 = cs[0] || {};
+      push(codes, c0.reason_code); push(codes, c0.reason_id); push(codes, c0.substatus); push(codes, c0.sub_reason_code);
+      if (c0.reason && typeof c0.reason === 'object') { push(codes, c0.reason.code); push(codes, c0.reason.id); }
     }
-    var txt = j.reason_name ||
-              (j.claim && (j.claim.reason_name ||
-                           (j.claim.reason && (j.claim.reason.name || j.claim.reason.description))));
-    if (txt) return mapMotivoLabel(txt) || txt;
+
+    for (var i=0;i<codes.length;i++){
+      var code = codes[i];
+      if (code && isReasonCode(code)) {
+        var lbl = labelFromCode(code);
+        if (lbl) return lbl;
+      }
+    }
+
+    // keys
+    var keys = [];
+    push(keys, j.reason_key);
+    if (c) push(keys, c.reason_key);
+    if (cs.length) push(keys, (cs[0] && cs[0].reason_key));
+    for (var k=0;k<keys.length;k++){
+      var key = keys[k];
+      if (key) {
+        var byKey = labelFromReasonKey(key);
+        if (byKey) return byKey;
+      }
+    }
+
+    // textos
+    var texts = [];
+    push(texts, j.reason_name); push(texts, j.reason_description); push(texts, j.reason);
+    if (j.reason && typeof j.reason === 'object') { push(texts, j.reason.name); push(texts, j.reason.description); }
+    if (c) { push(texts, c.reason_name); if (c.reason){ push(texts, c.reason.name); push(texts, c.reason.description); } }
+    if (cs.length) {
+      var rc = cs[0] || {};
+      push(texts, rc.reason_name);
+      if (rc.reason) { push(texts, rc.reason.name); push(texts, rc.reason.description); }
+    }
+
+    for (var t=0;t<texts.length;t++){
+      var txt = texts[t];
+      if (txt && String(txt).trim() !== '') return mapMotivoLabel(txt) || String(txt);
+    }
     return null;
   }
 
@@ -349,7 +392,6 @@
           lockMotivo(true, '(ML)');
           locked = true;
         } else {
-          // manter travado até enriquecer e traduzir
           sel.value = '';
           lockMotivo(true, '(aguardando ML)');
           setAutoHint('Motivo veio como código do ML; convertendo…');
@@ -577,11 +619,21 @@
           recalc();
         }
 
-        // ---- Evento + PATCH opcional ----
+        // ---- Evento + PATCH (inclui valores p/ não sumirem após reload) ----
         var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
+        var amountsPatch = {};
+        if (product !== null) amountsPatch.valor_produto = toNum(product);
+        if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
+
         var persistPatch = Promise.resolve();
-        if (Object.keys(patch).length || logHint) {
-          var body = Object.assign({}, patch, (logHint ? { log_status: current.log_status } : {}), { updated_by: 'frontend-auto-enrich' });
+        if (Object.keys(patch).length || Object.keys(amountsPatch).length || logHint) {
+          var body = Object.assign(
+            {},
+            patch,
+            amountsPatch,
+            (logHint ? { log_status: current.log_status } : {}),
+            { updated_by: 'frontend-auto-enrich' }
+          );
           persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).catch(function(){});
