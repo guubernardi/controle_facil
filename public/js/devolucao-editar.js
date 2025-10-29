@@ -1,9 +1,18 @@
-// /public/js/devolucao-editar.js — map de motivo (código → rótulo), lock quando vier do ML, frete & log hint
+// /public/js/devolucao-editar.js — motivo robusto (código/key/texto), fallback de select (#tipo_reclamacao|#motivo), lock ML, frete & log hint
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
   var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
+
+  // ---- DOM helpers (fallbacks para diferenças no HTML) ----
+  function getMotivoSelect() {
+    return $('tipo_reclamacao')
+        || $('motivo')
+        || document.querySelector('#tipo_reclamacao, #motivo, select[name="tipo_reclamacao"], select[name="motivo"]');
+  }
+
+  function val(el){ return el ? el.value : null; }
 
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
@@ -167,7 +176,7 @@
       data_compra:     $('data_compra') ? $('data_compra').value : null,
       status:          $('status') ? $('status').value : null,
       sku:             $('sku') ? $('sku').value.trim() : null,
-      tipo_reclamacao: $('tipo_reclamacao') ? $('tipo_reclamacao').value : null,
+      tipo_reclamacao: (function(){ var s=getMotivoSelect(); return s ? s.value : null; })(),
       nfe_numero:      $('nfe_numero') ? $('nfe_numero').value.trim() : null,
       nfe_chave:       $('nfe_chave') ? $('nfe_chave').value.trim() : null,
       reclamacao:      $('reclamacao') ? $('reclamacao').value.trim() : null,
@@ -193,14 +202,51 @@
 
   function labelFromReasonKey(key){
     switch(String(key||'').toLowerCase()){
-      case 'cliente_arrependimento': return 'Cliente: arrependimento';
-      case 'cliente_endereco_errado': return 'Cliente: endereço errado';
-      case 'produto_defeito':        return 'Produto com defeito';
-      case 'avaria_transporte':      return 'Avaria no transporte';
-      case 'pedido_incorreto':       return 'Pedido incorreto';
+      // cliente
+      case 'cliente_arrependimento':
+      case 'buyer_remorse':
+      case 'changed_mind':
+      case 'didnt_like':
+      case 'doesnt_fit':
+      case 'size_issue':
+        return 'Cliente: arrependimento';
+
+      case 'cliente_endereco_errado':
+      case 'wrong_address_buyer':
+      case 'recipient_absent':
+      case 'absent_receiver':
+      case 'didnt_pickup':
+        return 'Cliente: endereço errado';
+
+      // produto
+      case 'produto_defeito':
+      case 'product_defective':
+      case 'broken':
+      case 'damaged':
+      case 'incomplete':
+      case 'missing_parts':
+      case 'quality_issue':
+        return 'Produto com defeito';
+
+      // transporte
+      case 'avaria_transporte':
+      case 'damaged_in_transit':
+      case 'shipping_damage':
+      case 'carrier_damage':
+        return 'Avaria no transporte';
+
+      // pedido errado
+      case 'pedido_incorreto':
+      case 'wrong_item':
+      case 'different_from_publication':
+      case 'not_as_described':
+      case 'mixed_order':
+        return 'Pedido incorreto';
+
       default: return '';
     }
   }
+
   function ensureMotivoOption(selectEl, label){
     if (!selectEl || !label) return;
     var wanted = norm(label);
@@ -226,7 +272,7 @@
   }
   function setMotivoFromKey(key, opts){
     opts = opts || {};
-    var sel = $('tipo_reclamacao'); if (!sel) return false;
+    var sel = getMotivoSelect(); if (!sel) return false;
     if (!sel.__lockBound){
       sel.addEventListener('change', function(){ lockMotivo(false); });
       sel.__lockBound = true;
@@ -237,24 +283,30 @@
     if (ok && opts.lock) lockMotivo(true, '(ML)');
     return ok;
   }
+
+  // Padrões multilíngue (PT/ES/EN) para texto de razão
   function mapMotivoLabel(text){
     var t = norm(text);
     if (!t) return '';
-    if (/(arrepend|nao serv|não serv|mudou de ideia|compra errad|tamanho|size|cor|color)/.test(t))
+    // cliente
+    if (/(arrepend|desisti|me arrependi|nao serv|não serv|mudou de ideia|tamanho|size|color|cor|didn t like|changed mind|buyer remorse)/.test(t))
       return 'Cliente: arrependimento';
-    if (/(endereco|endereço|address|ausencia|ausência|receptor)/.test(t))
+    if (/(endereco|endereço|address|ausencia|ausência|receptor|recipient absent|absent receiver|wrong address|didn t pick up|pickup)/.test(t))
       return 'Cliente: endereço errado';
-    if (/(defeit|avari|quebrad|danific|faltand|incomplet)/.test(t))
+    // produto
+    if (/(defeit|avari|quebrad|danific|faltand|incomplet|missing|broken|damaged|defective|quality)/.test(t))
       return 'Produto com defeito';
-    if (/(transporte|logistic|logistica|shipping damage|avaria no transporte)/.test(t))
+    // transporte
+    if (/(transporte|logistic|logistica|shipping damage|carrier damage|in transit|avaria no transporte)/.test(t))
       return 'Avaria no transporte';
-    if (/(pedido incorret|produto errad|item errad|sku incorret|wrong item)/.test(t))
+    // pedido errado
+    if (/(pedido incorret|produto errad|item errad|sku incorret|wrong item|different from|not as described|mixed order)/.test(t))
       return 'Pedido incorreto';
     return text || '';
   }
   function setMotivoFromText(text, opts){
     opts = opts || {};
-    var sel = $('tipo_reclamacao'); if (!sel) return false;
+    var sel = getMotivoSelect(); if (!sel) return false;
     if (!sel.__lockBound){
       sel.addEventListener('change', function(){ lockMotivo(false); });
       sel.__lockBound = true;
@@ -266,7 +318,7 @@
     return ok;
   }
   function lockMotivo(lock, hint){
-    var sel = $('tipo_reclamacao'); if (!sel) return;
+    var sel = getMotivoSelect(); if (!sel) return;
     sel.disabled = !!lock;
     var id = 'motivo-hint';
     var hintEl = document.getElementById(id);
@@ -288,45 +340,43 @@
   // ==== Motivo por CÓDIGO (PDD****) ====
   function isReasonCode(v){ return /^[A-Z]{2,}\d{3,}$/i.test(String(v||'').trim()); }
 
-  // Adapte livremente (adicione seus códigos conhecidos aqui)
   var CODE_TO_LABEL = {
     'PDD9939': 'Pedido incorreto',
     'PDD9904': 'Produto com defeito',
     'PDD9905': 'Avaria no transporte',
     'PDD9906': 'Cliente: arrependimento',
     'PDD9907': 'Cliente: endereço errado',
-    'PDD9944': 'Defeito de produção' // solicitado
+    'PDD9944': 'Defeito de produção'
   };
   function labelFromCode(code){
     return CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
   }
 
-  // Extrai o melhor rótulo possível do payload do ML (prioridade: código → key → nome), cobrindo claim/claims[]
-  function reasonLabelFromMLPayload(j){
-    if (!j || typeof j !== 'object') return null;
+  // Extrai melhor rótulo do payload ML (código → key → texto) cobrindo claim/claims/return/details/meta
+  function reasonLabelFromMLPayload(root){
+    if (!root || typeof root !== 'object') return null;
+    var j = root;
 
+    // Helper para empilhar candidatos
     function push(arr, v){ if (v !== undefined && v !== null && String(v).trim() !== '') arr.push(v); }
+
+    // 1) Códigos
     var codes = [];
-    // campos diretos
     push(codes, j.tipo_reclamacao);
     push(codes, j.reason_code); push(codes, j.reason_id); push(codes, j.substatus); push(codes, j.sub_status); push(codes, j.code);
     if (j.reason && typeof j.reason === 'object') { push(codes, j.reason.code); push(codes, j.reason.id); }
 
-    // claim único
-    var c = j.claim || null;
-    if (c) {
-      push(codes, c.reason_code); push(codes, c.reason_id); push(codes, c.substatus); push(codes, c.sub_reason_code);
-      if (c.reason && typeof c.reason === 'object') { push(codes, c.reason.code); push(codes, c.reason.id); }
+    var claim = j.claim || j.ml_claim || null;
+    if (claim) {
+      push(codes, claim.reason_code); push(codes, claim.reason_id); push(codes, claim.substatus); push(codes, claim.sub_reason_code);
+      if (claim.reason && typeof claim.reason === 'object') { push(codes, claim.reason.code); push(codes, claim.reason.id); }
     }
-
-    // claims[]
-    var cs = Array.isArray(j.claims) ? j.claims : [];
-    if (cs.length) {
-      var c0 = cs[0] || {};
+    var claims = Array.isArray(j.claims) ? j.claims : [];
+    if (claims.length) {
+      var c0 = claims[0] || {};
       push(codes, c0.reason_code); push(codes, c0.reason_id); push(codes, c0.substatus); push(codes, c0.sub_reason_code);
       if (c0.reason && typeof c0.reason === 'object') { push(codes, c0.reason.code); push(codes, c0.reason.id); }
     }
-
     for (var i=0;i<codes.length;i++){
       var code = codes[i];
       if (code && isReasonCode(code)) {
@@ -335,11 +385,12 @@
       }
     }
 
-    // keys
+    // 2) Keys
     var keys = [];
     push(keys, j.reason_key);
-    if (c) push(keys, c.reason_key);
-    if (cs.length) push(keys, (cs[0] && cs[0].reason_key));
+    if (claim) push(keys, claim.reason_key);
+    if (claims.length) push(keys, (claims[0] && claims[0].reason_key));
+    if (j.details) push(keys, j.details.reason_key);
     for (var k=0;k<keys.length;k++){
       var key = keys[k];
       if (key) {
@@ -348,15 +399,24 @@
       }
     }
 
-    // textos
+    // 3) Textos
     var texts = [];
     push(texts, j.reason_name); push(texts, j.reason_description); push(texts, j.reason);
     if (j.reason && typeof j.reason === 'object') { push(texts, j.reason.name); push(texts, j.reason.description); }
-    if (c) { push(texts, c.reason_name); if (c.reason){ push(texts, c.reason.name); push(texts, c.reason.description); } }
-    if (cs.length) {
-      var rc = cs[0] || {};
+    if (claim) { push(texts, claim.reason_name); if (claim.reason){ push(texts, claim.reason.name); push(texts, claim.reason.description); } }
+    if (claims.length) {
+      var rc = claims[0] || {};
       push(texts, rc.reason_name);
       if (rc.reason) { push(texts, rc.reason.name); push(texts, rc.reason.description); }
+    }
+    if (j.return && typeof j.return === 'object') {
+      push(texts, j.return.reason); push(texts, j.return.reason_name); push(texts, j.return.reason_description);
+    }
+    if (j.details && typeof j.details === 'object') {
+      push(texts, j.details.reason); push(texts, j.details.reason_name);
+    }
+    if (j.meta && typeof j.meta === 'object') {
+      push(texts, j.meta.reason); push(texts, j.meta.reason_name);
     }
 
     for (var t=0;t<texts.length;t++){
@@ -381,7 +441,7 @@
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
 
     // Motivo
-    var sel = $('tipo_reclamacao');
+    var sel = getMotivoSelect();
     var locked = false;
     if (sel) {
       var mot = d.tipo_reclamacao || '';
@@ -536,7 +596,9 @@
           return j;
         });
       })
-      .then(function (j) {
+      .then(function (raw) {
+        var j = raw && (raw.data || raw) || {};
+
         // ---- Valores (produto/frete) ----
         function numFrom(obj, keys){
           if (!obj) return null;
@@ -725,9 +787,11 @@
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
   // ===== Listeners =====
-  ['valor_produto','valor_frete','status','tipo_reclamacao'].forEach(function(id){
+  ['valor_produto','valor_frete','status'].forEach(function(id){
     var el=$(id); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc);
   });
+  (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', recalc); } })();
+
   var btnIA=$('btn-insp-aprova'), btnIR=$('btn-insp-reprova');
   if (btnIA) btnIA.addEventListener('click', function(){ openInspectDialog('aprovado'); });
   if (btnIR) btnIR.addEventListener('click', function(){ openInspectDialog('rejeitado'); });
@@ -748,7 +812,6 @@
         var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda);
 
         if (needMotivoConvert) {
-          // força enriquecer para traduzir o código em rótulo humano
           return enrichFromML('motivo');
         }
         if (podeML && canEnrichNow() && needsEnrichment(current)) {
