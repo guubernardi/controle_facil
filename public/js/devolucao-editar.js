@@ -71,7 +71,8 @@
     var vp = Number(d.valor_produto || 0);
     var vf = Number(d.valor_frete || 0);
     if (st.includes('rej') || st.includes('neg')) return 0;
-    if (mot.includes('arrependimento') || mot.includes('cliente')) return 0; // cliente se arrependeu => sem custo produto/frete
+    // cliente se arrependeu => sem custo produto/frete
+    if (mot.includes('arrependimento') || mot === 'arrependimento_cliente') return 0;
     if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
     return vp + vf;
   }
@@ -216,42 +217,58 @@
     'entrega atrasada': 'entrega_atrasada'
   };
 
-  // reason_key / name ML -> canônico (inclui repentant_buyer)
+  // reason_key / name ML -> canônico (inclui not_working e “different_from_*”)
   var REASONKEY_TO_CANON = {
-    product_defective: 'produto_defeituoso',
-    broken:            'produto_defeituoso',
-    damaged:           'produto_danificado',
-    damaged_in_transit:'produto_danificado',
-    different_from_publication: 'nao_corresponde',
-    not_as_described:          'nao_corresponde',
-    wrong_item:                'nao_corresponde',
+    product_defective:            'produto_defeituoso',
+    not_working:                  'produto_defeituoso',
+    broken:                       'produto_defeituoso',
+    damaged:                      'produto_danificado',
+    damaged_in_transit:           'produto_danificado',
+    different_from_publication:   'nao_corresponde',
+    not_as_described:             'nao_corresponde',
+    wrong_item:                   'nao_corresponde',
+    different_from_listing:       'nao_corresponde',
+    different_from_ad:            'nao_corresponde',
+    different_item:               'nao_corresponde',
 
     // buyer remorse / changed mind
-    buyer_remorse:             'arrependimento_cliente',
-    changed_mind:              'arrependimento_cliente',
-    change_of_mind:            'arrependimento_cliente',
-    buyer_changed_mind:        'arrependimento_cliente',
-    doesnt_fit:                'arrependimento_cliente',
-    size_issue:                'arrependimento_cliente',
-    buyer_doesnt_want:         'arrependimento_cliente',
-    doesnt_want:               'arrependimento_cliente',
-    buyer_no_longer_wants:     'arrependimento_cliente',
-    no_longer_wants:           'arrependimento_cliente',
-    no_longer_needed:          'arrependimento_cliente',
-    not_needed_anymore:        'arrependimento_cliente',
-    not_needed:                'arrependimento_cliente',
-    unwanted:                  'arrependimento_cliente',
-    repentant_buyer:           'arrependimento_cliente',
+    buyer_remorse:                'arrependimento_cliente',
+    changed_mind:                 'arrependimento_cliente',
+    change_of_mind:               'arrependimento_cliente',
+    buyer_changed_mind:           'arrependimento_cliente',
+    doesnt_fit:                   'arrependimento_cliente',
+    size_issue:                   'arrependimento_cliente',
+    buyer_doesnt_want:            'arrependimento_cliente',
+    doesnt_want:                  'arrependimento_cliente',
+    buyer_no_longer_wants:        'arrependimento_cliente',
+    no_longer_wants:              'arrependimento_cliente',
+    no_longer_needed:             'arrependimento_cliente',
+    not_needed_anymore:           'arrependimento_cliente',
+    not_needed:                   'arrependimento_cliente',
+    unwanted:                     'arrependimento_cliente',
+    repentant_buyer:              'arrependimento_cliente',
 
-    not_delivered:             'entrega_atrasada',
-    shipment_delayed:          'entrega_atrasada'
+    not_delivered:                'entrega_atrasada',
+    shipment_delayed:             'entrega_atrasada'
   };
 
-  // reason_id / códigos genéricos -> canônico (corrigido)
+  // alguns backends mandam reason.name textual
+  var REASONNAME_TO_CANON = {
+    repentant_buyer:              'arrependimento_cliente',
+    defective:                    'produto_defeituoso',
+    damaged:                      'produto_danificado',
+    not_working:                  'produto_defeituoso',
+    different_from_publication:   'nao_corresponde',
+    not_as_described:             'nao_corresponde',
+    wrong_item:                   'nao_corresponde',
+    undelivered:                  'entrega_atrasada',
+    not_delivered:                'entrega_atrasada'
+  };
+
+  // reason_id / códigos genéricos -> canônico (sem forçar todo PDD)
   function canonFromCode(code){
     var c = String(code||'').toUpperCase();
     if (!c) return null;
-    // mapping específico que conhecemos de fato
     var SPEC = {
       PDD9939: 'arrependimento_cliente', // repentant_buyer (doc ML)
       PDD9904: 'produto_defeituoso',
@@ -263,35 +280,34 @@
     if (SPEC[c]) return SPEC[c];
     if (c === 'PNR') return 'entrega_atrasada';
     if (c === 'CS')  return 'arrependimento_cliente';
-    // ⚠️ não forçamos mais todo PDD para 'nao_corresponde' — vamos tentar buscar a reason detalhada
     return null;
   }
 
-  // texto livre -> canônico (incluído "não quer mais" / variantes)
+  // texto livre -> canônico (inclui anunciado/publicado/descrição/errado/trocado)
   function canonFromText(text){
     var t = norm(text);
     if (!t) return null;
 
-    // cliente se arrependeu
+    // arrependimento / não quer mais / tamanho não serviu
     if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|não\s*quero\s*mais|nao\s*precisa\s*mais|não\s*precisa\s*mais|no\s*longer\s*wants?|no\s*longer\s*need(?:ed)?|doesn.?t\s*want|dont\s*want|ya\s*no\s*lo\s*quiere(?:\s*mas)?|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant)/.test(t))
       return 'arrependimento_cliente';
     if (/(nao\s*serv|não\s*serv|nao\s*coube|não\s*coube|tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(t))
       return 'arrependimento_cliente';
 
     // defeito / não funciona
-    if (/(defeit|quality|not\s*working|doesn.?t\s*work|broken|mal\s*funciona|quebrad)/.test(t))
+    if (/(defeit|nao\s*funciona|não\s*funciona|not\s*working|doesn.?t\s*work|broken|quebrad|queimad|parad)/.test(t))
       return 'produto_defeituoso';
 
-    // avaria transporte
-    if (/(danific|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
+    // avaria/transporte
+    if (/(danific|avariad|amassad|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
       return 'produto_danificado';
 
-    // não corresponde / item errado / incompleto
-    if (/(diferent|nao\s*correspond|não\s*correspond|not\s*as\s*described|wrong\s*item|incomplete|faltando)/.test(t))
+    // não corresponde / item errado / trocado / anunciado ≠ recebido
+    if (/(diferent[ea]|anunciad|publicad|descri[cç][aã]o|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|trocad|produto\s*errad|item\s*errad|modelo\s*diferent|tamanho\s*diferent|cor\s*diferent|incomplete|faltando)/.test(t))
       return 'nao_corresponde';
 
     // atraso / não entregue
-    if (/(nao\s*entreg|não\s*entreg|delayed|not\s*delivered|shipment\s*delay)/.test(t))
+    if (/(nao\s*entreg|não\s*entreg|delayed|not\s*delivered|undelivered|shipment\s*delay)/.test(t))
       return 'entrega_atrasada';
 
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
@@ -310,8 +326,9 @@
       if (tri.includes('defective') || tri.includes('not_working')) return 'produto_defeituoso';
       if (tri.includes('different') || tri.includes('incomplete')) return 'nao_corresponde';
 
-      // nome oficial
+      // nome/alias oficiais
       if (REASONKEY_TO_CANON[name]) return REASONKEY_TO_CANON[name];
+      if (REASONNAME_TO_CANON[name]) return REASONNAME_TO_CANON[name];
 
       // texto livre (name + detail)
       return canonFromText(name + ' ' + detail);
@@ -337,7 +354,6 @@
       if (idx >= candidates.length) return Promise.resolve(null);
       var url = candidates[idx++]; 
       return fetchJsonOk(url).then(function(info){
-        // alguns proxies retornam {data:{...}}
         var obj = (info && (info.data || info)) || info;
         var canon = canonFromReasonDetails(obj);
         return (canon ? canon : next());
@@ -380,26 +396,33 @@
   // Extrai canônico do payload (reason_key/id/name + fallbacks)
   function reasonCanonFromPayload(root){
     if (!root || typeof root !== 'object') return null;
+
     if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
+    if (root.reason_name && REASONNAME_TO_CANON[root.reason_name]) return REASONNAME_TO_CANON[root.reason_name];
     if (root.reason_name) { var t = canonFromText(root.reason_name); if (t) return t; }
+    if (root.reason_detail) { var td = canonFromText(root.reason_detail); if (td) return td; }
     if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
 
     var cl = root.claim || root.ml_claim || null;
     if (cl){
       if (cl.reason_key && REASONKEY_TO_CANON[cl.reason_key]) return REASONKEY_TO_CANON[cl.reason_key];
+      if (cl.reason_name && REASONNAME_TO_CANON[cl.reason_name]) return REASONNAME_TO_CANON[cl.reason_name];
       if (cl.reason_name) { var t2 = canonFromText(cl.reason_name); if (t2) return t2; }
+      if (cl.reason_detail) { var t2d = canonFromText(cl.reason_detail); if (t2d) return t2d; }
       if (cl.reason_id) { var c2 = canonFromCode(cl.reason_id); if (c2) return c2; }
-      if (cl.reason && (cl.reason.key || cl.reason.id || cl.reason.name)){
+      if (cl.reason && (cl.reason.key || cl.reason.id || cl.reason.name || cl.reason.detail)){
         if (cl.reason.key && REASONKEY_TO_CANON[cl.reason.key]) return REASONKEY_TO_CANON[cl.reason.key];
-        if (cl.reason.name) { var t3 = canonFromText(cl.reason.name); if (t3) return t3; }
-        if (cl.reason.id) { var c3 = canonFromCode(cl.reason.id); if (c3) return c3; }
+        if (cl.reason.name && REASONNAME_TO_CANON[cl.reason.name]) return REASONNAME_TO_CANON[cl.reason.name];
+        if (cl.reason.id)   { var c3 = canonFromCode(cl.reason.id); if (c3) return c3; }
+        if (cl.reason.detail){ var t3 = canonFromText(cl.reason.detail); if (t3) return t3; }
+        if (cl.reason.name) { var t4 = canonFromText(cl.reason.name);   if (t4) return t4; }
       }
     }
 
-    var any = root.reason || root.substatus || root.sub_status || root.code || null;
+    var any = root.reason || root.substatus || root.sub_status || root.code || root.detail || null;
     if (any){
       var c4 = canonFromCode(any); if (c4) return c4;
-      var t4 = canonFromText(any); if (t4) return t4;
+      var t5 = canonFromText(any); if (t5) return t5;
     }
     return null;
   }
@@ -459,7 +482,11 @@
     var amounts = payload && payload.amounts;
     var retCost = payload && payload.return_cost;
 
-    if ($('ml-order-display')) $('ml-order-display').textContent = (order && (order.id || order.order_id)) || $('order_id')?.value || '—';
+    var orderDisplay = $('ml-order-display');
+    if (orderDisplay) {
+      var ordId = (order && (order.id || order.order_id)) || (function(){ var x=$('order_id'); return x ? x.value : null; })();
+      orderDisplay.textContent = ordId || '—';
+    }
     if ($('ml-nick-display')) {
       var nick = (order && order.seller && (order.seller.nickname || order.seller.nick_name)) || null;
       $('ml-nick-display').textContent = nick ? ('Mercado Livre · ' + nick) : (current.loja_nome || '—');
@@ -481,7 +508,7 @@
     if ($('ml-product-sum')) $('ml-product-sum').textContent = prodSum != null ? moneyBRL(prodSum) : moneyBRL(current.valor_produto || 0);
     if ($('ml-freight'))     $('ml-freight').textContent     = freight != null ? moneyBRL(freight) : moneyBRL(current.valor_frete || 0);
 
-    var claimId = (payload && payload.sources && payload.sources.claim_id) || ($('ml_claim_id') && $('ml_claim_id').value) || null;
+    var claimId = (payload && payload.sources && payload.sources.claim_id) || (function(){ var x=$('ml_claim_id'); return x ? x.value : null; })();
     var a = $('claim-open-link');
     if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
   }
@@ -542,7 +569,7 @@
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
     related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
 
-    // Se houver reason_id e ainda não conseguimos classificar, busca /reasons/:id
+    // Preferências: payload direto → código → lookup detalhado
     var prefer =
       reasonCanonFromPayload({ claim: claim }) ||
       canonFromCode(claim.reason_id);
@@ -554,7 +581,6 @@
       if (rid) {
         fetchReasonCanonById(rid).then(function(canon){
           if (canon && setMotivoCanon(canon, true)) {
-            // salva canônico
             var id = current.id || returnId;
             if (id) {
               fetch('/api/returns/' + encodeURIComponent(id), {
