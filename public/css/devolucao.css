@@ -1,5 +1,5 @@
 /* ===========================
-   Variáveis CSS - Inspirado no Mercado Livre
+   Design System - Mercado Livre Inspired
 =========================== */
 :root {
   /* Cores Principais - Paleta Azul Profissional */
@@ -9,10 +9,7 @@
   --card: hsl(0, 0%, 100%);
   --card-foreground: hsl(0, 0%, 13%);
 
-  --popover: hsl(0, 0%, 100%);
-  --popover-foreground: hsl(0, 0%, 13%);
-
-  /* Azul Mercado Livre adaptado */
+  /* Azul Mercado Livre */
   --primary: hsl(214, 100%, 50%);
   --primary-hover: hsl(214, 100%, 45%);
   --primary-foreground: hsl(0, 0%, 100%);
@@ -34,21 +31,22 @@
   --destructive-hover: hsl(0, 72%, 46%);
   --destructive-foreground: hsl(0, 0%, 100%);
 
-  /* Bordas e inputs - mais sutis */
+  /* Bordas e inputs */
   --border: hsl(0, 0%, 90%);
-  --input: hsl(0, 0%, 90%);
+  --input-border: hsl(0, 0%, 90%);
   --ring: hsl(214, 100%, 50%);
 
   --radius: 0.5rem;
 
-  /* Sombras sutis estilo ML */
+  /* Sombras sutis */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 
-  /* Transições suaves */
+  /* Transições */
   --transition: all 0.2s ease;
+  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ===========================
@@ -61,7 +59,7 @@
 }
 
 body {
-  font-family: "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background-color: var(--background);
   color: var(--foreground);
   line-height: 1.5;
@@ -70,7 +68,7 @@ body {
 }
 
 /* ===========================
-   Topbar - Estilo ML
+   Topbar
 =========================== */
 .topbar-mini {
   position: sticky;
@@ -98,6 +96,7 @@ body {
   font-weight: 500;
   font-size: 0.875rem;
   transition: var(--transition);
+  cursor: pointer;
 }
 
 .topbar-mini .voltar:hover {
@@ -110,10 +109,10 @@ body {
 }
 
 /* ===========================
-   Layout - Mais espaçoso
+   Layout
 =========================== */
 .page-wrap {
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 1.5rem;
 }
@@ -124,47 +123,74 @@ body {
   justify-content: space-between;
   margin-bottom: 1.5rem;
   gap: 1.5rem;
+  flex-wrap: wrap;
 }
 
 .title {
   font-weight: 400;
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   color: var(--foreground);
   letter-spacing: -0.01em;
   line-height: 1.3;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .hint {
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   color: var(--muted-foreground);
   line-height: 1.5;
   margin-top: 0.5rem;
 }
 
-.hint b {
+.hint strong {
   color: var(--foreground);
+  font-weight: 500;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  background: var(--muted);
+  font-size: 0.875rem;
+  font-family: ui-monospace, monospace;
+  border: 1px solid var(--border);
   font-weight: 500;
 }
 
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 500px), 1fr));
+  gap: 1.5rem;
 }
 
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ===========================
+   Actions
+=========================== */
 .actions {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .actions-split {
   flex: 1 1 auto;
+  min-width: 1rem;
 }
 
 /* ===========================
-   Cards - Estilo ML limpo
+   Cards
 =========================== */
 .card {
   background: var(--card);
@@ -172,78 +198,104 @@ body {
   box-shadow: var(--shadow-card);
   padding: 1.5rem;
   border: 1px solid var(--border);
+  transition: var(--transition);
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md);
 }
 
 .card h2 {
-  margin: 0 0 1.25rem;
+  margin: 0 0 1.5rem;
   font-size: 1.125rem;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--foreground);
 }
 
 /* ===========================
-   Form rows - Layout limpo
+   Form Rows
 =========================== */
 .row {
-  display: grid;
-  grid-template-columns: 120px 1fr;
-  gap: 0.75rem;
-  align-items: start;
-  margin: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
 }
 
 .row label {
   font-size: 0.875rem;
-  color: var(--muted-foreground);
-  font-weight: 400;
-  padding-top: 0.625rem;
-}
-
-.row input[type="text"],
-.row input[type="number"],
-.row input[type="date"],
-.row input[type="datetime-local"],
-.row select,
-.row textarea {
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  font-size: 0.875rem;
   color: var(--foreground);
-  font-family: inherit;
-  transition: var(--transition);
+  font-weight: 500;
 }
 
-.row input:hover,
-.row select:hover,
-.row textarea:hover {
-  border-color: hsl(0, 0%, 70%);
-}
-
-.row input:focus,
-.row select:focus,
-.row textarea:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px hsla(214, 100%, 50%, 0.1);
-}
-
-.row textarea {
-  min-height: 80px;
-  resize: vertical;
-  line-height: 1.5;
-}
-
-.two {
+.row-group {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+@media (min-width: 640px) {
+  .row-group {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 /* ===========================
-   Buttons - Estilo ML
+   Inputs & Selects
+=========================== */
+input[type="text"],
+input[type="date"],
+input[type="datetime-local"],
+select,
+textarea {
+  width: 100%;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  font-family: inherit;
+  transition: var(--transition);
+  outline: none;
+}
+
+input[type="text"]:focus,
+input[type="date"]:focus,
+input[type="datetime-local"]:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px hsla(214, 100%, 50%, 0.1);
+}
+
+input[type="text"]:disabled,
+input[type="date"]:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.font-mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.875rem;
+}
+
+.font-semibold {
+  font-weight: 600;
+}
+
+/* ===========================
+   Buttons
 =========================== */
 .btn {
   display: inline-flex;
@@ -251,15 +303,14 @@ body {
   justify-content: center;
   gap: 0.5rem;
   padding: 0.625rem 1rem;
+  border: none;
   border-radius: var(--radius);
   font-size: 0.875rem;
   font-weight: 500;
-  font-family: inherit;
   cursor: pointer;
   transition: var(--transition);
-  border: 1px solid transparent;
-  text-decoration: none;
   white-space: nowrap;
+  font-family: inherit;
 }
 
 .btn:disabled {
@@ -270,25 +321,10 @@ body {
 .btn__icon {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
 }
 
-.btn:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-/* Tamanhos */
-.btn--sm {
-  padding: 0.5rem 0.875rem;
-  font-size: 0.8125rem;
-}
-
-.btn--lg {
-  padding: 0.75rem 1.25rem;
-  font-size: 0.9375rem;
-}
-
-/* Variantes */
+/* Button Variants */
 .btn--primary {
   background: var(--primary);
   color: var(--primary-foreground);
@@ -316,414 +352,199 @@ body {
   background: var(--destructive-hover);
 }
 
-.btn--neutral {
-  background: var(--muted);
+.btn--ghost {
+  background: transparent;
   color: var(--foreground);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
 }
 
-.btn--neutral:hover:not(:disabled) {
-  background: hsl(0, 0%, 93%);
+.btn--ghost:hover:not(:disabled) {
+  background: var(--muted);
 }
 
 .btn--outline {
   background: transparent;
-  border: 1px solid var(--border);
   color: var(--foreground);
+  border: 1px solid var(--border);
 }
 
 .btn--outline:hover:not(:disabled) {
   background: var(--muted);
 }
 
-.btn--ghost {
-  background: transparent;
-  color: var(--muted-foreground);
+/* Button Sizes */
+.btn--sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
 }
 
-.btn--ghost:hover:not(:disabled) {
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.btn--arrow {
-  background: transparent;
-  color: var(--primary);
+.btn--lg {
+  padding: 0.75rem 1.25rem;
+  font-size: 0.9375rem;
   border: 1px solid var(--border);
-  justify-content: space-between;
-  width: 100%;
 }
 
-.btn--arrow:hover:not(:disabled) {
-  background: var(--muted);
+.btn--lg:hover:not(:disabled) {
+  background-color: var(--foreground);
+  color: white;
 }
 
-/* ===========================
-   Money lines - Estilo ML
-=========================== */
-.money-line {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--border);
-  margin: 0;
-}
-
-.money-line:last-of-type {
-  border-bottom: none;
-}
-
-.money-line span {
-  font-size: 0.875rem;
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
-.money-line b {
-  font-size: 0.875rem;
-  color: var(--foreground);
-  font-weight: 500;
-}
-
-.money-line.total {
-  padding-top: 1rem;
-  margin-top: 0.5rem;
-  border-top: 1px solid var(--border);
-  border-bottom: none;
-}
-
-.money-line.total span {
-  color: var(--foreground);
-  font-weight: 500;
-  font-size: 1rem;
-}
-
-.money-line.total b {
-  color: var(--foreground);
-  font-size: 1.5rem;
-  font-weight: 400;
-}
 
 /* ===========================
-   Pills - Estilo ML
+   Pills (Status Badges)
 =========================== */
 .pill {
-  display: inline-block;
-  padding: 0.375rem 0.75rem;
-  border-radius: 1rem;
-  font-size: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
   font-weight: 500;
-  text-transform: capitalize;
-  letter-spacing: 0;
+  border: 1px solid;
+  white-space: nowrap;
 }
 
 .pill.-pendente {
   background: hsl(38, 92%, 95%);
-  color: hsl(38, 92%, 35%);
+  color: var(--accent);
+  border-color: hsl(38, 92%, 80%);
 }
 
 .pill.-aprovado {
   background: hsl(142, 71%, 95%);
-  color: hsl(142, 71%, 30%);
+  color: var(--secondary);
+  border-color: hsl(142, 71%, 75%);
 }
 
 .pill.-rejeitado {
   background: hsl(0, 72%, 95%);
-  color: hsl(0, 72%, 40%);
+  color: var(--destructive);
+  border-color: hsl(0, 72%, 80%);
 }
 
 .pill.-neutro {
   background: var(--muted);
   color: var(--muted-foreground);
+  border-color: var(--border);
 }
 
 /* ===========================
-   Timeline - Estilo ML
+   Status Box
 =========================== */
-.timeline {
-  position: relative;
-  margin-top: 1rem;
-  padding-left: 2rem;
-}
-
-.timeline::before {
-  content: "";
-  position: absolute;
-  left: 0.5rem;
-  top: 0.5rem;
-  bottom: 0.5rem;
-  width: 2px;
-  background: var(--border);
-}
-
-.tl-item {
-  position: relative;
-  margin: 0 0 1.5rem 0;
-  padding-left: 1rem;
-}
-
-.tl-dot {
-  position: absolute;
-  left: -0.25rem;
-  top: 0.375rem;
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 50%;
-  background: var(--primary);
-  border: 2px solid var(--card);
-  box-shadow: 0 0 0 2px var(--border);
-}
-
-.tl-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.25rem;
-}
-
-.tl-title {
-  font-weight: 500;
-  color: var(--foreground);
-  font-size: 0.875rem;
-}
-
-.tl-time {
-  font-size: 0.75rem;
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
-.tl-msg {
-  margin: 0.25rem 0;
-  color: var(--muted-foreground);
-  line-height: 1.5;
-  font-size: 0.8125rem;
-}
-
-.tl-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-}
-
-.tl-badge {
-  font-size: 0.6875rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
-.timeline-loading,
-.timeline-empty {
-  margin: 1rem 0;
-  color: var(--muted-foreground);
-  text-align: center;
-  font-size: 0.875rem;
-  padding: 2rem 0;
-}
-
-.tl-item.-status .tl-dot {
-  background: var(--primary);
-}
-
-.tl-item.-note .tl-dot {
-  background: hsl(280, 67%, 53%);
-}
-
-.tl-item.-warn .tl-dot {
-  background: var(--accent);
-}
-
-.tl-item.-error .tl-dot {
-  background: var(--destructive);
-}
-
-/* ===========================
-   Resumo card
-=========================== */
-.resumo-card {
-  position: sticky;
-  top: 88px;
-  align-self: start;
-}
-
-.resumo-line {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--border);
-  margin: 0;
-}
-
-.resumo-line:last-of-type {
-  border-bottom: none;
-}
-
-.resumo-line span {
-  color: var(--muted-foreground);
-  font-weight: 400;
-  font-size: 0.875rem;
-}
-
-.resumo-line b {
-  color: var(--foreground);
-  font-weight: 500;
-  font-size: 0.875rem;
-}
-
-.resumo-line.total {
-  padding-top: 1rem;
-  margin-top: 0.5rem;
-  border-top: 1px solid var(--border);
-  border-bottom: none;
-}
-
-.resumo-line.total span {
-  color: var(--foreground);
-  font-weight: 500;
-  font-size: 1rem;
-}
-
-.resumo-line.total b {
-  color: var(--foreground);
-  font-size: 1.5rem;
-  font-weight: 400;
-}
-
-.resumo-sep {
-  border: 0;
-  border-top: 1px solid var(--border);
-  margin: 1rem 0;
-}
-
-.resumo-quick {
+.status-box {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: hsl(0, 0%, 98%);
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 1rem;
+  gap: 1rem;
 }
 
-.kbd {
-  font-family: ui-monospace, monospace;
-  font-size: 0.8125rem;
-  background: var(--muted);
-  border: 1px solid var(--border);
-  padding: 0.125rem 0.5rem;
-  border-radius: 0.25rem;
-  color: var(--muted-foreground);
+.status-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.status-label {
+  font-size: 0.875rem;
   font-weight: 500;
+  color: var(--foreground);
 }
 
-.cd-extra {
-  margin-top: 0.5rem;
+.cd-details {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   font-size: 0.8125rem;
   color: var(--muted-foreground);
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.cd-sep {
+  color: var(--muted-foreground);
+}
+
+.cd-text {
+  font-size: 0.8125rem;
 }
 
 /* ===========================
    Dialogs
 =========================== */
 dialog {
-  border: 0;
+  border: none;
   border-radius: var(--radius);
-  padding: 0;
-  max-width: 500px;
-  width: 90%;
+  padding: 1.5rem;
   box-shadow: var(--shadow-lg);
+  max-width: 500px;
+  width: calc(100vw - 2rem);
+  background: var(--card);
 }
 
 dialog::backdrop {
   background: rgba(0, 0, 0, 0.5);
-}
-
-dialog form {
-  padding: 1.5rem;
+  backdrop-filter: blur(4px);
 }
 
 dialog h3 {
   margin: 0 0 0.5rem;
   font-size: 1.25rem;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--foreground);
 }
 
-.dialog-subtitle {
-  margin: 0 0 1.25rem;
-  color: var(--muted-foreground);
+.dialog-desc {
   font-size: 0.875rem;
+  color: var(--muted-foreground);
+  margin-bottom: 1.5rem;
+}
+
+.dialog-subtitle {
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  margin-bottom: 1rem;
+}
+
+.dialog-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  color: var(--foreground);
 }
 
 .dialog-grid {
-  display: grid;
-  grid-template-columns: 120px 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
-  align-items: center;
   margin-bottom: 1.5rem;
 }
 
 .dialog-grid label {
-  color: var(--muted-foreground);
   font-size: 0.875rem;
-  font-weight: 400;
-}
-
-.dialog-grid input {
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 0.875rem;
-  font-family: inherit;
-  transition: var(--transition);
-}
-
-.dialog-grid input:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px hsla(214, 100%, 50%, 0.1);
-}
-
-.dialog-label {
-  color: var(--muted-foreground);
-  font-size: 0.875rem;
-  font-weight: 400;
-  display: block;
-  margin-bottom: 0.5rem;
-}
-
-dialog textarea {
-  width: 100%;
-  padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 0.875rem;
-  line-height: 1.5;
-  resize: vertical;
-  font-family: inherit;
-  transition: var(--transition);
-}
-
-dialog textarea:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px hsla(214, 100%, 50%, 0.1);
+  font-weight: 500;
+  color: var(--foreground);
 }
 
 .dialog-actions {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 0.75rem;
   margin-top: 1.5rem;
+  flex-wrap: wrap;
 }
 
 .dialog-actions-right {
   display: flex;
   gap: 0.5rem;
+  margin-left: auto;
 }
 
 .dialog-actions-simple {
@@ -734,15 +555,16 @@ dialog textarea:focus {
 }
 
 .dialog-hint {
-  margin: 1rem 0 0;
+  font-size: 0.75rem;
   color: var(--muted-foreground);
-  font-size: 0.8125rem;
-  line-height: 1.5;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
 }
 
 .dialog-hint b {
+  font-weight: 600;
   color: var(--foreground);
-  font-weight: 500;
 }
 
 /* ===========================
@@ -750,110 +572,100 @@ dialog textarea:focus {
 =========================== */
 .toast {
   position: fixed;
-  bottom: 1.5rem;
-  right: 1.5rem;
-  padding: 0.875rem 1.25rem;
+  bottom: 2rem;
+  right: 2rem;
+  padding: 1rem 1.5rem;
   border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
   font-size: 0.875rem;
   font-weight: 500;
-  box-shadow: var(--shadow-lg);
+  transform: translateY(calc(100% + 2rem));
   opacity: 0;
-  transform: translateY(10px);
-  transition: var(--transition);
-  pointer-events: none;
-  z-index: 1000;
+  transition: var(--transition-smooth);
+  z-index: 100;
   max-width: 400px;
+  border: 1px solid;
 }
 
 .toast.show {
-  opacity: 1;
   transform: translateY(0);
-  pointer-events: auto;
+  opacity: 1;
 }
 
 .toast.info {
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--card);
+  color: var(--foreground);
+  border-color: var(--border);
 }
 
 .toast.success {
-  background: var(--secondary);
-  color: var(--secondary-foreground);
+  background: hsl(142, 71%, 95%);
+  color: var(--secondary);
+  border-color: hsl(142, 71%, 75%);
 }
 
 .toast.error {
-  background: var(--destructive);
-  color: var(--destructive-foreground);
+  background: hsl(0, 72%, 95%);
+  color: var(--destructive);
+  border-color: hsl(0, 72%, 80%);
 }
 
 .toast.warning {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: hsl(38, 92%, 95%);
+  color: var(--accent);
+  border-color: hsl(38, 92%, 80%);
 }
 
 /* ===========================
-   Responsivo
+   Responsive
 =========================== */
-@media (min-width: 1024px) {
-  .grid {
-    grid-template-columns: 1.5fr 1fr;
-  }
-}
-
-@media (max-width: 840px) {
-  .grid {
-    grid-template-columns: 1fr;
-  }
-
-  .row {
-    grid-template-columns: 1fr;
-  }
-
+@media (max-width: 768px) {
   .page-head {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
   }
 
   .actions {
     width: 100%;
   }
 
-  .two {
-    grid-template-columns: 1fr;
+  .actions-split {
+    display: none;
   }
 
-  .resumo-card {
-    position: relative;
-    top: auto;
+  .btn span {
+    display: none;
+  }
+
+  .btn--lg span {
+    display: inline;
+  }
+
+  .title {
+    font-size: 1.5rem;
   }
 }
 
 @media (max-width: 640px) {
-  .topbar-mini {
-    padding: 0.625rem 1rem;
-  }
-
   .page-wrap {
     padding: 1rem;
   }
 
-  .title {
-    font-size: 1.25rem;
+  .topbar-mini {
+    padding: 0.5rem 1rem;
   }
 
   .card {
-    padding: 1.25rem;
+    padding: 1rem;
   }
 
-  .dialog-grid {
-    grid-template-columns: 1fr;
+  dialog {
+    padding: 1rem;
   }
 
-  .dialog-actions {
-    flex-direction: column;
-  }
-
-  .btn {
-    width: 100%;
+  .toast {
+    right: 1rem;
+    left: 1rem;
+    bottom: 1rem;
   }
 }

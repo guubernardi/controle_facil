@@ -11,48 +11,41 @@
   <meta property="og:description" content="Gerencie todas as devoluções com eficiência e praticidade"/>
   <meta property="og:type" content="website"/>
 
-  <link rel="icon" href="assets/img/logo_rf.png" type="image/png"/>
+  <!-- Adicionando CSS da sidebar antes do CSS principal -->
   <link rel="stylesheet" href="css/navigation.css">
   <link rel="stylesheet" href="css/index.css">
-
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet"/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 </head>
 
 <body class="index-page" data-page="devolucoes">
-  <!-- PAGE LOADER (compatível com central) -->
-  <div id="pageLoaderOverlay" class="page-loader-overlay" aria-hidden="true" style="display:none;">
-    <div class="page-loader-spinner" role="status" aria-live="polite" aria-label="Carregando">
-      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
-    </div>
-  </div>
-
-  <!-- SIDEBAR -->
-  <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
+  <!-- Adicionando sidebar completa -->
+  <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
         <span class="sidebar-logo-text">Controle Fácil</span>
       </div>
-      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu" aria-expanded="false">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M3 12h18M3 6h18M3 18h18"/>
+      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 18l-6-6 6-6"/>
         </svg>
       </button>
     </div>
 
     <nav class="sidebar-nav">
+      <!-- HOME -->
       <a href="home.html" class="sidebar-nav-item" data-page="home">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
         <span class="sidebar-nav-text">Home</span>
       </a>
 
+      <!-- CENTRAL -->
       <a href="central.html" class="sidebar-nav-item" data-page="central">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="7" height="7"/>
           <rect x="14" y="3" width="7" height="7"/>
           <rect x="14" y="14" width="7" height="7"/>
@@ -61,98 +54,95 @@
         <span class="sidebar-nav-text">Central</span>
       </a>
 
-      <a href="index.html" class="sidebar-nav-item" data-page="devolucoes" aria-current="page">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <!-- DEVOLUÇÕES (index.html) -->
+      <a href="index.html" class="sidebar-nav-item" data-page="devolucoes">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="9 14 4 9 9 4"/>
           <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
         </svg>
         <span class="sidebar-nav-text">Devoluções</span>
       </a>
 
+      <!-- DASHBOARDS & RELATÓRIOS -->
       <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboards">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <line x1="18" y1="20" x2="18" y2="10"/>
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="20" x2="18" y2="8"/>
           <line x1="12" y1="20" x2="12" y2="4"/>
-          <line x1="6" y1="20" x2="6" y2="14"/>
+          <line x1="6"  y1="20" x2="6"  y2="14"/>
         </svg>
         <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
       </a>
 
+      <!-- LOGS -->
       <a href="logs.html" class="sidebar-nav-item" data-page="logs">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
           <line x1="16" y1="13" x2="8" y2="13"/>
           <line x1="16" y1="17" x2="8" y2="17"/>
           <polyline points="10 9 9 9 8 9"/>
         </svg>
-        <span class="sidebar-nav-text">Log de Custos</span>
+        <span class="sidebar-nav-text">Logs</span>
       </a>
 
       <!-- CHAT -->
       <a href="chat.html" class="sidebar-nav-item" data-page="chat">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
         </svg>
         <span class="sidebar-nav-text">Chat</span>
       </a>
 
-      <!-- Configurações -->
-      <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
-        <span class="sidebar-nav-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
-            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l-.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
-          </svg>
-        </span>
+      <!-- CONFIGURAÇÕES -->
+      <a href="settings/config.html" class="sidebar-nav-item" data-page="settings">
+        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+          <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
+        </svg>
         <span class="sidebar-nav-text">Configurações</span>
       </a>
     </nav>
 
     <div class="sidebar-footer">
-      <div class="sidebar-user">
-        <div class="sidebar-user-info">
-          <div class="sidebar-user-name" id="sidebarUserName">—</div>
-          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
-          <div class="sidebar-ml" id="mlInfo">ML: —</div>
-        </div>
-      </div>
-      <button class="sidebar-logout" id="btnLogout" aria-label="Sair">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-          <polyline points="16 17 21 12 16 7"/>
-          <line x1="21" y1="12" x2="9" y2="12"/>
-        </svg>
-      </button>
+      <!-- O JavaScript navigation.js vai preencher isso dinamicamente -->
     </div>
   </aside>
 
+  <!-- Adicionando overlay e botão FAB mobile -->
   <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+  <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Abrir menu">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 12h18M3 6h18M3 18h18"/>
+    </svg>
+  </button>
 
   <!-- HEADER -->
   <header id="cabecalho" class="cabecalho">
     <div class="container">
       <div class="cabecalho-conteudo">
         <div class="logo-area">
-          <div class="icone-sistema" aria-hidden="true">
-            <img src="assets/img/logo_rf.png" alt="" class="icone-principal"/>
-            <div class="badge-status">
-              <svg class="icone-raio" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                <path d="M8 2a.5.5 0 0 1 .5.5v5.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7.5 8.293V2.5A.5.5 0 0 1 8 2z"/>
-              </svg>
-            </div>
-          </div>
           <div class="titulo-area">
             <h1 class="titulo-principal">Controle Fácil</h1>
-            <p class="subtitulo">
-              <svg class="icone-trending" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                <path d="M0 11.5a.5.5 0 0 1 .5-.5h2.279l4.471-4.471a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L7.5 8.293V2.5A.5.5 0 0 1 8 2z"/>
-              </svg>
-              Gerencie todas as devoluções de produtos
-            </p>
+            <p class="subtitulo">Sistema de Gerenciamento de Devoluções</p>
           </div>
         </div>
-        <div class="acoes-header"></div>
+
+        <div class="acoes-header">
+          <button id="botao-exportar" class="botao botao-outline" type="button">
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+              <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 1-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+            </svg>
+            Exportar
+          </button>
+          <button id="btn-nova-devolucao" class="botao botao-principal" type="button">
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+            </svg>
+            Nova Devolução
+          </button>
+        </div>
       </div>
     </div>
   </header>
@@ -160,108 +150,29 @@
   <!-- CONTEÚDO -->
   <main id="conteudo-principal" class="conteudo-principal">
     <div class="container">
-      <!-- TABS / FILTRO RÁPIDO -->
-      <section class="secao-tabs-filtro">
-        <div class="tabs-filtro" id="tabs-filtro" role="tablist" aria-label="Filtrar por status">
-          <button class="tab-filtro active" role="tab" aria-selected="true" tabindex="0" data-status="todos" id="tab-todos" aria-controls="painel-todos">
-            <svg class="tab-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/></svg>
-            <span>Todas</span>
-            <span class="tab-badge" id="badge-todos" aria-live="polite">0</span>
-          </button>
-
-          <button class="tab-filtro" role="tab" aria-selected="false" tabindex="-1" data-status="pendente" id="tab-pendente" aria-controls="painel-pendente">
-            <svg class="tab-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14z"/><path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1H7.5a.5.5 0 0 1-.5-.5V4.5A.5.5 0 0 1 8 4z"/></svg>
-            <span>Abertas</span>
-            <span class="tab-badge" id="badge-pendente" aria-live="polite">0</span>
-          </button>
-
-          <button class="tab-filtro" role="tab" aria-selected="false" tabindex="-1" data-status="aprovado" id="tab-aprovado" aria-controls="painel-aprovado">
-            <svg class="tab-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/></svg>
-            <span>Autorizadas</span>
-            <span class="tab-badge" id="badge-aprovado" aria-live="polite">0</span>
-          </button>
-
-          <button class="tab-filtro" role="tab" aria-selected="false" tabindex="-1" data-status="rejeitado" id="tab-rejeitado" aria-controls="painel-rejeitado">
-            <svg class="tab-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 1 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
-            <span>Rejeitadas</span>
-            <span class="tab-badge" id="badge-rejeitado" aria-live="polite">0</span>
-          </button>
-        </div>
-      </section>
-
-      <!-- KPIs -->
-      <section id="estatisticas" class="secao-estatisticas">
-        <div class="grade-cards" id="painel-todos">
-          <div class="card-estatistica fade-in">
-            <div class="card-header">
-              <span class="card-titulo">Total</span>
-              <svg class="icone-card" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/></svg>
-            </div>
-            <div class="card-conteudo">
-              <div id="total-devolucoes" class="numero-principal">0</div>
-              <p class="descricao-card">Solicitações registradas</p>
-            </div>
-          </div>
-
-          <div class="card-estatistica fade-in" style="animation-delay:.1s;">
-            <div class="card-header">
-              <span class="card-titulo">Abertas</span>
-              <svg class="icone-card icone-accent" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14z"/><path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1H7.5a.5.5 0 0 1-.5-.5V4.5A.5.5 0 0 1 8 4z"/></svg>
-            </div>
-            <div class="card-conteudo">
-              <div id="pendentes-count" class="numero-principal numero-accent">0</div>
-              <p class="descricao-card">Em análise/inspeção</p>
-            </div>
-          </div>
-
-          <div class="card-estatistica fade-in" style="animation-delay:.2s;">
-            <div class="card-header">
-              <span class="card-titulo">Autorizadas</span>
-              <svg class="icone-card icone-secondary" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/></svg>
-            </div>
-            <div class="card-conteudo">
-              <div id="aprovadas-count" class="numero-principal numero-secondary">0</div>
-              <p class="descricao-card">Cliente pode postar</p>
-            </div>
-          </div>
-
-          <div class="card-estatistica fade-in" style="animation-delay:.3s;">
-            <div class="card-header">
-              <span class="card-titulo">Rejeitadas</span>
-              <svg class="icone-card icone-destructive" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 1 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/></svg>
-            </div>
-            <div class="card-conteudo">
-              <div id="rejeitadas-count" class="numero-principal numero-destructive">0</div>
-              <p class="descricao-card">Pedidos negados</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <!-- FILTROS -->
       <section id="filtros" class="secao-filtros">
-        <div class="card-filtros slide-up">
+        <h2 class="sec-title">Filtros</h2>
+
+        <div class="card-filtros">
           <div class="filtros-conteudo">
-            <input id="campo-pesquisa"
-              class="input-pesquisa"
-              aria-label="Pesquisar"
-              placeholder="Pesquisar por cliente, pedido, produto ou loja..." />
-            <!-- Fallback select (para teclado/leitores) -->
-            <div class="campo-filtro">
-              <label for="filtro-status" class="sr-only">Status</label>
-              <select id="filtro-status" class="select-filtro" style="display:none;">
-                <option value="todos">Todos os Status</option>
-                <option value="pendente">Abertas</option>
-                <option value="aprovado">Autorizadas</option>
-                <option value="rejeitado">Rejeitadas</option>
-              </select>
+            <div class="campo-filtro campo-busca">
+              <label for="campo-pesquisa" class="campo-label">Buscar</label>
+              <input id="campo-pesquisa"
+                class="input-pesquisa"
+                aria-label="Pesquisar"
+                placeholder="Número, cliente ou loja..." />
             </div>
 
-            <div class="acoes-filtro">
-              <button id="botao-exportar" class="botao botao-outline">
-                <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 1-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/></svg>
-                Exportar
-              </button>
+            <div class="campo-filtro campo-status">
+              <label for="filtro-status" class="campo-label">Status</label>
+              <select id="filtro-status" class="select-filtro">
+                <option value="todos">Todos</option>
+                <option value="pendente">Pendente</option>
+                <option value="aprovado">Aprovado</option>
+                <option value="rejeitado">Rejeitado</option>
+                <option value="em_analise">Em Análise</option>
+              </select>
             </div>
           </div>
         </div>
@@ -269,23 +180,22 @@
 
       <!-- LISTA -->
       <section id="lista-devolucoes" class="secao-lista" aria-busy="false">
+        <h2 class="sec-title">Devoluções (<span id="lista-count">0</span>)</h2>
+
         <div id="container-devolucoes" class="container-devolucoes" role="list"></div>
 
         <div id="mensagem-vazia" class="mensagem-vazia" hidden>
           <div class="card-vazio">
             <svg class="icone-vazio" viewBox="0 0 120 120" fill="none" aria-hidden="true">
-              <circle cx="60" cy="60" r="50" fill="#E8F4FD"/>
-              <path d="M40 50h40v30H40z" fill="#2196F3" opacity="0.2"/>
-              <path d="M45 45h30v5H45z" fill="#2196F3"/>
-              <circle cx="55" cy="65" r="3" fill="#2196F3"/>
-              <circle cx="65" cy="65" r="3" fill="#2196F3"/>
-              <path d="M50 75h20" stroke="#2196F3" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="60" cy="60" r="50" fill="#E8F4FD"></circle>
+              <path d="M40 50h40v30H40z" fill="#2196F3" opacity="0.2"></path>
+              <path d="M45 45h30v5H45z" fill="#2196F3"></path>
+              <circle cx="55" cy="65" r="3" fill="#2196F3"></circle>
+              <circle cx="65" cy="65" r="3" fill="#2196F3"></circle>
+              <path d="M50 75h20" stroke="#2196F3" stroke-width="2" stroke-linecap="round"></path>
             </svg>
             <h3 class="titulo-vazio">Nenhuma devolução encontrada</h3>
-            <p id="descricao-vazia" class="descricao-vazio">Sincronize com o Mercado Livre ou ajuste os filtros de pesquisa</p>
-            <button id="btn-sync-ml" class="botao botao-principal" type="button" style="margin-top: 1.5rem;">
-              Sincronizar com ML
-            </button>
+            <p id="descricao-vazia" class="descricao-vazio">Ajuste os filtros de pesquisa</p>
           </div>
         </div>
       </section>
@@ -301,7 +211,7 @@
     </div>
   </main>
 
-  <!-- TOAST (local) -->
+  <!-- TOAST -->
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true">
     <div class="toast-icone" aria-hidden="true">
       <svg viewBox="0 0 16 16" fill="currentColor"></svg>
@@ -312,115 +222,13 @@
     </div>
   </div>
 
-  <!-- TOAST CONTAINER GLOBAL (compatível com central.js) -->
-  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+  <noscript>
+    <style>.conteudo-principal{filter:grayscale(1)}.mensagem-vazia{display:block!important}</style>
+    Ative o JavaScript para usar o Controle Fácil.
+  </noscript>
 
-  <!-- MODAL: DETALHES -->
-  <div id="modal-detalhes" class="modal" role="dialog" aria-modal="true" aria-labelledby="detTitulo" hidden>
-    <div class="modal-card modal-lg" role="document">
-      <div class="modal-header">
-        <h2 id="detTitulo"><span id="md-titulo">Detalhes</span></h2>
-        <button id="md-fechar" class="btn-icon" aria-label="Fechar">&times;</button>
-      </div>
-
-      <div class="modal-tabs" role="tablist" aria-label="Detalhes da devolução">
-        <button class="tab-btn" role="tab" aria-selected="true" data-tab="detalhes">Detalhes</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-tab="historico">Histórico</button>
-      </div>
-
-      <div id="aba-detalhes" class="modal-body">
-        <form id="md-form">
-          <input type="hidden" id="md-id"/>
-
-          <div class="grid">
-            <div class="campo-form">
-              <label for="md-numero">Pedido</label>
-              <input id="md-numero" type="text" disabled/>
-            </div>
-
-            <div class="campo-form">
-              <label for="md-loja">Loja</label>
-              <input id="md-loja" type="text" disabled/>
-            </div>
-
-            <div class="campo-form">
-              <label for="md-status">Status</label>
-              <div class="status-inline">
-                <select id="md-status" aria-describedby="md-status-hint" disabled>
-                  <option value="pendente">Pendente</option>
-                  <option value="aprovado">Aprovado</option>
-                  <option value="rejeitado">Rejeitado</option>
-                  <option value="recebido_cd">Recebido no CD</option>
-                  <option value="em_inspecao">Em inspeção</option>
-                  <option value="concluido">Concluído</option>
-                </select>
-                <button type="button" class="hint-trigger" aria-label="Ver regras de custo">?</button>
-                <div id="md-status-hint" class="hint-bubble" role="tooltip" aria-hidden="true">
-                  Regras: Rejeitado = R$0 | Motivos do cliente = R$0 | Recebido no CD/Inspeção = só frete.
-                </div>
-              </div>
-            </div>
-
-            <div class="campo-form">
-              <label for="md-valor-prod">Valor Produto (R$)</label>
-              <input id="md-valor-prod" type="number" step="0.01" min="0" disabled/>
-            </div>
-
-            <div class="campo-form">
-              <label for="md-valor-frete">Valor Frete (R$)</label>
-              <input id="md-valor-frete" type="number" step="0.01" min="0" disabled/>
-            </div>
-
-            <div class="campo-form campo-span-2">
-              <label for="md-reclamacao">Motivo/Descrição</label>
-              <textarea id="md-reclamacao" rows="4" disabled></textarea>
-            </div>
-          </div>
-
-          <div class="modal-footer">
-            <button id="md-cancelar" type="button" class="botao botao-outline">Cancelar</button>
-            <button id="md-editar" type="button" class="botao">Editar</button>
-            <button id="md-salvar" type="submit" class="botao botao-principal" style="display:none;">Salvar</button>
-            <button id="md-excluir" type="button" class="botao botao-danger">Excluir</button>
-          </div>
-        </form>
-      </div>
-
-      <div id="aba-historico" class="modal-body" hidden>
-        <div class="timeline-head">
-          <div class="campo-form">
-            <label for="evTitle">Título</label>
-            <input id="evTitle" type="text" placeholder="Opcional"/>
-          </div>
-          <div class="campo-form campo-span-2">
-            <label for="evMessage">Mensagem</label>
-            <textarea id="evMessage" rows="3" placeholder="O que aconteceu?"></textarea>
-          </div>
-          <div class="modal-footer">
-            <button id="btnAddNote" class="botao botao-principal" type="button">Adicionar nota</button>
-          </div>
-        </div>
-
-        <ul id="timelineList" class="timeline" aria-live="polite"></ul>
-      </div>
-    </div>
-  </div>
-
-  <!-- Scripts -->
-  <script src="/js/auth-guard.js"></script>
+  <!-- Adicionando script da sidebar antes do script principal -->
   <script src="js/navigation.js"></script>
-  <!-- PageLoader helper (compatível com central) -->
-  <script>
-    // helper simples para expor window.PageLoader caso o CSS exista
-    (function () {
-      const overlay = document.getElementById('pageLoaderOverlay');
-      if (!overlay) return;
-      window.PageLoader = {
-        hold(ms = 600) { overlay.style.display = 'flex'; if (ms) setTimeout(() => {}, ms); },
-        done() { overlay.style.display = 'none'; }
-      };
-    })();
-  </script>
-  <script type="module" src="js/index.js"></script>
+  <script src="js/index.js"></script>
 </body>
 </html>

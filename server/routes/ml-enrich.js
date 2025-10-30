@@ -145,6 +145,36 @@ async function getSkuFromItem(token, itemId, variationId) {
   return notBlank(skuItem) ? skuItem : null;
 }
 
+// ---------- CLAIM helpers ----------
+async function fetchClaimRaw(token, claimId) {
+  if (!notBlank(claimId)) return null;
+  return await mget(token, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}`);
+}
+
+function shapeClaimForUI(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const {
+    id, resource_id, status, type, stage, claim_version,
+    claimed_quantity, parent_id, resource, reason_id,
+    fulfilled, quantity_type, players, available_actions,
+    resolution, site_id, created_date, last_updated,
+    related_entities, return: hasReturn
+  } = raw;
+
+  return {
+    basic: {
+      id, resource_id, status, type, stage, claim_version,
+      claimed_quantity, parent_id, resource, reason_id,
+      fulfilled, quantity_type, site_id, created_date, last_updated,
+      has_return: Boolean(hasReturn)
+    },
+    players: Array.isArray(players) ? players : [],
+    actions: Array.isArray(available_actions) ? available_actions : [],
+    resolution: resolution ? { ...resolution } : null,
+    related_entities: Array.isArray(related_entities) ? related_entities : []
+  };
+}
+
 module.exports = function registerMlEnrich(app) {
 
   /**
@@ -190,13 +220,13 @@ module.exports = function registerMlEnrich(app) {
         }
       }
 
+      // return-cost
+      let retCost = null;
       const amounts = {};
       if (order) {
         const productTotal = sumOrderItemsTotal(order);
         if (productTotal != null) amounts.product = productTotal;
       }
-
-      let retCost = null;
       if (notBlank(claimId)) {
         meta.steps.push({ op: 'GET /claims/return-cost', claimId, using: pick.tokenFrom });
         try {
@@ -210,7 +240,19 @@ module.exports = function registerMlEnrich(app) {
         }
       }
 
-      if (Object.keys(amounts).length === 0 && !order) {
+      // claim raw + shape (preview também inclui para debug)
+      let claim = null;
+      if (notBlank(claimId)) {
+        meta.steps.push({ op: 'GET /claims/{id}', claimId, using: pick.tokenFrom });
+        try {
+          const raw = await fetchClaimRaw(pick.token, claimId);
+          claim = shapeClaimForUI(raw);
+        } catch (e) {
+          meta.errors.push({ where: 'claim', status: e.status || null, message: e.message });
+        }
+      }
+
+      if (Object.keys(amounts).length === 0 && !order && !claim) {
         return res.status(404).json({ error: 'Sem dados para esta devolução', meta });
       }
 
@@ -218,6 +260,7 @@ module.exports = function registerMlEnrich(app) {
         amounts,
         order,
         return_cost: retCost,
+        claim,
         sources: { order_id: orderId || null, claim_id: claimId || null },
         meta
       });
@@ -227,11 +270,8 @@ module.exports = function registerMlEnrich(app) {
     }
   });
 
-  /**
-   * ENRICH
-   * POST /api/ml/returns/:id/enrich
-   */
-  app.post('/api/ml/returns/:id/enrich', async (req, res) => {
+  // ------- enrich handler compartilhado (GET/POST) -------
+  async function handleEnrich(req, res) {
     const meta = { steps: [], errors: [], candidates: [], chosen: null };
 
     try {
@@ -269,16 +309,18 @@ module.exports = function registerMlEnrich(app) {
       let novo_data_compra   = null;
       let novo_loja_nome     = null;
 
+      // order
+      let order = null;
       if (notBlank(orderId)) {
         try {
-          const o = pick.order || await mget(pick.token, `/orders/${encodeURIComponent(orderId)}`);
-          novo_cliente_nome = getBuyerName(o);
-          const tot = sumOrderItemsTotal(o); if (tot != null) novo_valor_produto = tot;
-          novo_data_compra = getOrderDateIso(o);
-          const nick = getStoreNickname(o);
+          order = pick.order || await mget(pick.token, `/orders/${encodeURIComponent(orderId)}`);
+          novo_cliente_nome = getBuyerName(order);
+          const tot = sumOrderItemsTotal(order); if (tot != null) novo_valor_produto = tot;
+          novo_data_compra = getOrderDateIso(order);
+          const nick = getStoreNickname(order);
           novo_loja_nome = nick ? `Mercado Livre · ${nick}` : (dev.loja_nome || null);
 
-          const items = Array.isArray(o?.order_items) ? o.order_items : (Array.isArray(o?.items) ? o.items : []);
+          const items = Array.isArray(order?.order_items) ? order.order_items : (Array.isArray(order?.items) ? order.items : []);
           const first = items[0] || {};
           const itemId = first?.item?.id ?? first?.item?.item_id ?? first?.item_id ?? null;
           const variationId = first?.item?.variation_id ?? first?.variation_id ?? null;
@@ -290,12 +332,28 @@ module.exports = function registerMlEnrich(app) {
         }
       }
 
+      // return-cost
+      let retCost = null;
       if (notBlank(claimId)) {
+        meta.steps.push({ op: 'GET /claims/return-cost', claimId, using: pick.tokenFrom });
         try {
           const rc = await mget(pick.token, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`);
           if (rc && rc.amount != null) novo_valor_frete = toNumber(rc.amount);
+          retCost = rc || null;
         } catch (e) {
           meta.errors.push({ where: 'return-cost', status: e.status || null, message: e.message });
+        }
+      }
+
+      // claim raw + shape
+      let claim = null;
+      if (notBlank(claimId)) {
+        meta.steps.push({ op: 'GET /claims/{id}', claimId, using: pick.tokenFrom });
+        try {
+          const raw = await fetchClaimRaw(pick.token, claimId);
+          claim = shapeClaimForUI(raw);
+        } catch (e) {
+          meta.errors.push({ where: 'claim', status: e.status || null, message: e.message });
         }
       }
 
@@ -328,16 +386,42 @@ module.exports = function registerMlEnrich(app) {
         set.push(`loja_nome=$${p.push(novo_loja_nome)}`);
       }
 
-      if (!set.length) return res.json({ item: dev, note: 'sem alterações', meta });
+      if (!set.length) {
+        // sem alterações em banco, mas retorna o pacote completo para a UI
+        return res.json({
+          item: dev,
+          note: 'sem alterações',
+          order,
+          return_cost: retCost,
+          claim,
+          sources: { order_id: orderId || null, claim_id: claimId || null },
+          meta
+        });
+      }
 
       set.push('updated_at=now()');
       p.push(id);
 
       const upd = await q(`UPDATE devolucoes SET ${set.join(', ')} WHERE id=$${p.length} RETURNING *`, p);
-      res.json({ item: upd.rows[0], sources: { order_id: orderId || null, claim_id: claimId || null }, meta });
+      res.json({
+        item: upd.rows[0],
+        order,
+        return_cost: retCost,
+        claim,
+        sources: { order_id: orderId || null, claim_id: claimId || null },
+        meta
+      });
     } catch (e) {
       console.error('[ML ENRICH] erro:', e);
       res.status(500).json({ error: 'Falha ao enriquecer dados do ML', detail: e?.message });
     }
-  });
+  }
+
+  /**
+   * ENRICH (POST e GET, mesma lógica)
+   * POST /api/ml/returns/:id/enrich
+   * GET  /api/ml/returns/:id/enrich
+   */
+  app.post('/api/ml/returns/:id/enrich', handleEnrich);
+  app.get('/api/ml/returns/:id/enrich', handleEnrich);
 };

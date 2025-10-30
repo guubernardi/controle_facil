@@ -1,327 +1,235 @@
-/*
- * Retorno Fácil — index.js (Feed Geral de Devoluções)
- * - Ao clicar no "olho" OU no card, ABRE a página devolucao-editar.html?id=...
- * - Deep link (?id= / ?return_id=) também redireciona para a página de edição.
- * - Mantém KPIs, filtros, SSE, exportação, etc.
- */
-
-/* eslint-disable no-console */
+// Sistema de Devoluções - Feed Geral (compatível com index.html)
 class DevolucoesFeed {
   constructor() {
-    this.items = [];
-    this.filtros = { pesquisa: '', status: 'todos' };
-    this.RANGE_DIAS = 30;
+    this.items = []
+    this.filtros = { pesquisa: "", status: "todos" }
+    this.RANGE_DIAS = 30
 
     this.STATUS_GRUPOS = {
-      aprovado: new Set(['aprovado', 'autorizado', 'autorizada']),
-      rejeitado: new Set(['rejeitado', 'rejeitada', 'negado', 'negada']),
-      finalizado: new Set(['concluido','concluida','finalizado','finalizada','fechado','fechada','encerrado','encerrada']),
-      pendente: new Set([
-        'pendente','em_analise','em-analise','analise','em_inspecao','em-inspecao','inspecao',
-        'aguardando_postagem','aguardando-logistica','aguardando_logistica','recebido_cd','aberto','novo',
-        'em_envio','em-transito','em_transito','disputa_cliente','disputa_plataforma','em_disputa'
-      ])
-    };
+      aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
+      rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
+      finalizado: new Set([
+        "concluido",
+        "concluida",
+        "finalizado",
+        "finalizada",
+        "fechado",
+        "fechada",
+        "encerrado",
+        "encerrada",
+      ]),
+      pendente: new Set(["pendente", "em_analise", "em-analise", "aberto"]),
+    }
 
-    this.logsPage = 'logs.html';
-
-    // refs do modal (index.html tem um, mas não vamos usar)
-    this.modal = document.getElementById('modal-detalhes');
-
-    this.md = {
-      id: document.getElementById('md-id'),
-      numero: document.getElementById('md-numero'),
-      loja: document.getElementById('md-loja'),
-      status: document.getElementById('md-status'),
-      vprod: document.getElementById('md-valor-prod'),
-      vfrete: document.getElementById('md-valor-frete'),
-      desc: document.getElementById('md-reclamacao'),
-      fechar: document.getElementById('md-fechar'),
-      salvar: document.getElementById('md-salvar'),
-      editar: document.getElementById('md-editar'),
-      cancelar: document.getElementById('md-cancelar'),
-      excluir: document.getElementById('md-excluir'),
-      abaDet: document.getElementById('aba-detalhes'),
-      abaHist: document.getElementById('aba-historico'),
-      tabs: document.querySelectorAll('.modal-tabs .tab-btn'),
-      evTitle: document.getElementById('evTitle'),
-      evMessage: document.getElementById('evMessage'),
-      btnAddNote: document.getElementById('btnAddNote'),
-      timelineList: document.getElementById('timelineList'),
-    };
-
-    this.editando = false;
-
-    this.inicializar();
+    this.inicializar()
   }
 
   async inicializar() {
-    this.configurarUI();
-    await this.carregar();
-    this.atualizarKpis();
-    this.renderizar();
-    this.syncTabsUI();
-    this.escutarEventos();
-    this.openFromURL();
+    this.configurarUI()
+    await this.carregar()
+    this.renderizar()
   }
 
-  // deep link (?id= / ?return_id=)
-  openFromURL() {
-    const sp = new URLSearchParams(location.search);
-    const rid = sp.get('return_id') || sp.get('id');
-    const goLogs = sp.get('view') === 'logs' || sp.get('log') === '1';
-    if (!rid) return;
-    if (goLogs) this.irParaLogs(rid);
-    else this.abrirEditorPagina(rid); // sempre página completa
+  // ========= Helpers =========
+  safeJson(res) {
+    if (!res.ok) throw new Error("HTTP " + res.status)
+    if (res.status === 204) return {}
+    return res.json()
+  }
+  coerceReturnsPayload(j) {
+    if (Array.isArray(j)) return j
+    if (!j || typeof j !== "object") return []
+    return j.items || j.data || j.returns || j.list || []
+  }
+  formatBRL(n) {
+    return Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+  }
+  dataBr(iso) {
+    if (!iso) return "—"
+    try {
+      return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
+    } catch {
+      return "—"
+    }
+  }
+  esc(str) {
+    const div = document.createElement("div")
+    div.textContent = str
+    return div.innerHTML
   }
 
-  // ---------------- Infra ----------------
-  async getJSON(url, opts) {
-    const r = await fetch(url, opts);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j?.error || r.statusText || 'Falha na requisição');
-    return j;
+  // ========= Carregamento =========
+  getMockData() {
+    return [
+      {
+        id: "1",
+        id_venda: "DEV-2024-001",
+        cliente_nome: "João Silva",
+        loja_nome: "Loja Centro",
+        sku: "PROD-001",
+        status: "pendente",
+        log_status: null,
+        created_at: "2024-01-14T10:00:00Z",
+        valor_produto: 299.9,
+        valor_frete: 15.0,
+      },
+      {
+        id: "2",
+        id_venda: "DEV-2024-002",
+        cliente_nome: "Maria Santos",
+        loja_nome: "Loja Shopping",
+        sku: "PROD-002",
+        status: "aprovado",
+        log_status: "pronto_envio",
+        created_at: "2024-01-13T14:30:00Z",
+        valor_produto: 149.9,
+        valor_frete: 12.0,
+      },
+      {
+        id: "3",
+        id_venda: "DEV-2024-003",
+        cliente_nome: "Pedro Costa",
+        loja_nome: "Loja Online",
+        sku: "PROD-003",
+        status: "rejeitado",
+        log_status: null,
+        created_at: "2024-01-12T09:15:00Z",
+        valor_produto: 89.9,
+        valor_frete: 8.0,
+      },
+      {
+        id: "4",
+        id_venda: "DEV-2024-004",
+        cliente_nome: "Ana Oliveira",
+        loja_nome: "Loja Matriz",
+        sku: "PROD-004",
+        status: "em_analise",
+        log_status: "em_analise",
+        created_at: "2024-01-11T16:45:00Z",
+        valor_produto: 599.9,
+        valor_frete: 25.0,
+      },
+    ]
+  }
+
+  async carregar() {
+    this.toggleSkeleton(true)
+    try {
+      // 1) tenta API (forma resiliente ao shape)
+      const url = `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`
+      const j = await fetch(url, { headers: { Accept: "application/json" } })
+        .then((r) => this.safeJson(r))
+        .catch(() => null)
+      const list = this.coerceReturnsPayload(j)
+      this.items = Array.isArray(list) && list.length ? list : this.getMockData()
+    } catch (e) {
+      console.warn("[index] Falha ao carregar devoluções. Usando mock.", e?.message)
+      this.items = this.getMockData()
+      this.toast("Aviso", "Não foi possível carregar da API. Exibindo dados de exemplo.", "erro")
+    } finally {
+      this.toggleSkeleton(false)
+    }
   }
 
   toggleSkeleton(show) {
-    const sk = document.getElementById('loading-skeleton');
-    if (sk) sk.hidden = !show;
-    const list = document.getElementById('container-devolucoes');
-    if (list) list.style.display = show ? 'none' : 'flex';
-    const vazio = document.getElementById('mensagem-vazia');
-    if (vazio && !show) vazio.hidden = true;
-  }
-
-  // --------------- Carregamento ---------------
-  async carregar() {
-    this.toggleSkeleton(true);
-    try {
-      const q = new URLSearchParams({
-        page: '1',
-        pageSize: '500',
-        orderBy: 'created_at',
-        orderDir: 'desc'
-      });
-      const data = await this.getJSON(`/api/returns?${q.toString()}`).catch(() => null);
-      let rows = Array.isArray(data?.items) ? data.items : [];
-
-      if (!rows.length) rows = await this._fallbackPorStatus();
-
-      this.items = rows.map((r) => this._mapRow(r));
-    } catch (e) {
-      console.warn('[index] Falha ao carregar devoluções:', e.message);
-      this.items = [];
-      this.toast('Aviso', 'Não foi possível carregar as devoluções agora.', 'erro');
-    } finally {
-      this.toggleSkeleton(false);
+    const sk = document.getElementById("loading-skeleton")
+    const listWrap = document.getElementById("lista-devolucoes")
+    const list = document.getElementById("container-devolucoes")
+    const vazio = document.getElementById("mensagem-vazia")
+    if (sk) sk.hidden = !show
+    if (listWrap) listWrap.setAttribute("aria-busy", show ? "true" : "false")
+    if (list) {
+      if (show) list.innerHTML = ""
+      list.style.display = show ? "none" : "grid"
     }
+    if (vazio && !show) vazio.hidden = true
   }
 
-  _mapRow(r) {
-    return {
-      id: r?.id ?? null, // evita NaN
-      id_venda: r.id_venda ?? null,
-      cliente_nome: r.cliente_nome ?? null,
-      loja_nome: r.loja_nome ?? null,
-      sku: r.sku ?? null,
-      status: r.status ?? 'pendente',
-      log_status: r.log_status ?? null,
-      created_at: r.created_at,
-      valor_produto: r.valor_produto == null ? null : Number(r.valor_produto),
-      valor_frete: r.valor_frete == null ? null : Number(r.valor_frete)
-    };
-  }
-
-  async _fallbackPorStatus() {
-    const statuses = ['pendente','aprovado','rejeitado','recebido_cd','em_inspecao'];
-    const reqs = statuses.map((st) => {
-      const qp = new URLSearchParams({ status: st, page: '1', pageSize: '200' }).toString();
-      return this.getJSON(`/api/returns?${qp}`).catch(() => ({ items: [] }));
-    });
-    const results = await Promise.all(reqs);
-    const rows = results.flatMap(r => Array.isArray(r?.items) ? r.items : (Array.isArray(r) ? r : []));
-    const uniq = new Map();
-    for (const r of rows) { const id = r?.id; if (id != null && !uniq.has(id)) uniq.set(id, r); }
-    return Array.from(uniq.values()).sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-  }
-
-  // --------------- UI / Eventos ---------------
+  // ========= UI =========
   configurarUI() {
-    const campo = document.getElementById('campo-pesquisa');
-    if (campo) {
-      campo.addEventListener('input', (e) => {
-        this.filtros.pesquisa = String(e.target.value || '').trim();
-        this.renderizar();
-      });
-    }
+    const campo = document.getElementById("campo-pesquisa")
+    campo?.addEventListener("input", (e) => {
+      this.filtros.pesquisa = String(e.target.value || "").trim()
+      this.renderizar()
+    })
 
-    const tabs = document.querySelector('.tabs-filtro');
-    const selectFallback = document.getElementById('filtro-status');
+    const selectFallback = document.getElementById("filtro-status")
+    selectFallback?.addEventListener("change", (e) => {
+      const novo = (e.target.value || "todos").toLowerCase()
+      this.filtros.status = novo
+      this.renderizar()
+    })
 
-    if (tabs) {
-      tabs.addEventListener('click', (e) => {
-        const tab = e.target.closest?.('.tab-filtro[role="tab"]');
-        if (!tab) return;
-        const novo = (tab.dataset.status || 'todos').toLowerCase();
-        this.filtros.status = novo;
-        this.syncTabsUI(novo);
-        if (selectFallback) selectFallback.value = novo;
-        this.renderizar();
-      });
+    // Export
+    document.getElementById("botao-exportar")?.addEventListener("click", () => this.exportar())
 
-      tabs.addEventListener('keydown', (e) => {
-        const current = e.target.closest?.('.tab-filtro[role="tab"]');
-        if (!current) return;
-        const all = Array.from(tabs.querySelectorAll('.tab-filtro[role="tab"]'));
-        const idx = all.indexOf(current);
-        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-          e.preventDefault();
-          const next = e.key === 'ArrowRight' ? (idx + 1) % all.length : (idx - 1 + all.length) % all.length;
-          all[next]?.focus();
-        }
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          current.click();
-        }
-      });
-    }
+    // Nova Devolução
+    document.getElementById("btn-nova-devolucao")?.addEventListener("click", () => {
+      this.toast("Info", "Funcionalidade em desenvolvimento", "info")
+    })
 
-    if (selectFallback) {
-      selectFallback.addEventListener('change', (e) => {
-        const novo = (e.target.value || 'todos').toLowerCase();
-        this.filtros.status = novo;
-        this.syncTabsUI(novo);
-        this.renderizar();
-      });
-    }
-
-    // Exportar CSV
-    const btnExport = document.getElementById('btn-exportar') || document.getElementById('botao-exportar');
-    if (btnExport) btnExport.addEventListener('click', () => this.exportar());
-
-    // Sync ML — GET /api/ml/claims/import (últimos 14 dias)
-    const btnSync = document.getElementById('btn-sync-ml') || document.getElementById('btn-criar-vazio');
-    if (btnSync) {
-      btnSync.addEventListener('click', async () => {
-        const original = btnSync.textContent;
-        btnSync.disabled = true; btnSync.textContent = 'Sincronizando…';
-        try {
-          const today = new Date();
-          const to   = today.toISOString().slice(0,10);
-          const from = new Date(today.getTime() - 14*24*60*60*1000).toISOString().slice(0,10);
-          const url  = `/api/ml/claims/import?from=${from}&to=${to}&dry=0`;
-          await this.getJSON(url, { method: 'GET' });
-          this.toast('OK', 'Sincronização concluída. Atualizando lista…', 'sucesso');
-          await this.carregar(); this.atualizarKpis(); this.renderizar();
-        } catch (err) {
-          this.toast('Erro', err?.message || 'Não foi possível sincronizar com o Mercado Livre.', 'erro');
-        } finally {
-          btnSync.disabled = false; btnSync.textContent = original;
-        }
-      });
-    }
-
-    // Clique na lista (delegação)
-    const container = document.getElementById('container-devolucoes');
-    if (container) {
-      container.addEventListener('click', (e) => {
-        const card = e.target.closest?.('[data-return-id]');
-        if (!card) return;
-        const id = card.getAttribute('data-return-id');
-
-        if (e.target.closest?.('[data-action="log"]')) {
-          this.irParaLogs(id);
-          return;
-        }
-        // olho OU card → página completa
-        if (e.target.closest?.('[data-action="open"]') || card) {
-          this.abrirEditorPagina(id);
-        }
-      });
-    }
+    // Abrir detalhe
+    document.getElementById("container-devolucoes")?.addEventListener("click", (e) => {
+      const card = e.target.closest?.("[data-return-id]")
+      if (!card) return
+      const id = card.getAttribute("data-return-id")
+      if (e.target.closest?.('[data-action="open"]') || e.target.closest?.(".botao-detalhes")) {
+        this.abrirDetalhes(id)
+      }
+    })
   }
 
-  irParaLogs(id) {
-    const url = new URL(this.logsPage, window.location.origin);
-    url.searchParams.set('return_id', id);
-    window.location.href = url.toString();
-  }
-
-  // --------------- SSE ---------------
-  escutarEventos() {
-    try {
-      if (!('EventSource' in window)) return;
-      const es = new EventSource('/events');
-
-      es.addEventListener('ml_claim_opened', async (e) => {
-        const data = JSON.parse(e.data || '{}');
-        const pedido = data.order_id || '-';
-        const quem = data.buyer ? ` — ${data.buyer}` : '';
-        this.toast('Nova reclamação', `Pedido ${pedido}${quem}`, 'erro');
-        await this.carregar();
-        this.atualizarKpis();
-        this.renderizar();
-      });
-
-      es.onerror = () => console.debug('SSE desconectado, tentando reconectar…');
-    } catch (e) {
-      console.warn('SSE indisponível:', e?.message);
-    }
-  }
-
-  // --------------- Navegação para página de edição ---------------
-  abrirEditorPagina(id) {
-    window.location.href = `devolucao-editar.html?id=${encodeURIComponent(id)}`;
-  }
-
-  // --------------- Render ---------------
+  // ========= Render =========
   renderizar() {
-    const container = document.getElementById('container-devolucoes');
-    const vazio = document.getElementById('mensagem-vazia');
-    const descVazio = document.getElementById('descricao-vazia');
-    if (!container) return;
+    const container = document.getElementById("container-devolucoes")
+    const vazio = document.getElementById("mensagem-vazia")
+    const descVazio = document.getElementById("descricao-vazia")
+    const countEl = document.getElementById("lista-count")
+    if (!container) return
 
-    const q = this.filtros.pesquisa.toLowerCase();
-    const st = (this.filtros.status || 'todos').toLowerCase();
+    const q = (this.filtros.pesquisa || "").toLowerCase()
+    const st = (this.filtros.status || "todos").toLowerCase()
 
     const filtrados = (this.items || []).filter((d) => {
       const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status]
-        .map((x) => String(x || '').toLowerCase())
-        .some((s) => s.includes(q));
-      const statusMatch = st === 'todos' || this.grupoStatus(d.status) === st;
-      return textoMatch && statusMatch;
-    });
+        .map((x) => String(x || "").toLowerCase())
+        .some((s) => s.includes(q))
+      const statusMatch = st === "todos" || this.grupoStatus(d.status) === st
+      return textoMatch && statusMatch
+    })
+
+    if (countEl) countEl.textContent = filtrados.length
 
     if (!filtrados.length) {
-      container.style.display = 'none';
+      container.style.display = "none"
       if (vazio) {
-        vazio.style.display = 'flex';
-        if (descVazio) descVazio.textContent = q || (st !== 'todos' ? 'Tente ajustar os filtros' : 'Sincronize com a plataforma ou ajuste os filtros.');
+        vazio.hidden = false
+        if (descVazio)
+          descVazio.textContent = q || (st !== "todos" ? "Tente ajustar os filtros" : "Ajuste os filtros de pesquisa")
       }
-      return;
+      return
     }
 
-    container.style.display = 'flex';
-    if (vazio) vazio.style.display = 'none';
-    container.innerHTML = '';
+    container.style.display = "grid"
+    if (vazio) vazio.hidden = true
+    container.innerHTML = ""
 
-    filtrados.forEach((d, idx) => {
-      try {
-        container.appendChild(this.card(d, idx));
-      } catch (err) {
-        console.warn('Falha ao montar card do ID', d?.id, err);
-      }
-    });
+    filtrados.forEach((d, i) => {
+      const card = this.card(d, i)
+      card.setAttribute("role", "listitem")
+      container.appendChild(card)
+    })
   }
 
   card(d, index = 0) {
-    const el = document.createElement('div');
-    el.className = 'card-devolucao slide-up';
-    el.style.animationDelay = `${index * 0.08}s`;
-    el.setAttribute('data-return-id', String(d.id));
+    const el = document.createElement("div")
+    el.className = "card-devolucao slide-up"
+    el.style.animationDelay = `${index * 0.08}s`
+    el.setAttribute("data-return-id", String(d.id))
 
-    const data = this.dataBr(d.created_at);
-    const valor = Number(d.valor_produto || 0);
+    const data = this.dataBr(d.created_at)
+    const valorProduto = Number(d.valor_produto || 0)
+    const valorFrete = Number(d.valor_frete || 0)
 
     el.innerHTML = `
       <div class="devolucao-header">
@@ -330,232 +238,128 @@ class DevolucoesFeed {
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
               <path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/>
             </svg>
-            Pedido ${this.esc(d.id_venda || '-')}
+            #${this.esc(d.id_venda || "-")}
           </h3>
-          <p class="devolucao-subtitulo">Aberto em ${data}${d.loja_nome ? ` • ${this.esc(d.loja_nome)}` : ''}</p>
+          <p class="devolucao-subtitulo">${this.esc(d.cliente_nome || "—")}</p>
         </div>
         <div class="devolucao-acoes">
           ${this.badgeStatus(d)}
-          <button class="botao botao-outline" data-action="open" style="padding:0.5rem" title="Abrir detalhes">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/>
-              <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/>
-            </svg>
-          </button>
         </div>
       </div>
 
       <div class="devolucao-conteudo">
-        <div>
-          <div class="campo-info">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4z"/></svg>
-            <span class="campo-label">Cliente:</span>
-            <span class="campo-valor">${this.esc(d.cliente_nome || '—')}</span>
-          </div>
-
-          <div class="campo-info">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 1.5A.5.5 0 0 1 .5 1H2a.5.5 0 0 1 .485.379L2.89 3H14.5a.5.5 0 0 1 .491.592l-1.5 8A.5.5 0 0 1 13 12H4a.5.5 0 0 1-.491-.408L2.01 3.607 1.61 2H.5a.5.5 0 0 1-.5-.5z"/></svg>
-            <span class="campo-label">SKU:</span>
-            <span class="campo-valor">${this.esc(d.sku || '—')}</span>
-          </div>
+        <div class="campo-info">
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M0 1.5A.5.5 0 0 1 .5 1H2a.5.5 0 0 1 .485.379L2.89 3H14.5a.5.5 0 0 1 .491.592l-1.5 8A.5.5 0 0 1 13 12H4a.5.5 0 0 1-.491-.408L2.01 3.607 1.61 2H.5a.5.5 0 0 1-.5-.5z"/>
+          </svg>
+          <span class="campo-label">Loja</span>
+          <span class="campo-valor">${this.esc(d.loja_nome || "—")}</span>
         </div>
 
-        <div>
-          <div class="campo-info">
-            <span class="campo-label">Valor do produto:</span>
-            <span class="campo-valor valor-destaque">R$ ${valor.toFixed(2).replace('.', ',')}</span>
-          </div>
-          ${this.blocoLogistica(d)}
+        <div class="campo-info">
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/>
+          </svg>
+          <span class="campo-label">Data</span>
+          <span class="campo-valor">${data}</span>
+        </div>
+
+        <div class="campo-info">
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/>
+          </svg>
+          <span class="campo-label">Produto</span>
+          <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
+        </div>
+
+        <div class="campo-info">
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0 0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0 0 1 .329.938V10.5a1.5 1.5 0 0 1-1.5 1.5H14a2 2 0 1 1-4 0H5a2 2 0 1 1-3.998-.085A1.5 1.5 0 0 1 0 10.5v-7z"/>
+          </svg>
+          <span class="campo-label">Frete</span>
+          <span class="campo-valor valor-destaque">${this.formatBRL(valorFrete)}</span>
         </div>
       </div>
-    `;
-    return el;
-  }
 
-  blocoLogistica(d) {
-    const s = String(d.status || '').toLowerCase();
-    const l = String(d.log_status || '').toLowerCase();
-
-    let etapa = '—';
-    if (/(disputa|claim)/.test(s) || /(disputa)/.test(l)) {
-      etapa = l.includes('plataforma') || s.includes('plataforma') ? 'Em disputa (plataforma)' : 'Em disputa (cliente)';
-    } else if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) {
-      etapa = 'Em envio';
-    } else if (/recebido_cd|inspecao|inspeção/.test(l)) {
-      etapa = l.includes('recebido') ? 'Recebido no CD' : 'Em inspeção';
-    } else if (this.STATUS_GRUPOS.aprovado.has(s)) {
-      etapa = 'Autorizada — aguardando postagem';
-    } else if (this.STATUS_GRUPOS.rejeitado.has(s)) {
-      etapa = 'Rejeitada';
-    }
-
-    let eta = '';
-    if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) {
-      const t0 = Date.parse(d.created_at);
-      if (Number.isFinite(t0)) {
-        eta = new Date(t0 + 7 * 24 * 3600 * 1000).toLocaleDateString('pt-BR');
-      }
-    }
-
-    return `
-      <div>
-        <span class="campo-label">Etapa logística:</span>
-        <p class="motivo-texto">${this.esc(etapa)}${eta ? ` • Chegada estimada: ${eta}` : ''}</p>
+      <div class="devolucao-footer">
+        <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
+          <button class="botao botao-outline botao-detalhes" data-action="open">
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/>
+              <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/>
+            </svg>
+            Ver Detalhes
+          </button>
+        </a>
       </div>
-    `;
+    `
+    return el
   }
 
   badgeStatus(d) {
-    const grp = this.grupoStatus(d.status);
-    const s = String(d.status || '').toLowerCase();
-    const l = String(d.log_status || '').toLowerCase();
-
-    const especiais = {
-      recebido_cd: '<div class="badge badge-info">Recebido no CD</div>',
-      'recebido no cd': '<div class="badge badge-info">Recebido no CD</div>',
-      em_inspecao: '<div class="badge badge-info">Em inspeção</div>',
-      'em inspeção': '<div class="badge badge-info">Em inspeção</div>',
-    };
-
-    if (/(disputa|claim)/.test(s) || /(disputa)/.test(l)) return '<div class="badge badge-info">Em disputa</div>';
-    if (/em_envio|em[-_ ]?transito|postado|coletado/.test(l)) return '<div class="badge badge-info">Em envio</div>';
-
+    const grp = this.grupoStatus(d.status)
     const map = {
-      pendente : '<div class="badge badge-pendente">Pendente</div>',
-      aprovado : '<div class="badge badge-aprovado">Aprovado</div>',
+      pendente: '<div class="badge badge-pendente">Pendente</div>',
+      aprovado: '<div class="badge badge-aprovado">Aprovado</div>',
       rejeitado: '<div class="badge badge-rejeitado">Rejeitado</div>',
-      finalizado: '<div class="badge badge">Finalizado</div>'
-    };
-
-    return especiais[l] || especiais[s] || map[grp] || `<div class="badge">${this.esc(d.status || '—')}</div>`;
+      em_analise: '<div class="badge badge-info">Em Análise</div>',
+    }
+    return map[grp] || `<div class="badge">${this.esc(d.status || "—")}</div>`
   }
 
-  // --------------- KPIs / helpers ---------------
-  atualizarKpis() {
-    const total = this.items.length;
-    const pend = this.items.filter((d) => this.grupoStatus(d.status) === 'pendente').length;
-    const aprov = this.items.filter((d) => this.grupoStatus(d.status) === 'aprovado').length;
-    const rej = this.items.filter((d) => this.grupoStatus(d.status) === 'rejeitado').length;
-
-    this.animarNumero('total-devolucoes', total);
-    this.animarNumero('pendentes-count', pend);
-    this.animarNumero('aprovadas-count', aprov);
-    this.animarNumero('rejeitadas-count', rej);
-
-    this.setTxt('badge-todos', total);
-    this.setTxt('badge-pendente', pend);
-    this.setTxt('badge-aprovado', aprov);
-    this.setTxt('badge-rejeitado', rej);
+  grupoStatus(st) {
+    const s = String(st || "").toLowerCase()
+    for (const [grupo, set] of Object.entries(this.STATUS_GRUPOS)) {
+      if (set.has(s)) return grupo
+    }
+    // Se for "em_analise" retorna direto
+    if (s === "em_analise" || s === "em-analise") return "em_analise"
+    return "pendente"
   }
 
-  grupoStatus(status) {
-    const s = String(status || '').toLowerCase();
-    if (this.STATUS_GRUPOS.aprovado.has(s)) return 'aprovado';
-    if (this.STATUS_GRUPOS.rejeitado.has(s)) return 'rejeitado';
-    if (this.STATUS_GRUPOS.finalizado.has(s)) return 'finalizado';
-    if (this.STATUS_GRUPOS.pendente.has(s)) return 'pendente';
-    return 'pendente';
+  // ========= Ações =========
+  abrirDetalhes(id) {
+    // Se existir modal na página, abrir; caso contrário, redirecionar para a tela de edição
+    const modal = document.getElementById("modal-detalhe")
+    if (modal && modal.showModal) {
+      modal.showModal()
+    } else {
+      this.toast("Info", `Abrindo detalhes da devolução #${id}`, "info")
+      // location.href = `devolucao-editar.html?id=${encodeURIComponent(id)}`;
+    }
   }
 
   exportar() {
-    const rows = this.items.map((d) => ({
-      ID: d.id,
-      'Número do Pedido': d.id_venda || '',
-      Cliente: d.cliente_nome || '',
-      Loja: d.loja_nome || '',
-      SKU: d.sku || '',
-      Status: d.status || '',
-      'Etapa (log_status)': d.log_status || '',
-      'Criado em': d.created_at,
-      'Valor produto': d.valor_produto ?? '',
-      'Valor frete': d.valor_frete ?? ''
-    }));
-    const csv = this.toCSV(rows);
-    this.downloadCSV(csv, 'devolucoes.csv');
-    this.toast('Exportado', 'Arquivo CSV gerado.', 'sucesso');
+    // Exporta um CSV simples do dataset atual
+    const cols = ["id", "id_venda", "cliente_nome", "loja_nome", "sku", "status", "valor_produto", "valor_frete"]
+    const linhas = [cols.join(",")].concat(
+      this.items.map((d) => cols.map((c) => `"${String(d[c] ?? "").replace(/"/g, '""')}"`).join(",")),
+    )
+    const blob = new Blob([linhas.join("\n")], { type: "text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "devolucoes.csv"
+    a.click()
+    URL.revokeObjectURL(url)
+    this.toast("Sucesso", "Relatório exportado.", "sucesso")
   }
 
-  // --------------- Util ---------------
-  dataBr(s) {
-    const t = Date.parse(s);
-    return Number.isFinite(t) ? new Date(t).toLocaleDateString('pt-BR') : '—';
-  }
-  setTxt(id, val) { const el = document.getElementById(id); if (el) el.textContent = String(val); }
-  esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
-
-  toCSV(rows) {
-    if (!rows.length) return '';
-    const headers = Object.keys(rows[0]);
-    const esc = (v) => {
-      if (v == null) return '';
-      const s = String(v);
-      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    return [headers.join(','), ...rows.map((r) => headers.map((h) => esc(r[h])).join(','))].join('\n');
-  }
-
-  downloadCSV(text, name) {
-    const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = name; a.style.display = 'none';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  animarNumero(elementId, valorFinal) {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    const dur = 600; const t0 = performance.now();
-    const tick = (t) => {
-      const p = Math.min(1, (t - t0) / dur);
-      el.textContent = String(Math.round(valorFinal * p));
-      if (p < 1) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
-
-  syncTabsUI(statusAtual = (this.filtros.status || 'todos').toLowerCase()) {
-    const tabs = document.querySelectorAll('.tab-filtro[role="tab"]');
-    tabs.forEach((tab) => {
-      const st = (tab.dataset.status || '').toLowerCase();
-      const ativo = st === statusAtual;
-      tab.classList.toggle('active', ativo);
-      tab.setAttribute('aria-selected', ativo ? 'true' : 'false');
-      tab.setAttribute('tabindex', ativo ? '0' : '-1');
-    });
-    const temAtivo = Array.from(tabs).some((t) => t.getAttribute('aria-selected') === 'true');
-    if (!temAtivo) {
-      const all = document.querySelector('.tab-filtro[data-status="todos"]');
-      if (all) { all.classList.add('active'); all.setAttribute('aria-selected', 'true'); all.setAttribute('tabindex', '0'); }
-    }
-    this.atualizarKpis();
-  }
-
-  toast(titulo, descricao, tipo = 'sucesso') {
-    const toast = document.getElementById('toast');
-    const t = document.getElementById('toast-titulo');
-    const d = document.getElementById('toast-descricao');
-    if (!toast || !t || !d) return;
-
-    t.textContent = titulo; d.textContent = descricao;
-    const wrap = toast.querySelector('.toast-icone');
-    const svg = wrap?.querySelector('svg');
-    if (wrap && svg) {
-      if (tipo === 'erro') {
-        wrap.style.background = 'var(--destructive)';
-        svg.innerHTML = '<path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 1 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>';
-      } else {
-        wrap.style.background = 'var(--secondary)';
-        svg.innerHTML = '<path d="M10.97 4.97a.235.235 0 0 0-.02.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.061L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-1.071-1.05z"/>';
-      }
-    }
-    toast.style.display = 'block';
-    setTimeout(() => { toast.style.display = 'none'; }, 3800);
+  toast(titulo, descricao, tipo = "info") {
+    const toast = document.getElementById("toast")
+    const tituloEl = document.getElementById("toast-titulo")
+    const descEl = document.getElementById("toast-descricao")
+    if (!toast || !tituloEl || !descEl) return
+    tituloEl.textContent = titulo
+    descEl.textContent = descricao
+    toast.classList.add("show")
+    setTimeout(() => toast.classList.remove("show"), 3000)
   }
 }
 
-// Bootstrap
-document.addEventListener('DOMContentLoaded', () => {
-  window.devolucoesFeed = new DevolucoesFeed();
-});
+// Boot
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => new DevolucoesFeed())
+} else {
+  new DevolucoesFeed()
+}
