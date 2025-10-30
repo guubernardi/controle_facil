@@ -9,6 +9,7 @@
 
 // Polyfill de fetch p/ Node < 18
 if (typeof fetch !== 'function') {
+  // carregamento dinâmico para evitar dependência dura em prod
   global.fetch = (...args) => import('node-fetch').then(m => m.default(...args));
 }
 
@@ -35,7 +36,7 @@ app.disable('x-powered-by');
 
 /** ================== Segurança base ================== */
 app.use(helmet({
-  contentSecurityPolicy: false, // não quebrar inline scripts do front atual
+  contentSecurityPolicy: false, // para não quebrar inline scripts do front atual
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   referrerPolicy: { policy: 'no-referrer' }
 }));
@@ -43,8 +44,8 @@ app.use(helmet({
 /** ================== CORS (apenas dev) ================== */
 if (process.env.NODE_ENV !== 'production') {
   app.use(cors({
-    origin: true,
-    credentials: true,
+    origin: true,           // ecoa origem do navegador
+    credentials: true,      // permite cookie de sessão
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders: ['Content-Type','Accept','Idempotency-Key','x-job-token']
   }));
@@ -88,13 +89,16 @@ app.use(session({
   cookie: sessCookie
 }));
 
+const dashboardRoutes = require('./routes/dashboard');
+
+app.use('/api/dashboard', dashboardRoutes);
+
 /** Static (raiz /public) */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-/* ------------------------------------------------------------
- *  OPEN ROUTES / Páginas e utilitários públicos
- * ------------------------------------------------------------ */
-app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+require('./routes/dashboard')(app);
+
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 /** Aliases para documentação estática */
 app.get('/docs', (_req, res) => {
@@ -111,7 +115,7 @@ app.get('/', (req, res) => {
   return res.redirect('/login.html');
 });
 
-/** SSE (antes do patch de JSON para /api) */
+/** SSE (antes do middleware que toca Content-Type) */
 try {
   const events = require('./events');
   if (typeof events?.sse === 'function') {
@@ -164,7 +168,7 @@ const loginLimiter = rateLimit({
 });
 app.use('/api/auth/login', loginLimiter);
 
-/** ========== Rotas de autenticação gerais (ABERTAS) ========== */
+/** ========== Rotas de autenticação gerais ========== */
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
@@ -173,6 +177,7 @@ app.get('/api/auth/session', (req, res) => {
   const u = req.session?.user || null;
   res.json(u ? { id: u.id, nome: u.nome, email: u.email, roles: u.roles || [] } : null);
 });
+// Compat com requisito: /api/auth/me
 app.get('/api/auth/me', (req, res) => {
   const u = req.session?.user || null;
   if (!u) return res.status(401).json({ error: 'unauthorized' });
@@ -202,6 +207,9 @@ app.use('/api', (req, res, next) => {
   return res.status(401).json({ error: 'Não autorizado' });
 });
 
+/** Compat: front antigo que POSTava em /login */
+app.post('/login', (_req, res) => res.redirect(307, '/api/auth/login'));
+
 /** --------- MULTI-TENANT (RLS) --------- */
 try {
   const tenantMw = require('./middleware/tenant-mw');
@@ -220,6 +228,28 @@ try {
   }
 } catch (e) {
   console.warn('[BOOT] RBAC middleware não encontrado (./middlewares/auth):', e?.message || e);
+}
+
+/** --------- Helpers --------- */
+const qOf = (req) => (req?.q || query);
+
+function safeParseJson(s) {
+  if (s == null) return null;
+  if (typeof s === 'object') return s;
+  try { return JSON.parse(String(s)); } catch { return null; }
+}
+
+async function tableHasColumns(table, columns, req) {
+  const q = qOf(req);
+  const { rows } = await q(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {};
+  for (const c of columns) out[c] = set.has(c);
+  return out;
 }
 
 /** --------- Fallback de Tenant (DEV/seguro) --------- */
@@ -243,7 +273,7 @@ app.use('/api', (req, _res, next) => {
 });
 
 /* ===========================
- *  VARS obrigatórias (avisos)
+ *  HELPERS / UTIL (env checks)
  * =========================== */
 [
   'BLING_AUTHORIZE_URL',
@@ -261,17 +291,6 @@ app.use('/api', (req, _res, next) => {
 ].forEach(k => {
   if (!process.env[k]) console.warn(`[WARN] Variável de ambiente ausente: ${k}`);
 });
-
-/* ------------------------------------------------------------
- *  ROTAS /api PROTEGIDAS (abaixo do guard + tenant + RBAC)
- * ------------------------------------------------------------ */
-
-/** ===== Dashboard (AGORA no lugar certo e uma vez só) ===== */
-app.use('/api/dashboard', require('./routes/dashboard'));
-
-/** Helpers / util */
-const qOf = (req) => (req?.q || query);
-function safeParseJson(s) { if (s == null) return null; if (typeof s === 'object') return s; try { return JSON.parse(String(s)); } catch { return null; } }
 
 /** addReturnEvent (idempotente) — respeita RLS se receber req.q */
 async function addReturnEvent(args = {}, req) {
@@ -427,6 +446,7 @@ try {
 try {
   const registerMlEnrich = require('./routes/ml-enrich');
   if (typeof registerMlEnrich === 'function') {
+    // suporta assinatura opcional (app, { addReturnEvent })
     if (registerMlEnrich.length >= 2) registerMlEnrich(app, { addReturnEvent });
     else registerMlEnrich(app);
     console.log('[BOOT] Rota ML Enrich registrada (/api/ml/returns/:id/enrich)');
@@ -435,7 +455,7 @@ try {
   console.warn('[BOOT] ML Enrich não carregado (opcional):', e?.message || e);
 }
 
-/* ========= ML – Chat/Returns/Reviews (opcional) ========= */
+/* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
 try {
   const mlChatRoutes = require('./routes/ml-chat');
   if (mlChatRoutes) {
@@ -477,11 +497,13 @@ try {
 }
 
 /* ------------------------------------------------------------
- *  Healthchecks extras
+ *  Healthchecks
  * ------------------------------------------------------------ */
+app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 app.get('/api/db/ping', async (req, res) => {
   try {
-    const r = await qOf(req)('select now() as now');
+    const q = qOf(req);
+    const r = await q('select now() as now');
     res.json({ ok: true, now: r.rows[0].now });
   } catch (e) {
     console.error('DB PING ERRO:', e);
@@ -591,16 +613,11 @@ app.get('/api/returns/logs', async (req, res) => {
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const offset  = (pageNum - 1) * limit;
 
-    // tenta usar a view se existir
-    const { rows: cols } = await q(
-      `SELECT column_name FROM information_schema.columns
-       WHERE table_schema='public' AND table_name='v_return_cost_log'`
-    );
-    const hasView = new Set(cols.map(r => r.column_name)).has('return_id');
+    const hasViewCols = await tableHasColumns('v_return_cost_log', ['return_id','event_at','total'], req);
 
     let sqlItems, sqlCount, sqlSum, paramsItems, paramsCount;
 
-    if (hasView) {
+    if (hasViewCols.return_id) {
       const baseSql = `FROM public.v_return_cost_log ${whereSql}`;
       sqlItems = `SELECT * ${baseSql} ORDER BY ${col} ${dir} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
       sqlCount = `SELECT COUNT(*)::int AS count ${baseSql}`;
@@ -762,6 +779,9 @@ function setupMlAutoSync() {
 
   console.log(`[BOOT] ML AutoSync habilitado: intervalo=${intervalMs}ms, janela=${windowDays}d`);
 }
+
+app.use('/api/dashboard', require('./routes/dashboard'));
+
 
 /* ===========================
  *  ERROS NÃO TRATADOS
