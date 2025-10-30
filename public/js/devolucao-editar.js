@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML enrich + claim UI + receber no CD + inspeção + motivo canônico
+// /public/js/devolucao-editar.js — ML enrich + claim UI + receber no CD + inspeção + motivo canônico (com lookup de REASON)
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -71,8 +71,7 @@
     var vp = Number(d.valor_produto || 0);
     var vf = Number(d.valor_frete || 0);
     if (st.includes('rej') || st.includes('neg')) return 0;
-    // quando vem canônico (arrependimento_cliente) ou label antigo contendo 'cliente'
-    if (mot.includes('arrependimento') || mot.includes('cliente')) return 0;
+    if (mot.includes('arrependimento') || mot.includes('cliente')) return 0; // cliente se arrependeu => sem custo produto/frete
     if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
     return vp + vf;
   }
@@ -190,11 +189,9 @@
 
   function recalc(){
     var d = capture();
-    // Resumos no topo
     var eProd=$('ml-product-sum'), eFrete=$('ml-freight');
     if (eProd)  eProd.textContent  = moneyBRL(d.valor_produto);
     if (eFrete) eFrete.textContent = moneyBRL(d.valor_frete);
-    // Campo "Valor Total a Reembolsar"
     var eTotal = $('valor_total');
     if (eTotal) eTotal.value = moneyBRL(calcTotalByRules(d));
     updateSummary(Object.assign({}, current, d));
@@ -219,7 +216,7 @@
     'entrega atrasada': 'entrega_atrasada'
   };
 
-  // reason_key ML -> canônico (ampliado p/ arrependimento)
+  // reason_key / name ML -> canônico (inclui repentant_buyer)
   var REASONKEY_TO_CANON = {
     product_defective: 'produto_defeituoso',
     broken:            'produto_defeituoso',
@@ -229,7 +226,7 @@
     not_as_described:          'nao_corresponde',
     wrong_item:                'nao_corresponde',
 
-    // --- buyer remorse / changed mind ---
+    // buyer remorse / changed mind
     buyer_remorse:             'arrependimento_cliente',
     changed_mind:              'arrependimento_cliente',
     change_of_mind:            'arrependimento_cliente',
@@ -244,69 +241,119 @@
     not_needed_anymore:        'arrependimento_cliente',
     not_needed:                'arrependimento_cliente',
     unwanted:                  'arrependimento_cliente',
+    repentant_buyer:           'arrependimento_cliente',
 
     not_delivered:             'entrega_atrasada',
     shipment_delayed:          'entrega_atrasada'
   };
 
-  // reason_id / códigos genéricos -> canônico
+  // reason_id / códigos genéricos -> canônico (corrigido)
   function canonFromCode(code){
     var c = String(code||'').toUpperCase();
     if (!c) return null;
-    // códigos específicos que você já viu
+    // mapping específico que conhecemos de fato
     var SPEC = {
-      PDD9939: 'nao_corresponde',
+      PDD9939: 'arrependimento_cliente', // repentant_buyer (doc ML)
       PDD9904: 'produto_defeituoso',
       PDD9905: 'produto_danificado',
       PDD9906: 'arrependimento_cliente',
-      PDD9907: 'entrega_atrasada', // endereço errado do cliente geralmente vira reenvio/atraso
+      PDD9907: 'entrega_atrasada',
       PDD9944: 'produto_defeituoso'
     };
     if (SPEC[c]) return SPEC[c];
-    // famílias
-    if (c.startsWith('PDD')) return 'nao_corresponde'; // cuidado: mantemos fallback, mas PDD9906 já está acima
-    if (c === 'PNR') return 'entrega_atrasada';        // Produto Não Recebido
-    if (c === 'CS')  return 'arrependimento_cliente';  // Compra Cancelada
+    if (c === 'PNR') return 'entrega_atrasada';
+    if (c === 'CS')  return 'arrependimento_cliente';
+    // ⚠️ não forçamos mais todo PDD para 'nao_corresponde' — vamos tentar buscar a reason detalhada
     return null;
   }
 
-  // >>> Ampliado para cobrir "não quer mais", "no longer want", etc.
+  // texto livre -> canônico (incluído "não quer mais" / variantes)
   function canonFromText(text){
     var t = norm(text);
     if (!t) return null;
 
-    // ===== cliente (arrependimento) =====
-    if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|não\s*quero\s*mais|nao\s*precisa\s*mais|não\s*precisa\s*mais|no\s*longer\s*wants?|no\s*longer\s*need(?:ed)?|doesn.?t\s*want|dont\s*want|ya\s*no\s*lo\s*quiere(?:\s*mas|s)?|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse)/.test(t))
+    // cliente se arrependeu
+    if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|não\s*quero\s*mais|nao\s*precisa\s*mais|não\s*precisa\s*mais|no\s*longer\s*wants?|no\s*longer\s*need(?:ed)?|doesn.?t\s*want|dont\s*want|ya\s*no\s*lo\s*quiere(?:\s*mas)?|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant)/.test(t))
       return 'arrependimento_cliente';
-    // tamanho/ajuste
     if (/(nao\s*serv|não\s*serv|nao\s*coube|não\s*coube|tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(t))
       return 'arrependimento_cliente';
 
-    // ===== produto defeito =====
-    if (/(defeit|avari|quebrad|danific.*(nao|não)?\s*foi\s*transporte)?|defective|broken|quality/.test(t))
+    // defeito / não funciona
+    if (/(defeit|quality|not\s*working|doesn.?t\s*work|broken|mal\s*funciona|quebrad)/.test(t))
       return 'produto_defeituoso';
 
-    // ===== avaria transporte =====
-    if (/(transporte|logistic|logistica|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
+    // avaria transporte
+    if (/(danific|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
       return 'produto_danificado';
 
-    // ===== pedido errado / não corresponde =====
-    if (/(pedido\s*(incorret|errad)|produto\s*(errad|trocad)|sku\s*incorret|wrong\s*item|different\s*from|not\s*as\s*described|nao\s*correspond|não\s*correspond|publication)/.test(t))
+    // não corresponde / item errado / incompleto
+    if (/(diferent|nao\s*correspond|não\s*correspond|not\s*as\s*described|wrong\s*item|incomplete|faltando)/.test(t))
       return 'nao_corresponde';
 
-    // ===== atraso / não entregue =====
-    if (/(nao\s*entreg|não\s*entreg|atras|not\s*delivered|delayed|shipment)/.test(t))
+    // atraso / não entregue
+    if (/(nao\s*entreg|não\s*entreg|delayed|not\s*delivered|shipment\s*delay)/.test(t))
       return 'entrega_atrasada';
 
-    // fallback por dicionário
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
     return null;
+  }
+
+  // ===== Lookup detalhado de REASON (by reason_id) =====
+  function canonFromReasonDetails(info){
+    try{
+      var name = String((info && info.name) || '').toLowerCase();
+      var detail = String((info && info.detail) || '').toLowerCase();
+      var tri = ((info && info.settings && info.settings.rules_engine_triage) || []).map(function(s){return String(s).toLowerCase();});
+
+      // triagem oficial primeiro
+      if (tri.includes('repentant')) return 'arrependimento_cliente';
+      if (tri.includes('defective') || tri.includes('not_working')) return 'produto_defeituoso';
+      if (tri.includes('different') || tri.includes('incomplete')) return 'nao_corresponde';
+
+      // nome oficial
+      if (REASONKEY_TO_CANON[name]) return REASONKEY_TO_CANON[name];
+
+      // texto livre (name + detail)
+      return canonFromText(name + ' ' + detail);
+    }catch(_){ return null; }
+  }
+
+  function fetchJsonOk(url){
+    return fetch(url, { headers: { 'Accept':'application/json' } })
+      .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)); });
+  }
+
+  // tenta várias rotas do backend (qualquer uma que você já tenha proxied)
+  function fetchReasonCanonById(reasonId){
+    if (!reasonId) return Promise.resolve(null);
+    var rid = encodeURIComponent(reasonId);
+    var candidates = [
+      '/api/ml/claims/reasons/' + rid,
+      '/api/ml/reasons/' + rid,
+      '/api/ml/claim-reasons/' + rid
+    ];
+    var idx = 0;
+    function next(){
+      if (idx >= candidates.length) return Promise.resolve(null);
+      var url = candidates[idx++]; 
+      return fetchJsonOk(url).then(function(info){
+        // alguns proxies retornam {data:{...}}
+        var obj = (info && (info.data || info)) || info;
+        var canon = canonFromReasonDetails(obj);
+        return (canon ? canon : next());
+      }).catch(next);
+    }
+    return next();
   }
 
   function setMotivoCanon(canon, lock){
     var sel = getMotivoSelect(); if (!sel || !canon) return false;
     for (var i=0;i<sel.options.length;i++){
-      if (sel.options[i].value === canon) { sel.value = canon; sel.dispatchEvent(new Event('change')); if (lock) lockMotivo(true,'(ML)'); return true; }
+      if (sel.options[i].value === canon) {
+        sel.value = canon; sel.dispatchEvent(new Event('change'));
+        if (lock) lockMotivo(true,'(ML)');
+        return true;
+      }
     }
     return false;
   }
@@ -333,26 +380,22 @@
   // Extrai canônico do payload (reason_key/id/name + fallbacks)
   function reasonCanonFromPayload(root){
     if (!root || typeof root !== 'object') return null;
-
-    // 1) direct keys
     if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
-    if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
     if (root.reason_name) { var t = canonFromText(root.reason_name); if (t) return t; }
+    if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
 
-    // 2) nested claim
     var cl = root.claim || root.ml_claim || null;
     if (cl){
       if (cl.reason_key && REASONKEY_TO_CANON[cl.reason_key]) return REASONKEY_TO_CANON[cl.reason_key];
-      if (cl.reason_id) { var c2 = canonFromCode(cl.reason_id); if (c2) return c2; }
       if (cl.reason_name) { var t2 = canonFromText(cl.reason_name); if (t2) return t2; }
+      if (cl.reason_id) { var c2 = canonFromCode(cl.reason_id); if (c2) return c2; }
       if (cl.reason && (cl.reason.key || cl.reason.id || cl.reason.name)){
         if (cl.reason.key && REASONKEY_TO_CANON[cl.reason.key]) return REASONKEY_TO_CANON[cl.reason.key];
-        if (cl.reason.id) { var c3 = canonFromCode(cl.reason.id); if (c3) return c3; }
         if (cl.reason.name) { var t3 = canonFromText(cl.reason.name); if (t3) return t3; }
+        if (cl.reason.id) { var c3 = canonFromCode(cl.reason.id); if (c3) return c3; }
       }
     }
 
-    // 3) general text/code fallbacks
     var any = root.reason || root.substatus || root.sub_status || root.code || null;
     if (any){
       var c4 = canonFromCode(any); if (c4) return c4;
@@ -375,7 +418,6 @@
     if ($('valor_produto'))    $('valor_produto').value    = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
     if ($('valor_frete'))      $('valor_frete').value      = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
 
-    // IDs extras (se o backend mandar no objeto bruto)
     if ($('order_id')) {
       var rawOrderId = firstNonEmpty(d.raw && d.raw.order_id, d.raw && d.raw.id_venda, d.id_venda);
       $('order_id').value = rawOrderId || '';
@@ -405,10 +447,7 @@
     setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
 
-    // Preencher cabeçalho ML básico (se já houver)
     fillMlSummaryFromCurrent();
-
-    // Preencher claim se estiver embutida (raw.claim)
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);
 
     updateSummary(d); recalc();
@@ -430,7 +469,6 @@
       $('ml-date-display').textContent = dt ? new Date(dt).toLocaleDateString('pt-BR') : '—';
     }
 
-    // Valores
     var prodSum = null, freight = null;
     if (amounts) {
       if ('product' in amounts) prodSum = toNum(amounts.product);
@@ -443,13 +481,9 @@
     if ($('ml-product-sum')) $('ml-product-sum').textContent = prodSum != null ? moneyBRL(prodSum) : moneyBRL(current.valor_produto || 0);
     if ($('ml-freight'))     $('ml-freight').textContent     = freight != null ? moneyBRL(freight) : moneyBRL(current.valor_frete || 0);
 
-    // Link "Abrir no ML" — seguro (placeholder)
     var claimId = (payload && payload.sources && payload.sources.claim_id) || ($('ml_claim_id') && $('ml_claim_id').value) || null;
     var a = $('claim-open-link');
-    if (a) {
-      a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID');
-      a.href = '#';
-    }
+    if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
   }
   function fillMlSummaryFromCurrent(){
     fillMlSummary({ order: current.raw && (current.raw.order || current.raw.order_info) || null,
@@ -481,7 +515,6 @@
     setTxt('claim-parent-id',  claim.parent_id);
     setTxt('claim-has-return', claim.return ? 'sim' : 'não');
 
-    // players
     clearList('claim-players');
     var players = Array.isArray(claim.players) ? claim.players : [];
     players.forEach(function(p){
@@ -491,7 +524,6 @@
       pushLi('claim-players', `<b>${role}</b> • ${type} • #${uid}`);
     });
 
-    // actions
     clearList('claim-actions');
     var actions = Array.isArray(claim.available_actions) ? claim.available_actions : [];
     actions.forEach(function(a){
@@ -499,7 +531,6 @@
       pushLi('claim-actions', `<code>${a.action || '-'}</code>${a.mandatory ? ' (obrigatória)' : ''}${due}`);
     });
 
-    // resolução (resolution)
     var res = claim.resolution || {};
     setTxt('claim-res-reason',    res.reason || res.reason_id || res.reason_name);
     setTxt('claim-res-benefited', res.benefited);
@@ -507,16 +538,35 @@
     setTxt('claim-res-applied',   String(res.applied_coverage ?? '—'));
     setTxt('claim-res-date',      res.data_created ? new Date(res.data_created).toLocaleString('pt-BR') : '—');
 
-    // relacionadas
     clearList('claim-related');
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
-    related.forEach(function(r){
-      pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`);
-    });
+    related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
 
-    // Melhorar select do motivo com base na claim
-    var canon = reasonCanonFromPayload({ claim: claim });
-    if (canon) setMotivoCanon(canon, true);
+    // Se houver reason_id e ainda não conseguimos classificar, busca /reasons/:id
+    var prefer =
+      reasonCanonFromPayload({ claim: claim }) ||
+      canonFromCode(claim.reason_id);
+
+    if (prefer) {
+      setMotivoCanon(prefer, true);
+    } else {
+      var rid = claim.reason_id || (claim.reason && claim.reason.id) || null;
+      if (rid) {
+        fetchReasonCanonById(rid).then(function(canon){
+          if (canon && setMotivoCanon(canon, true)) {
+            // salva canônico
+            var id = current.id || returnId;
+            if (id) {
+              fetch('/api/returns/' + encodeURIComponent(id), {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-reason-lookup' })
+              }).catch(function(){});
+            }
+          }
+        }).catch(function(){});
+      }
+    }
   }
 
   function tryFetchClaimDetails(claimId){
@@ -585,7 +635,6 @@
     .then(function(){ disableHead(false); });
   }
 
-  // >>>>>>> SUPORTE a #dlg-recebido (rcd-*) e #dlg-receber (rcv-*)
   function openReceiveDialog(){
     var dlg     = $('dlg-recebido') || $('dlg-receber');
     if (dlg && (dlg.showModal || dlg.removeAttribute)) {
@@ -623,11 +672,9 @@
       setTimeout(function(){ inputNome && inputNome.focus(); }, 0);
       return;
     }
-
     var nome = prompt('Quem recebeu no CD? (nome/assinatura)');
     if (nome !== null) runReceive(String(nome).trim());
   }
-  // <<<<<<<
 
   // ===== Inspeção (aprovar/reprovar) =====
   function openInspectDialog(targetStatus){
@@ -645,14 +692,8 @@
       performInspect(targetStatus, note);
       cleanup();
     }
-    function cancel(){
-      if (dlg.close) dlg.close();
-      cleanup();
-    }
-    function cleanup(){
-      if (form) form.removeEventListener('submit', submit);
-      if (btnCancel) btnCancel.removeEventListener('click', cancel);
-    }
+    function cancel(){ if (dlg.close) dlg.close(); cleanup(); }
+    function cleanup(){ if (form) form.removeEventListener('submit', submit); if (btnCancel) btnCancel.removeEventListener('click', cancel); }
 
     if (form) form.addEventListener('submit', submit);
     if (btnCancel) btnCancel.addEventListener('click', cancel);
@@ -660,7 +701,6 @@
   }
 
   function performInspectFallback(targetStatus, note){
-    // PATCH simples no retorno caso não exista rota dedicada
     var id = current.id || returnId;
     if (!id) return;
     var log = (targetStatus === 'aprovado') ? 'aprovado_cd' : 'reprovado_cd';
@@ -678,28 +718,17 @@
   }
 
   function performInspect(targetStatus, note){
-    var id = current.id || returnId;
-    if (!id) return;
-
-    // tenta rota dedicada primeiro
+    var id = current.id || returnId; if (!id) return;
     disableHead(true);
     return fetch('/api/returns/' + encodeURIComponent(id) + '/cd/inspect', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        result: (targetStatus === 'aprovado' ? 'approve' : 'reject'),
-        note: note || '',
-        updated_by: 'frontend-inspecao'
-      })
+      body: JSON.stringify({ result: (targetStatus === 'aprovado' ? 'approve' : 'reject'), note: note || '', updated_by: 'frontend-inspecao' })
     })
-    .then(function(r){
-      if (r.ok) return;
-      // fallback silencioso
-      return performInspectFallback(targetStatus, note);
-    })
+    .then(function(r){ if (r.ok) return; return performInspectFallback(targetStatus, note); })
     .then(function(){ return reloadCurrent(); })
     .then(function(){ toast('Inspeção registrada.', 'success'); return refreshTimeline(id); })
-    .catch(function(e){ /* já tratamos no fallback */ })
+    .catch(function(){})
     .then(function(){ disableHead(false); });
   }
 
@@ -753,10 +782,8 @@
       .then(function (raw) {
         var j = raw && (raw.data || raw) || {};
 
-        // ---- ML Summary UI ----
         try { fillMlSummary(j); } catch(_){}
 
-        // ---- Valores (produto/frete) ----
         function numFrom(obj, keys){
           if (!obj) return null;
           for (var i = 0; i < keys.length; i++){
@@ -818,24 +845,40 @@
           canonFromCode(j.reason_code) ||
           canonFromText(j.reason_label);
 
-        if (canon && setMotivoCanon(canon, true)) {
-          patch.tipo_reclamacao = canon; // persistir canônico
-        } else if (j.claim) {
-          var canon2 = reasonCanonFromPayload({ claim: j.claim });
-          if (canon2 && setMotivoCanon(canon2, true)) patch.tipo_reclamacao = canon2;
+        var persistPatch = Promise.resolve();
+
+        function persistTipo(c){
+          if (!c) return Promise.resolve();
+          patch.tipo_reclamacao = c;
+          setMotivoCanon(c, true);
+          var idp = current.id || returnId;
+          if (!idp) return Promise.resolve();
+          return fetch('/api/returns/' + encodeURIComponent(idp), {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tipo_reclamacao: c, updated_by: 'frontend-auto-enrich' })
+          }).catch(function(){});
         }
 
-        // ---- Log sugerido (pré/transporte/recebido) ----
+        if (canon) {
+          persistPatch = persistTipo(canon);
+        } else {
+          // tenta pelo reason_id via /claims/reasons/:id
+          var rid =
+            j.reason_id ||
+            (j.claim && (j.claim.reason_id || (j.claim.reason && j.claim.reason.id))) ||
+            null;
+          if (rid) persistPatch = fetchReasonCanonById(rid).then(persistTipo);
+        }
+
+        // ---- Log sugerido ----
         var logHint = j.log_status_suggested || null;
         if (logHint) {
           var lsNow = String(current.log_status || '').toLowerCase();
           if (!lsNow || lsNow === 'nao_recebido' || lsNow === 'não_recebido') {
-            current.log_status = logHint;
-            setLogPill(logHint);
+            current.log_status = logHint; setLogPill(logHint);
           }
         }
 
-        // Reflete na UI
         if (Object.keys(patch).length) {
           if (patch.id_venda && $('id_venda')) $('id_venda').value = patch.id_venda;
           if (patch.cliente_nome && $('cliente_nome')) $('cliente_nome').value = patch.cliente_nome;
@@ -846,33 +889,24 @@
           recalc();
         }
 
-        // ---- Evento + PATCH (inclui valores p/ não sumirem após reload) ----
         var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
         if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
 
-        var persistPatch = Promise.resolve();
-        if (Object.keys(patch).length || Object.keys(amountsPatch).length || logHint) {
-          var body = Object.assign(
-            {},
-            patch,
-            amountsPatch,
-            (logHint ? { log_status: current.log_status } : {}),
-            { updated_by: 'frontend-auto-enrich' }
-          );
-          persistPatch = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+        var persistMoney = Promise.resolve();
+        if (Object.keys(amountsPatch).length || logHint) {
+          var body = Object.assign({}, amountsPatch, (logHint ? { log_status: current.log_status } : {}), { updated_by: 'frontend-auto-enrich' });
+          persistMoney = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).catch(function(){});
         }
 
-        // Tentar preencher a claim se backend devolveu
         if (j.claim) fillClaimUI(j.claim);
-        // Ou tentar por sources.claim_id
         var claimed = (j.sources && j.sources.claim_id) || null;
         if (!j.claim && claimed) tryFetchClaimDetails(claimed);
 
-        return Promise.all([persistEvent, persistPatch]);
+        return Promise.all([persistEvent, persistMoney, persistPatch]);
       })
       .then(function(){ return reloadCurrent(); })
       .catch(function (e) {
@@ -1006,7 +1040,6 @@
           var rqA2=$('rq-aprovar'), rqR2=$('rq-reprovar'); if (rqA2) rqA2.setAttribute('disabled','true'); if (rqR2) rqR2.setAttribute('disabled','true');
         }
 
-        // Se veio claim ID mas não a claim, tenta buscar
         var cid = ($('ml_claim_id') && $('ml_claim_id').value) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
         if (cid && !(current.raw && current.raw.claim)) tryFetchClaimDetails(cid);
 
