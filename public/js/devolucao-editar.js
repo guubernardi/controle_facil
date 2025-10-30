@@ -1,4 +1,3 @@
-// /public/js/devolucao-editar.js — ML enrich + claim UI + receber no CD + inspeção + motivo canônico (com lookup de REASON)
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -214,14 +213,10 @@
     'nao corresponde a descricao': 'nao_corresponde',
     'não corresponde à descrição': 'nao_corresponde',
     'arrependimento do cliente': 'arrependimento_cliente',
-    'entrega atrasada': 'entrega_atrasada',
-
-    // aliases explícitos (frase do ML)
-    'o produto recebido nao e da cor tamanho ou modelo escolhido': 'nao_corresponde',
-    'produto recebido diferente de cor tamanho ou modelo escolhido': 'nao_corresponde'
+    'entrega atrasada': 'entrega_atrasada'
   };
 
-  // reason_key / name ML -> canônico (inclui not_working e “different_from_*” e cor/tamanho/modelo)
+  // reason_key / name ML -> canônico (inclui not_working / different_* / missing_parts)
   var REASONKEY_TO_CANON = {
     product_defective:            'produto_defeituoso',
     not_working:                  'produto_defeituoso',
@@ -234,14 +229,10 @@
     different_from_listing:       'nao_corresponde',
     different_from_ad:            'nao_corresponde',
     different_item:               'nao_corresponde',
-
-    // variações de cor/tamanho/modelo
-    wrong_color:                  'nao_corresponde',
-    wrong_size:                   'nao_corresponde',
-    wrong_model:                  'nao_corresponde',
-    color_mismatch:               'nao_corresponde',
-    size_mismatch:                'nao_corresponde',
-    model_mismatch:               'nao_corresponde',
+    missing_parts:                'nao_corresponde',
+    parts_missing:                'nao_corresponde',
+    incomplete:                   'nao_corresponde',
+    incomplete_product:           'nao_corresponde',
 
     // buyer remorse / changed mind
     buyer_remorse:                'arrependimento_cliente',
@@ -273,6 +264,8 @@
     different_from_publication:   'nao_corresponde',
     not_as_described:             'nao_corresponde',
     wrong_item:                   'nao_corresponde',
+    missing_parts:                'nao_corresponde',
+    incomplete:                   'nao_corresponde',
     undelivered:                  'entrega_atrasada',
     not_delivered:                'entrega_atrasada'
   };
@@ -295,7 +288,7 @@
     return null;
   }
 
-  // texto livre -> canônico (inclui anunciado/publicado/descrição/errado/trocado + cor/tamanho/modelo)
+  // texto livre -> canônico (inclui anunciado/publicado/descrição/errado/trocado/cor-tamanho-modelo/partes)
   function canonFromText(text){
     var t = norm(text);
     if (!t) return null;
@@ -314,15 +307,8 @@
     if (/(danific|avariad|amassad|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
       return 'produto_danificado';
 
-    // não corresponde / item errado / trocado / anunciado ≠ recebido / cor-tamanho-modelo
-    if (
-      /(diferent[ea]|anunciad|publicad|descri[cç][aã]o|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|trocad|produto\s*errad|item\s*errad|modelo\s*diferent|tamanho\s*diferent|cor\s*diferent|incomplete|faltando)/.test(t) ||
-      /(cor|color).*(tamanho|size|modelo|model)/.test(t) ||
-      /(tamanho|size).*(cor|color|modelo|model)/.test(t) ||
-      /(modelo|model).*(cor|color|tamanho|size)/.test(t) ||
-      /cor\s*tamanho\s*modelo/.test(t) ||
-      /cor\s*[,/ ]\s*tamanho\s*[,/ ]\s*modelo/.test(t)
-    )
+    // não corresponde / item errado / trocado / anunciado ≠ recebido / cor/tamanho/modelo escolhidos / partes/acessórios faltando
+    if (/(diferent[ea]|anunciad|publicad|descri[cç][aã]o|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|trocad|produto\s*errad|item\s*errad|modelo\s*diferent|tamanho\s*diferent|cor\s*diferent|nao\s*e\s*(?:da\s*)?(?:cor|tamanho|modelo)(?:\s*escolhido)?|incomplet[oa]|falt(?:a|am)\s*(?:pecas|pe[cç]as|partes|acess[oó]rios)|sem\s*(?:pecas|pe[cç]as|partes|acess[oó]rios)|faltando)/.test(t))
       return 'nao_corresponde';
 
     // atraso / não entregue
@@ -412,15 +398,32 @@
     }
   }
 
-  // Extrai canônico do payload (reason_key/id/name + fallbacks)
+  // Extrai canônico do payload (reason_key/id/name + fallbacks + "Problema da venda")
   function reasonCanonFromPayload(root){
     if (!root || typeof root !== 'object') return null;
+
+    // helpers para varrer campos de "problema da venda"
+    function scanProblem(obj){
+      if (!obj || typeof obj !== 'object') return null;
+      var cand = obj.problem || obj.problem_title || obj.problem_description || obj.problem_detail ||
+                 obj.sale_problem || obj.issue || obj.issue_title || obj.issue_description || obj.detail;
+      if (cand){ var t = canonFromText(cand); if (t) return t; }
+      return null;
+    }
 
     if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
     if (root.reason_name && REASONNAME_TO_CANON[root.reason_name]) return REASONNAME_TO_CANON[root.reason_name];
     if (root.reason_name) { var t = canonFromText(root.reason_name); if (t) return t; }
     if (root.reason_detail) { var td = canonFromText(root.reason_detail); if (td) return td; }
     if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
+
+    // problema da venda no nível raiz
+    var pr = scanProblem(root); if (pr) return pr;
+
+    // dentro de order / order_info
+    var ord = root.order || root.order_info || null;
+    var pr2 = scanProblem(ord);
+    if (pr2) return pr2;
 
     var cl = root.claim || root.ml_claim || null;
     if (cl){
@@ -436,6 +439,7 @@
         if (cl.reason.detail){ var t3 = canonFromText(cl.reason.detail); if (t3) return t3; }
         if (cl.reason.name) { var t4 = canonFromText(cl.reason.name);   if (t4) return t4; }
       }
+      var pr3 = scanProblem(cl); if (pr3) return pr3;
     }
 
     var any = root.reason || root.substatus || root.sub_status || root.code || root.detail || null;
@@ -913,6 +917,22 @@
             (j.claim && (j.claim.reason_id || (j.claim.reason && j.claim.reason.id))) ||
             null;
           if (rid) persistPatch = fetchReasonCanonById(rid).then(persistTipo);
+          else {
+            // último fallback: varrer mais campos de "problema da venda"
+            var fromProblems = (function(){
+              var texts = [];
+              function push(v){ if(v) texts.push(String(v)); }
+              push(j.problem); push(j.problem_title); push(j.problem_description); push(j.problem_detail);
+              if (j.order || j.order_info){
+                var o = j.order || j.order_info;
+                push(o.problem); push(o.problem_title); push(o.problem_description); push(o.problem_detail);
+              }
+              var best = null;
+              texts.some(function(tx){ var c = canonFromText(tx); if (c){ best=c; return true; } return false; });
+              return best;
+            })();
+            if (fromProblems) persistPatch = persistTipo(fromProblems);
+          }
         }
 
         // ---- Log sugerido ----
@@ -1096,3 +1116,4 @@
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load); else load();
 })();
+
