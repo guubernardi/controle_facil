@@ -214,10 +214,14 @@
     'nao corresponde a descricao': 'nao_corresponde',
     'não corresponde à descrição': 'nao_corresponde',
     'arrependimento do cliente': 'arrependimento_cliente',
-    'entrega atrasada': 'entrega_atrasada'
+    'entrega atrasada': 'entrega_atrasada',
+
+    // aliases explícitos (frase do ML)
+    'o produto recebido nao e da cor tamanho ou modelo escolhido': 'nao_corresponde',
+    'produto recebido diferente de cor tamanho ou modelo escolhido': 'nao_corresponde'
   };
 
-  // reason_key / name ML -> canônico (inclui not_working e “different_from_*”)
+  // reason_key / name ML -> canônico (inclui not_working e “different_from_*” e cor/tamanho/modelo)
   var REASONKEY_TO_CANON = {
     product_defective:            'produto_defeituoso',
     not_working:                  'produto_defeituoso',
@@ -230,6 +234,14 @@
     different_from_listing:       'nao_corresponde',
     different_from_ad:            'nao_corresponde',
     different_item:               'nao_corresponde',
+
+    // variações de cor/tamanho/modelo
+    wrong_color:                  'nao_corresponde',
+    wrong_size:                   'nao_corresponde',
+    wrong_model:                  'nao_corresponde',
+    color_mismatch:               'nao_corresponde',
+    size_mismatch:                'nao_corresponde',
+    model_mismatch:               'nao_corresponde',
 
     // buyer remorse / changed mind
     buyer_remorse:                'arrependimento_cliente',
@@ -283,7 +295,7 @@
     return null;
   }
 
-  // texto livre -> canônico (inclui anunciado/publicado/descrição/errado/trocado)
+  // texto livre -> canônico (inclui anunciado/publicado/descrição/errado/trocado + cor/tamanho/modelo)
   function canonFromText(text){
     var t = norm(text);
     if (!t) return null;
@@ -302,8 +314,15 @@
     if (/(danific|avariad|amassad|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
       return 'produto_danificado';
 
-    // não corresponde / item errado / trocado / anunciado ≠ recebido
-    if (/(diferent[ea]|anunciad|publicad|descri[cç][aã]o|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|trocad|produto\s*errad|item\s*errad|modelo\s*diferent|tamanho\s*diferent|cor\s*diferent|incomplete|faltando)/.test(t))
+    // não corresponde / item errado / trocado / anunciado ≠ recebido / cor-tamanho-modelo
+    if (
+      /(diferent[ea]|anunciad|publicad|descri[cç][aã]o|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|trocad|produto\s*errad|item\s*errad|modelo\s*diferent|tamanho\s*diferent|cor\s*diferent|incomplete|faltando)/.test(t) ||
+      /(cor|color).*(tamanho|size|modelo|model)/.test(t) ||
+      /(tamanho|size).*(cor|color|modelo|model)/.test(t) ||
+      /(modelo|model).*(cor|color|tamanho|size)/.test(t) ||
+      /cor\s*tamanho\s*modelo/.test(t) ||
+      /cor\s*[,/ ]\s*tamanho\s*[,/ ]\s*modelo/.test(t)
+    )
       return 'nao_corresponde';
 
     // atraso / não entregue
