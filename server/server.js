@@ -89,14 +89,11 @@ app.use(session({
   cookie: sessCookie
 }));
 
-const dashboardRoutes = require('./routes/dashboard');
-
-app.use('/api/dashboard', dashboardRoutes);
 
 /** Static (raiz /public) */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-require('./routes/dashboard')(app);
+// dashboard routes are mounted later once (see bottom of this file)
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
