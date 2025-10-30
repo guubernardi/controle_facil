@@ -443,18 +443,23 @@ async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) 
   let data = null;
   try {
     const r = await fetch(`/api/dashboard?${params.toString()}`, { signal: currentFetch.signal });
-    if (!r.ok) throw new Error('Falha ao carregar dashboard');
-    data = await r.json();
-  } catch (e) {
-    if (e.name !== 'AbortError') {
-      console.warn('Falha ao buscar /api/dashboard, usando mock local.', e);
-      data = mockDashboardData();
+    if (r.ok) {
+      data = await r.json();
     } else {
-      return; // requisição abortada, não continua
+      // se /api/dashboard não existir, caímos para montar a partir de /api/returns
+      console.warn('/api/dashboard retornou', r.status, '— tentando compilar dados a partir de /api/returns');
+      data = await buildDashboardFromReturns({ from, to, limitTop });
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') return; // requisição abortada
+    console.warn('Erro ao buscar /api/dashboard, tentando /api/returns:', e);
+    try {
+      data = await buildDashboardFromReturns({ from, to, limitTop });
+    } catch (ee) {
+      console.error('Falha ao compilar dashboard a partir de /api/returns:', ee);
+      data = mockDashboardData();
     }
   }
-
-  if (!data || Object.keys(data).length === 0) data = mockDashboardData();
 
   // KPIs (mantém as mesmas chaves que a API envia)
   document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = data.totals?.total ?? 0);
@@ -462,9 +467,109 @@ async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) 
   document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = data.totals?.aprovadas ?? 0);
   document.getElementById('dash-rej')   && (document.getElementById('dash-rej').textContent   = data.totals?.rejeitadas ?? 0);
 
-  preencherRanking(data.top_items || []);
-  preencherResumo(data.totals || {});
-  updateCharts(data);
+  // compatibiliza chaves (API custom ou construída localmente)
+  const topItems = data.top_items || data.ranking || data.top_items_local || [];
+  const totals = data.totals || data.summary || data.totals_local || {};
+  const chartsData = {
+    daily: data.daily || data.by_day || data.daily_local || [],
+    monthly: data.monthly || data.by_month || data.monthly_local || [],
+    status: data.status || data.status_local || {},
+  };
+
+  preencherRanking(topItems);
+  preencherResumo(totals);
+  updateCharts(chartsData);
+}
+
+/* ------------------------------
+   Constroi dados do dashboard a partir de /api/returns
+--------------------------------*/
+async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 } = {}) {
+  // pede itens (tamanho grande para o período)
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  params.set('pageSize', '5000');
+  params.set('page', '1');
+
+  const url = `/api/returns/search?${params.toString()}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Falha ao buscar devoluções: ' + r.status);
+  const j = await r.json();
+  const items = Array.isArray(j.items) ? j.items : (j.items || []);
+
+  // helper: regra de prejuízo — replica calcTotalByRules do front de devolucao-editar
+  function calcPrejuizoFor(it) {
+    const st = String(it.status || '').toLowerCase();
+    const mot = String(it.tipo_reclamacao || it.motivo || it.reclamacao || '').toLowerCase();
+    const lgs = String(it.log_status || '').toLowerCase();
+    const vp = Number(it.valor_produto || it.valor || 0) || 0;
+    const vf = Number(it.valor_frete || 0) || 0;
+    if (st.includes('rej') || st.includes('neg')) return 0;
+    if (mot.includes('cliente') || mot.includes('arrepend')) return 0;
+    if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
+    return vp + vf;
+  }
+
+  // totals e agrupamentos
+  const totals = { total: 0, pendentes: 0, aprovadas: 0, rejeitadas: 0, prejuizo_total: 0 };
+  const dailyMap = {}; // YYYY-MM-DD -> sum prejuizo
+  const monthlyMap = {}; // YYYY-MM -> sum
+  const statusMap = {};
+  const skuMap = {}; // sku -> {sku, devolucoes, prejuizo, motivo_count}
+
+  for (const it of items) {
+    totals.total += 1;
+    const st = String(it.status || '').toLowerCase();
+    if (st.includes('pend')) totals.pendentes += 1;
+    else if (st.includes('aprov')) totals.aprovadas += 1;
+    else if (st.includes('rej') || st.includes('neg')) totals.rejeitadas += 1;
+    else { /* outros não incrementam */ }
+
+    const preju = calcPrejuizoFor(it);
+    totals.prejuizo_total += preju;
+
+    // data (criado em)
+    const created = it.created_at || it.data_compra || it.created || null;
+    let day = null;
+    try { if (created) day = new Date(created).toISOString().slice(0,10); } catch(_) { day = null; }
+    if (!day) {
+      // fallback para data_compra se existente
+      if (it.data_compra) day = String(it.data_compra).slice(0,10);
+    }
+    if (day) {
+      dailyMap[day] = (dailyMap[day] || 0) + preju;
+      const ym = day.slice(0,7);
+      monthlyMap[ym] = (monthlyMap[ym] || 0) + preju;
+    }
+
+    // status
+    const keyStatus = String(it.status || it.log_status || 'outros').toLowerCase();
+    statusMap[keyStatus] = (statusMap[keyStatus] || 0) + 1;
+
+    // sku ranking
+    const sku = String(it.sku || it.item_sku || it.id_venda || '—');
+    const motivo = String(it.tipo_reclamacao || it.motivo || it.reclamacao || '—');
+    const s = skuMap[sku] || { sku, devolucoes: 0, prejuizo: 0, motivos: {} };
+    s.devolucoes += 1;
+    s.prejuizo += preju;
+    s.motivos[motivo] = (s.motivos[motivo] || 0) + 1;
+    skuMap[sku] = s;
+  }
+
+  // monta arrays
+  const daily = Object.keys(dailyMap).sort().map(k => ({ date: k, prejuizo: dailyMap[k] }));
+  const monthly = Object.keys(monthlyMap).sort().map(k => ({ month: k, prejuizo: monthlyMap[k] }));
+
+  // top items by devolucoes
+  const top_items = Object.values(skuMap)
+    .map(s => ({ sku: s.sku, devolucoes: s.devolucoes, prejuizo: s.prejuizo, motivo_comum: Object.entries(s.motivos).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—' }))
+    .sort((a,b) => b.devolucoes - a.devolucoes)
+    .slice(0, limitTop);
+
+  return {
+    daily, monthly, status: statusMap, top_items, totals
+  };
 }
 
 /* ------------------------------
