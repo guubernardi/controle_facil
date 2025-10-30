@@ -219,7 +219,7 @@
     'entrega atrasada': 'entrega_atrasada'
   };
 
-  // reason_key ML -> canônico
+  // reason_key ML -> canônico (ampliado p/ arrependimento)
   var REASONKEY_TO_CANON = {
     product_defective: 'produto_defeituoso',
     broken:            'produto_defeituoso',
@@ -228,10 +228,23 @@
     different_from_publication: 'nao_corresponde',
     not_as_described:          'nao_corresponde',
     wrong_item:                'nao_corresponde',
+
+    // --- buyer remorse / changed mind ---
     buyer_remorse:             'arrependimento_cliente',
     changed_mind:              'arrependimento_cliente',
+    change_of_mind:            'arrependimento_cliente',
+    buyer_changed_mind:        'arrependimento_cliente',
     doesnt_fit:                'arrependimento_cliente',
     size_issue:                'arrependimento_cliente',
+    buyer_doesnt_want:         'arrependimento_cliente',
+    doesnt_want:               'arrependimento_cliente',
+    buyer_no_longer_wants:     'arrependimento_cliente',
+    no_longer_wants:           'arrependimento_cliente',
+    no_longer_needed:          'arrependimento_cliente',
+    not_needed_anymore:        'arrependimento_cliente',
+    not_needed:                'arrependimento_cliente',
+    unwanted:                  'arrependimento_cliente',
+
     not_delivered:             'entrega_atrasada',
     shipment_delayed:          'entrega_atrasada'
   };
@@ -251,20 +264,40 @@
     };
     if (SPEC[c]) return SPEC[c];
     // famílias
-    if (c.startsWith('PDD')) return 'nao_corresponde'; // Produto diferente/defeituoso -> tratamos como não corresponde
+    if (c.startsWith('PDD')) return 'nao_corresponde'; // cuidado: mantemos fallback, mas PDD9906 já está acima
     if (c === 'PNR') return 'entrega_atrasada';        // Produto Não Recebido
     if (c === 'CS')  return 'arrependimento_cliente';  // Compra Cancelada
     return null;
   }
 
+  // >>> Ampliado para cobrir "não quer mais", "no longer want", etc.
   function canonFromText(text){
     var t = norm(text);
     if (!t) return null;
-    if (/(defeit|quebrad|quality|defective|broken)/.test(t)) return 'produto_defeituoso';
-    if (/(danific|in transit|carrier|shipping damage)/.test(t)) return 'produto_danificado';
-    if (/(diferent|nao correspond|não correspond|not as described|publication|wrong item)/.test(t)) return 'nao_corresponde';
-    if (/(arrepend|changed mind|buyer remorse|tamanho|size)/.test(t)) return 'arrependimento_cliente';
-    if (/(nao entreg|não entreg|atras|not delivered|delayed|shipment)/.test(t)) return 'entrega_atrasada';
+
+    // ===== cliente (arrependimento) =====
+    if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|não\s*quero\s*mais|nao\s*precisa\s*mais|não\s*precisa\s*mais|no\s*longer\s*wants?|no\s*longer\s*need(?:ed)?|doesn.?t\s*want|dont\s*want|ya\s*no\s*lo\s*quiere(?:\s*mas|s)?|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse)/.test(t))
+      return 'arrependimento_cliente';
+    // tamanho/ajuste
+    if (/(nao\s*serv|não\s*serv|nao\s*coube|não\s*coube|tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(t))
+      return 'arrependimento_cliente';
+
+    // ===== produto defeito =====
+    if (/(defeit|avari|quebrad|danific.*(nao|não)?\s*foi\s*transporte)?|defective|broken|quality/.test(t))
+      return 'produto_defeituoso';
+
+    // ===== avaria transporte =====
+    if (/(transporte|logistic|logistica|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t))
+      return 'produto_danificado';
+
+    // ===== pedido errado / não corresponde =====
+    if (/(pedido\s*(incorret|errad)|produto\s*(errad|trocad)|sku\s*incorret|wrong\s*item|different\s*from|not\s*as\s*described|nao\s*correspond|não\s*correspond|publication)/.test(t))
+      return 'nao_corresponde';
+
+    // ===== atraso / não entregue =====
+    if (/(nao\s*entreg|não\s*entreg|atras|not\s*delivered|delayed|shipment)/.test(t))
+      return 'entrega_atrasada';
+
     // fallback por dicionário
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
     return null;
