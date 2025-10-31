@@ -3,58 +3,154 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Chat de Reclamações — Controle Fácil</title>
-  <link rel="stylesheet" href="css/chat.css" />
+  <title>Chat — Controle Fácil</title>
+  <link rel="stylesheet" href="css/chat.css"/>
+  <link rel="stylesheet" href="css/navigation.css">
 </head>
-<body>
-  <div class="container">
-    <div class="chat-wrapper">
+<body class="has-sidebar">
+  <div class="container" style="max-width: none; padding: 0;">
+    
+    <!-- Mobile Toggle Button -->
+    <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Toggle menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12h18M3 6h18M3 18h18"/>
+      </svg>
+    </button>
 
-      <!-- ===== HEADER (menu de abas) ===== -->
-      <header class="header">
-        <nav class="abas" role="tablist" aria-label="Trocar conversa">
-          <button id="abaCliente" class="aba" role="tab"
-                  aria-selected="true" aria-controls="painel-cliente">
-            👤 Chat com cliente
-          </button>
-          <button id="abaPlataforma" class="aba" role="tab"
-                  aria-selected="false" aria-controls="painel-plataforma">
-            🏢 Chat com a plataforma
-          </button>
-        </nav>
+    <!-- Overlay -->
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-        <button class="settings-btn" title="Preferências">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M12 1v6m0 6v6m5.2-13.2l-4.2 4.2m0 6l4.2 4.2M23 12h-6m-6 0H1m18.2-5.2l-4.2 4.2m0 6l4.2 4.2"></path>
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <span class="sidebar-logo-text">Controle Fácil</span>
+        </div>
+        <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar sidebar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12h18M3 6h18M3 18h18"/>
           </svg>
         </button>
-      </header>
+      </div>
 
-      <!-- ================================================================== -->
-      <!-- ===================== PAINEL: CLIENTE (visível) ================== -->
-      <!-- ================================================================== -->
-      <section id="painel-cliente" class="painel" role="tabpanel" aria-labelledby="abaCliente">
+      <nav class="sidebar-nav">
+        <a href="home.html" class="sidebar-nav-item" data-page="home">
+          <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
+          </svg>
+          <span class="sidebar-nav-text">Home</span>
+        </a>
+
+        <a href="central.html" class="sidebar-nav-item" data-page="central">
+          <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/>
+            <rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          <span class="sidebar-nav-text">Central</span>
+        </a>
+
+        <a href="index.html" class="sidebar-nav-item" data-page="devolucoes">
+          <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 14 4 9 9 4"/>
+            <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+          </svg>
+          <span class="sidebar-nav-text">Devoluções</span>
+        </a>
+
+        <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboards">
+          <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="8"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6"  y1="20" x2="6"  y2="14"/>
+          </svg>
+          <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
+        </a>
+
+        <a href="logs.html" class="sidebar-nav-item" data-page="logs">
+          <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <span class="sidebar-nav-text">Logs</span>
+        </a>
+
+        <a href="chat.html" class="sidebar-nav-item active" data-page="chat" aria-current="page">
+          <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
+          </svg>
+          <span class="sidebar-nav-text">Chat</span>
+        </a>
+
+        <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
+          <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9v1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9v-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
+          </svg>
+          <span class="sidebar-nav-text">Configurações</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-user">
+          <div class="sidebar-user-info">
+            <div class="sidebar-user-name" id="sidebarUserName">—</div>
+            <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
+          </div>
+        </div>
+        <button class="sidebar-logout" id="btnLogout" aria-label="Sair">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <div class="chat-wrapper">
+      <div class="flex-1 flex-col">
+        <!-- Header com Abas -->
+        <header class="header">
+          <div class="header-left">
+            <nav class="abas" role="tablist" aria-label="Selecionar conversa">
+              <button id="abaCliente" class="aba" role="tab" aria-selected="true" aria-controls="painel-cliente">
+                <span class="tab-text-full">Chat com cliente</span>
+                <span class="tab-text-short">Cliente</span>
+              </button>
+              <button id="abaPlataforma" class="aba" role="tab" aria-selected="false" aria-controls="painel-plataforma">
+                <span class="tab-text-full">Chat com a plataforma</span>
+                <span class="tab-text-short">Plataforma</span>
+              </button>
+            </nav>
+            <a href="#" class="rules-link">
+              Ver regras
+              <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </a>
+          </div>
+          <button class="settings-btn" title="Ajustes">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M12 1v6m0 6v6m5.2-13.2l-4.2 4.2m0 6l4.2 4.2M23 12h-6m-6 0H1m18.2-5.2l-4.2 4.2m0 6l4.2 4.2"></path>
+            </svg>
+          </button>
+        </header>
+
+        <!-- Grid do conteúdo -->
         <div class="main-content">
-
-          <!-- ===== Coluna esquerda (filtros/lista) ===== -->
-          <aside class="left-panel">
-            <!-- Link de regras -->
-            <div class="search-section" style="border-bottom:none; padding-bottom:0">
-              <a href="#" class="rules-link">
-                Ver regras
-                <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                </svg>
-              </a>
-            </div>
-
-            <!-- Busca -->
+          <!-- Coluna esquerda (só para CLIENTE) -->
+          <aside class="left-panel" aria-label="Ferramentas do chat com cliente">
             <div class="search-section">
-              <input type="text" class="search-input" placeholder="Buscar por nome" aria-label="Buscar por nome"/>
-              <button class="search-btn" aria-label="Buscar">
+              <input type="text" class="search-input" placeholder="Buscar por nome"/>
+              <button class="search-btn">
                 <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="11" cy="11" r="8"></circle>
                   <path d="m21 21-4.35-4.35"></path>
@@ -62,9 +158,8 @@
               </button>
             </div>
 
-            <!-- Filtros/ações -->
             <div class="action-buttons">
-              <button class="btn-primary dropdown-btn" aria-haspopup="listbox" aria-expanded="false">
+              <button class="btn-primary dropdown-btn">
                 Aguardando respostas <span class="dropdown-icon">▼</span>
               </button>
               <button class="btn-outline">
@@ -76,78 +171,65 @@
               </button>
             </div>
 
-            <!-- Estado vazio (lista/conversas) -->
-            <div class="empty-state" aria-live="polite">
+            <div class="empty-state">
               <div class="empty-icon">
                 <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                 </svg>
               </div>
               <h3 class="empty-title">Nenhuma mensagem de cliente.</h3>
-              <p class="empty-text">
-                Fique de olho no chat e esteja disponível para oferecer um ótimo atendimento.
-              </p>
+              <p class="empty-text">Fique de olho no chat e esteja disponível para oferecer um ótimo atendimento.</p>
             </div>
           </aside>
 
-          <!-- ===== Coluna direita (chat com cliente) ===== -->
+          <!-- Coluna direita (conteúdo das conversas) -->
           <section class="right-panel">
-            <!-- Cabeçalho do chat -->
-            <div class="chat-header">
-              <div class="avatar" aria-hidden="true"></div>
-              <div class="skeleton-wrapper">
-                <div class="skeleton skeleton-line-1"></div>
-                <div class="skeleton skeleton-line-2"></div>
+            <!-- Painel CLIENTE -->
+            <section id="painel-cliente" class="painel" role="tabpanel" aria-labelledby="abaCliente">
+              <div class="chat-header">
+                <div class="avatar"></div>
+                <div class="skeleton-wrapper">
+                  <div class="header-name">Cliente Exemplo</div>
+                  <div class="header-status">Online</div>
+                </div>
               </div>
-            </div>
 
-            <!-- Mensagens -->
-            <div class="chat-messages" aria-live="polite" aria-label="Mensagens do cliente">
-              <!-- renderizado via JS -->
-            </div>
+              <div id="mensagensCliente" class="chat-messages" aria-live="polite">
+                <!-- Mensagens serão inseridas aqui pelo JavaScript -->
+              </div>
 
-            <!-- Composer -->
-            <div class="message-input">
-              <div class="input-skeleton"></div>
-              <div class="send-skeleton"></div>
-            </div>
+              <div class="message-input">
+                <div class="input-skeleton"></div>
+                <div class="send-skeleton"></div>
+              </div>
+            </section>
+
+            <!-- Painel PLATAFORMA -->
+            <section id="painel-plataforma" class="painel" role="tabpanel" aria-labelledby="abaPlataforma" hidden>
+              <div class="chat-header">
+                <div class="avatar"></div>
+                <div class="skeleton-wrapper">
+                  <div class="header-name">Mediação</div>
+                  <div class="header-status">Sistema</div>
+                </div>
+              </div>
+
+              <div id="mensagensPlataforma" class="chat-messages" aria-live="polite">
+                <!-- Mensagens serão inseridas aqui pelo JavaScript -->
+              </div>
+
+              <div class="message-input">
+                <div class="input-skeleton"></div>
+                <div class="send-skeleton"></div>
+              </div>
+            </section>
           </section>
         </div>
-      </section>
-
-      <!-- ================================================================== -->
-      <!-- =================== PAINEL: PLATAFORMA (oculto) =================== -->
-      <!-- ================================================================== -->
-      <section id="painel-plataforma" class="painel" role="tabpanel" aria-labelledby="abaPlataforma" hidden>
-        <div class="main-content plataforma">
-          <!-- Neste painel mostramos apenas a coluna direita (mediação ML) -->
-          <section class="right-panel">
-            <!-- Cabeçalho da mediação -->
-            <div class="chat-header">
-              <div class="avatar" aria-hidden="true"></div>
-              <div class="skeleton-wrapper">
-                <div class="skeleton skeleton-line-1"></div>
-                <div class="skeleton skeleton-line-2"></div>
-              </div>
-            </div>
-
-            <!-- Mensagens de mediação -->
-            <div class="chat-messages" aria-live="polite" aria-label="Mensagens de mediação da plataforma">
-              <!-- renderizado via JS -->
-            </div>
-
-            <!-- Composer da plataforma -->
-            <div class="message-input">
-              <div class="input-skeleton"></div>
-              <div class="send-skeleton"></div>
-            </div>
-          </section>
-        </div>
-      </section>
-
+      </div>
     </div>
   </div>
 
+  <script src="js/navigation.js"></script>
   <script src="js/chat.js"></script>
 </body>
 </html>
