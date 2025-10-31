@@ -1,213 +1,166 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Chat de Devoluções - Controle Fácil</title>
-  <link rel="shortcut icon" href="assets/img/favicon.png" type="image/png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-  <!-- estilos do app -->
-  <link rel="stylesheet" href="css/navigation.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Chat da Reclamação (ML) — Controle Fácil</title>
+  <meta name="description" content="Mensagens, mediações e ações da reclamação do Mercado Livre." />
+  <link rel="icon" href="assets/img/favicon.png" type="image/png"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="css/chat.css">
+  <style>
+    /* helpers mínimos caso seu chat.css ainda não tenha tudo */
+    :root{--muted:#f8fafc;--border:#e5e7eb}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#fff;color:#0f172a}
+    .page{max-width:1200px;margin:24px auto;padding:0 16px}
+    .topbar{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+    .stack{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px}
+    .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+    .field{display:flex;flex-direction:column;gap:6px}
+    .row{display:flex;gap:8px;align-items:center}
+    input[type="text"], input[type="number"], input[type="file"], textarea, select{
+      width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff
+    }
+    button{border:none;border-radius:10px;padding:10px 14px;cursor:pointer}
+    .btn{background:#2563eb;color:#fff}
+    .btn.ghost{background:#eef2f7;color:#111;border:1px solid var(--border)}
+    .btn.warn{background:#f59e0b}
+    .btn.danger{background:#ef4444}
+    .btn.success{background:#059669}
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--border);background:var(--muted)}
+    .subtitle{font-size:14px;color:#475569}
+    .messages{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto;padding-right:6px}
+    .msg{border:1px solid var(--border);border-radius:12px;padding:10px 12px}
+    .msg .meta{display:flex;gap:8px;align-items:center;font-size:12px;color:#475569;margin-bottom:4px}
+    .msg.me{border-color:#bfdbfe;background:#eff6ff}
+    .bubble-actions{display:flex;gap:8px;align-items:center}
+    .attachments{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+    .attachment{display:inline-flex;gap:6px;align-items:center;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:#fafafa}
+    .section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    .list{display:flex;flex-direction:column;gap:8px}
+    .hint{font-size:12px;color:#64748b}
+    .toast{position:fixed;right:16px;bottom:16px;transform:translateY(12px);opacity:0;transition:.2s;padding:10px 12px;background:#111;color:#fff;border-radius:10px}
+    .toast.show{transform:translateY(0);opacity:1}
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
+  </style>
 </head>
-<body class="chat-page" data-page="chat">
-  <!-- ==== SIDEBAR ==== -->
-  <aside id="sidebar" class="sidebar">
-    <div class="sidebar-header">
-      <div class="sidebar-logo">
-        <span class="sidebar-logo-text">Controle Fácil</span>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <div class="stack">
+        <a class="row" href="index.html" aria-label="Voltar"><span class="pill">← Voltar</span></a>
+        <div class="row">
+          <label class="pill">Claim ID</label>
+          <input id="claimId" type="text" placeholder="ex.: 1234567890" style="width:260px">
+          <button id="btnLoad" class="btn">Carregar</button>
+        </div>
       </div>
-      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar sidebar">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 12h18M3 6h18M3 18h18"/>
-        </svg>
-      </button>
+      <div class="row">
+        <input id="sellerToken" type="text" placeholder="x-seller-token (opcional)" style="width:320px">
+        <button id="btnSaveTok" class="btn ghost">Salvar token</button>
+      </div>
     </div>
 
-    <nav class="sidebar-nav">
-      <a href="home.html" class="sidebar-nav-item" data-page="home">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-          <polyline points="9 22 9 12 15 12 15 22"/>
-        </svg>
-        <span class="sidebar-nav-text">Home</span>
-      </a>
-
-      <a href="central.html" class="sidebar-nav-item" data-page="central">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="7" height="7"/>
-          <rect x="14" y="3" width="7" height="7"/>
-          <rect x="14" y="14" width="7" height="7"/>
-          <rect x="3" y="14" width="7" height="7"/>
-        </svg>
-        <span class="sidebar-nav-text">Central</span>
-      </a>
-
-      <a href="index.html" class="sidebar-nav-item" data-page="devolucoes">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="9 14 4 9 9 4"/>
-          <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
-        </svg>
-        <span class="sidebar-nav-text">Devoluções</span>
-      </a>
-
-      <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboards">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="20" x2="18" y2="8"/>
-          <line x1="12" y1="20" x2="12" y2="4"/>
-          <line x1="6"  y1="20" x2="6"  y2="14"/>
-        </svg>
-        <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
-      </a>
-
-      <a href="logs.html" class="sidebar-nav-item" data-page="logs">
-        <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <line x1="16" y1="13" x2="8" y2="13"/>
-          <line x1="16" y1="17" x2="8" y2="17"/>
-          <polyline points="10 9 9 9 8 9"/>
-        </svg>
-        <span class="sidebar-nav-text">Logs</span>
-      </a>
-
-      <a href="chat.html" class="sidebar-nav-item active" data-page="chat" aria-current="page">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
-        </svg>
-        <span class="sidebar-nav-text">Chat</span>
-      </a>
-
-      <a class="sidebar-nav-item" data-page="settings" href="settings/config.html">
-        <span class="sidebar-nav-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
-            <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 0 .6.9l1 .6 1-.6a1 1 0 0 0 .6-.9l.1-1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/>
-          </svg>
-        </span>
-        <span class="sidebar-nav-text">Configurações</span>
-      </a>
-    </nav>
-
-    <div class="sidebar-footer">
-      <div class="sidebar-user">
-        <div class="sidebar-user-info">
-          <div class="sidebar-user-name" id="sidebarUserName">—</div>
-          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
+    <div class="grid">
+      <!-- COLUNA ESQUERDA: MENSAGENS -->
+      <section class="card">
+        <div class="section-title">
+          <h2>Mensagens</h2>
+          <span id="mediationBadge" class="pill">Mediação: —</span>
         </div>
-      </div>
-      <button class="sidebar-logout" id="btnLogout" aria-label="Sair">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-          <polyline points="16 17 21 12 16 7"/>
-          <line x1="21" y1="12" x2="9" y2="12"/>
-        </svg>
-      </button>
-    </div>
-  </aside>
-  <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
-  <!-- FAB mobile -->
-  <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Abrir menu">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <path d="M3 12h18M3 6h18M3 18h18"/>
-    </svg>
-  </button>
+        <div id="messages" class="messages" aria-live="polite"></div>
 
-  <!-- ===== CONTEÚDO ===== -->
-  <main class="chat-wrap">
-    <!-- Header -->
-    <header class="chat-header">
-      <div class="chat-header-icon">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
-        </svg>
-      </div>
-      <div>
-        <h1>Chat de Devoluções</h1>
-        <p>Converse com os clientes diretamente</p>
-      </div>
-    </header>
-
-    <!-- Grid -->
-    <section class="chat-grid">
-      <!-- THREADS -->
-      <aside class="threads" aria-label="Lista de conversas">
-        <div class="threads-search">
-          <div class="search-wrapper">
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"/>
-              <path d="m21 21-4.35-4.35"/>
-            </svg>
-            <input id="threadSearch" type="search" placeholder="Buscar conversas..." aria-label="Buscar conversas">
+        <div class="card" style="margin-top:12px">
+          <div class="row" style="gap:12px;align-items:flex-start">
+            <div style="min-width:180px">
+              <label class="hint">Enviar para</label>
+              <select id="receiverRole">
+                <option value="complainant">Comprador</option>
+                <option value="respondent" selected>Respondente (você)</option>
+                <option value="mediator">Mediador</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="hint">Mensagem</label>
+              <textarea id="msgText" rows="3" placeholder="Escreva sua mensagem…"></textarea>
+              <div class="bubble-actions">
+                <input id="fileInput" type="file" multiple>
+                <button id="btnSend" class="btn">Enviar</button>
+                <span id="sendHint" class="hint"></span>
+              </div>
+              <div id="uploadPreview" class="attachments" hidden></div>
+            </div>
           </div>
         </div>
-
-        <ul id="threadList" class="threads-list" aria-live="polite">
-          <!-- itens via JS -->
-        </ul>
-
-        <!-- Pager -->
-        <div id="threadsPager" class="threads-pager" aria-label="Paginação"></div>
-      </aside>
-
-      <!-- ROOM -->
-      <section class="room" aria-label="Sala de conversa">
-        <div class="room-header">
-          <div>
-            <div id="roomTitle" class="room-title">Selecione uma devolução</div>
-            <div id="roomSub" class="room-sub">—</div>
-          </div>
-          <a id="roomOpenLink" class="room-open" href="#" target="_blank" rel="noopener" hidden>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-              <polyline points="15 3 21 3 21 9"/>
-              <line x1="10" y1="14" x2="21" y2="3"/>
-            </svg>
-            Abrir devolução
-          </a>
-        </div>
-
-        <div id="messages" class="messages" aria-live="polite">
-          <div class="placeholder">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
-            </svg>
-            <p>Escolha uma conversa na lista ao lado</p>
-          </div>
-        </div>
-
-        <!-- previews de anexos (imagens) -->
-        <div id="attachPreviews" class="attach-previews" hidden></div>
-
-        <!-- Composer -->
-        <form id="composer" class="composer" autocomplete="off">
-          <button type="button" id="btnAttach" class="btn-attach" aria-label="Anexar arquivo">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
-            </svg>
-          </button>
-          <input type="file" id="fileInput" accept="image/*" multiple hidden>
-
-          <label class="sr-only" for="msgBody">Mensagem</label>
-          <textarea id="msgBody" rows="1" placeholder="Digite sua mensagem..." disabled></textarea>
-
-          <button id="btnSend" type="submit" class="send" disabled>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-          </button>
-        </form>
       </section>
-    </section>
-  </main>
 
-  <!-- scripts -->
-  <script src="/js/auth-guard.js" defer></script>
-  <script src="js/navigation.js" defer></script>
+      <!-- COLUNA DIREITA: STATUS / AÇÕES -->
+      <section class="card">
+        <div class="section-title">
+          <h2>Status & Ações</h2>
+          <span id="affects" class="pill">Atinge reputação: —</span>
+        </div>
+
+        <div class="list" id="statusList">
+          <div class="row"><span class="subtitle">Claim:</span> <span id="claimStatus">—</span></div>
+          <div class="row"><span class="subtitle">Substatus:</span> <span id="claimSubstatus">—</span></div>
+          <div class="row"><span class="subtitle">Custo retorno:</span> <span id="returnCost">—</span></div>
+        </div>
+
+        <hr style="margin:12px 0;border:none;border-top:1px solid var(--border)">
+
+        <div class="list">
+          <div class="row" style="flex-wrap:wrap;gap:8px">
+            <button id="btnOpenDispute" class="btn warn" title="Abre mediação com o ML">Abrir mediação</button>
+            <button id="btnAllowReturn" class="btn success" title="Autoriza devolução / gera etiqueta">Autorizar devolução</button>
+            <button id="btnRefund" class="btn danger" title="Reembolso total">Reembolsar (total)</button>
+          </div>
+          <div class="row">
+            <input id="partialPct" type="number" min="1" max="99" step="1" placeholder="% parcial" style="width:140px">
+            <button id="btnPartial" class="btn">Reembolso parcial</button>
+          </div>
+        </div>
+
+        <hr style="margin:12px 0;border:none;border-top:1px solid var(--border)">
+
+        <div class="list">
+          <div class="section-title">
+            <h3 style="font-size:16px">Evidências</h3>
+            <button id="btnRefreshEvd" class="btn ghost">Atualizar</button>
+          </div>
+          <ul id="evidences" class="list"></ul>
+          <div class="row" style="margin-top:8px">
+            <input id="evidenceFile" type="file">
+            <button id="btnUpEvidence" class="btn">Anexar evidência</button>
+          </div>
+          <span class="hint">Arquivos enviados aqui vão para <i>/claims/:id/attachments-evidences</i>.</span>
+        </div>
+
+        <hr style="margin:12px 0;border:none;border-top:1px solid var(--border)">
+
+        <div class="list">
+          <div class="section-title">
+            <h3 style="font-size:16px">Returns & Reviews</h3>
+            <button id="btnRefreshReturns" class="btn ghost">Atualizar</button>
+          </div>
+          <div id="returnsBox" class="list"></div>
+          <div id="reviewBox" class="list" hidden>
+            <div class="row" style="gap:8px;flex-wrap:wrap">
+              <button id="btnReviewOK" class="btn success">Review OK</button>
+              <select id="failReason" style="min-width:240px"></select>
+              <button id="btnReviewFAIL" class="btn danger">Review FAIL</button>
+            </div>
+            <span class="hint">Motivos carregados de <i>/returns/reasons?flow=seller_return_failed&claim_id=…</i></span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
   <script src="js/chat.js" defer></script>
 </body>
 </html>

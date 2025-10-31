@@ -1,380 +1,456 @@
-// /public/js/chat.js — Chat de Devoluções (MVP estável + paginação threads)
+/* Chat ML – mensagens, mediação, evidências e reviews
+ * Consome rotas do backend:
+ * - GET /api/ml/claims/:claimId/messages                    (listar)                 [mlChat.js]
+ * - POST /api/ml/claims/:claimId/attachments                (upload anexo)           [mlChat.js]
+ * - GET /api/ml/claims/:claimId/attachments/:attId/download (download anexo)        [mlChat.js]
+ * - POST /api/ml/claims/:claimId/messages                   (enviar)                 [mlChat.js]
+ * - GET /api/ml/returns/by-claim/:claimId                   (detalhes return v2)     [mlChat.js]
+ * - GET /api/ml/returns/:returnId/reviews                   (reviews)                [mlChat.js]
+ * - POST /api/ml/returns/:returnId/return-review            (review OK/FAIL)         [mlChat.js]
+ * - GET /api/ml/returns/reasons?flow=seller_return_failed&claim_id=… (motivos FAIL)  [mlChat.js]
+ * - GET /api/ml/claims/:claimId/charges/return-cost         (custo retorno)          [mlChat.js ou ml-resolutions.js]
+ * - GET /api/ml/claims/:claimId/affects-reputation          (atinge reputação)       [ml-resolutions.js]
+ * - POST /api/ml/claims/:claimId/actions/open-dispute       (abrir mediação)         [ml-resolutions.js]
+ * - POST /api/ml/claims/:claimId/expected-resolutions/allow-return  (autorizar)      [ml-resolutions.js]
+ * - POST /api/ml/claims/:claimId/expected-resolutions/refund        (reembolso)      [ml-resolutions.js]
+ * - POST /api/ml/claims/:claimId/expected-resolutions/partial-refund {percentage}    [ml-resolutions.js]
+ * - GET /api/ml/claims/:claimId/evidences                   (listar evidências)      [ml-resolutions.js]
+ * - POST /api/ml/claims/:claimId/attachments-evidences      (upload evidência)       [ml-resolutions.js]
+ */
 
 (() => {
-  const $  = (s) => document.querySelector(s);
-  const $$ = (s) => Array.from(document.querySelectorAll(s));
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const $ = (id) => document.getElementById(id);
+  const qs = new URLSearchParams(location.search);
 
-  const listEl    = $("#threadList");
-  const pagerEl   = $("#threadsPager");
-  const searchEl  = $("#threadSearch");
-  const msgsEl    = $("#messages");
-  const titleEl   = $("#roomTitle");
-  const subEl     = $("#roomSub");
-  const openEl    = $("#roomOpenLink");
-  const formEl    = $("#composer");
-  const bodyEl    = $("#msgBody");
-  const btnSend   = $("#btnSend");
-
-  let currentId = null;     // return_id selecionado
-  let threads   = [];       // lista de devoluções da página atual
-  let polling   = true;
-
-  // estado de paginação (threads)
-  const state = {
-    page: 1,
-    pageSize: 12,           // quantas conversas por página
-    total: 0,
-    pages: 1
+  // elementos
+  const el = {
+    claimId: $('claimId'),
+    sellerToken: $('sellerToken'),
+    btnLoad: $('btnLoad'),
+    btnSaveTok: $('btnSaveTok'),
+    messages: $('messages'),
+    receiverRole: $('receiverRole'),
+    msgText: $('msgText'),
+    fileInput: $('fileInput'),
+    btnSend: $('btnSend'),
+    uploadPreview: $('uploadPreview'),
+    sendHint: $('sendHint'),
+    mediationBadge: $('mediationBadge'),
+    affects: $('affects'),
+    claimStatus: $('claimStatus'),
+    claimSubstatus: $('claimSubstatus'),
+    returnCost: $('returnCost'),
+    // actions
+    btnOpenDispute: $('btnOpenDispute'),
+    btnAllowReturn: $('btnAllowReturn'),
+    btnRefund: $('btnRefund'),
+    partialPct: $('partialPct'),
+    btnPartial: $('btnPartial'),
+    evidences: $('evidences'),
+    btnUpEvidence: $('btnUpEvidence'),
+    evidenceFile: $('evidenceFile'),
+    btnRefreshEvd: $('btnRefreshEvd'),
+    returnsBox: $('returnsBox'),
+    btnRefreshReturns: $('btnRefreshReturns'),
+    reviewBox: $('reviewBox'),
+    btnReviewOK: $('btnReviewOK'),
+    btnReviewFAIL: $('btnReviewFAIL'),
+    failReason: $('failReason'),
+    toast: $('toast'),
   };
 
-  document.addEventListener("visibilitychange", () => {
-    polling = document.visibilityState === "visible";
-  });
+  // estado
+  let state = {
+    claimId: null,
+    pendingAttachments: [],  // filenames retornados pelo upload (para enviar na próxima msg)
+    returnId: null,
+    reasons: [],             // motivos fail
+  };
 
-  // -------------------- Helpers --------------------
-  function htmlEscape(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+  // helpers
+  function toast(msg) {
+    if (!el.toast) return alert(msg);
+    el.toast.textContent = msg;
+    el.toast.classList.add('show');
+    setTimeout(() => el.toast.classList.remove('show'), 2400);
   }
-  function nl2br(s) {
-    return htmlEscape(s).replace(/\r?\n/g, "<br>");
+  function headers() {
+    const h = { 'Accept': 'application/json' };
+    const token = (el.sellerToken.value || '').trim();
+    if (token) h['x-seller-token'] = token;
+    return h;
   }
-
-  async function api(url, opt) {
-    const r = await fetch(url, opt);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j?.error || j?.message || r.statusText || "Erro");
-    return j;
-  }
-
-  function lojaToMarketplace(s = "") {
-    s = String(s).toLowerCase();
-    if (s.includes("shopee")) return "Shopee";
-    if (s.includes("magalu") || s.includes("magazineluiza")) return "Magalu";
-    if (s.includes("mercado") || s.includes("ml") || s.includes("meli")) return "Mercado Livre";
-    return "Outros";
-  }
-
-  function mkIcon(name) {
-    if (name === "Mercado Livre")
-      return `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#ffea00"/><path d="M7 11c2-2 8-2 10 0" stroke="#0f172a" stroke-width="1.4" fill="none"/></svg>`;
-    if (name === "Shopee")
-      return `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2" fill="#ef4444"/><path d="M12 4c-1.5 0-2.5 1-2.8 2H7v2h10V6h-2.2C14.5 5 13.5 4 12 4Z" fill="#fff"/></svg>`;
-    if (name === "Magalu")
-      return `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" fill="#0ea5e9"/><rect x="5" y="8" width="14" height="2" fill="#22c55e"/><rect x="5" y="12" width="10" height="2" fill="#f59e0b"/></svg>`;
-    return `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="#e5e7eb"/></svg>`;
-  }
-
-  function setLoading(on) {
-    try {
-      if (on && window.pageLoaderShow) window.pageLoaderShow();
-      if (!on && window.pageLoaderDone) window.pageLoaderDone();
-    } catch {}
-  }
-
-  // -------------------- Threads (com paginação) --------------------
-  // Busca paginação direto da API de returns (page/pageSize). Mantém fallback.
-  async function fetchThreads(page = 1) {
-    const ps = state.pageSize;
-    // tenta primeiro com ordering por updated_at
-    try {
-      const j = await api(`/api/returns?page=${page}&pageSize=${ps}&orderBy=updated_at&orderDir=desc`);
-      const items = Array.isArray(j.items) ? j.items : (Array.isArray(j) ? j : []);
-      state.total = Number(j.total ?? items.length);
-      state.page  = Number(j.page ?? page);
-      state.pages = Math.max(1, Math.ceil(state.total / ps));
-      return items;
-    } catch {
-      // fallback: endpoint simples sem paginação — vamos simular páginas no front
-      const j = await api("/api/returns?orderDir=desc");
-      const all = Array.isArray(j.items) ? j.items : (Array.isArray(j) ? j : []);
-      state.total = all.length;
-      state.pages = Math.max(1, Math.ceil(state.total / ps));
-      state.page  = Math.min(page, state.pages);
-      const start = (state.page - 1) * ps;
-      return all.slice(start, start + ps);
+  function api(url, opt={}) {
+    const o = Object.assign({ headers: headers() }, opt);
+    if (o.body && !(o.body instanceof FormData)) {
+      o.headers['Content-Type'] = 'application/json';
+      o.body = JSON.stringify(o.body);
     }
-  }
-
-  function renderPager() {
-    if (!pagerEl) return;
-    const { page, pages } = state;
-
-    // máximo de 7 botões numéricos (com elipses quando necessário)
-    const maxBtns = 7;
-    let start = Math.max(1, page - Math.floor(maxBtns / 2));
-    let end   = Math.min(pages, start + maxBtns - 1);
-    start     = Math.max(1, Math.min(start, Math.max(1, end - maxBtns + 1)));
-
-    const btn = (label, p, opts = {}) => {
-      const disabled = !!opts.disabled;
-      const active   = !!opts.active;
-      return `<button class="btn${active ? " is-active": ""}" ${disabled ? "disabled": ""} data-page="${p}">${label}</button>`;
-    };
-
-    let html = "";
-    html += btn("‹", Math.max(1, page - 1), { disabled: page <= 1 });
-    if (start > 1) {
-      html += btn("1", 1, { active: page === 1 });
-      if (start > 2) html += `<span class="btn" disabled style="pointer-events:none;">…</span>`;
-    }
-    for (let p = start; p <= end; p++) {
-      html += btn(String(p), p, { active: p === page });
-    }
-    if (end < pages) {
-      if (end < pages - 1) html += `<span class="btn" disabled style="pointer-events:none;">…</span>`;
-      html += btn(String(pages), pages, { active: page === pages });
-    }
-    html += btn("›", Math.min(pages, page + 1), { disabled: page >= pages });
-
-    pagerEl.innerHTML = html;
-
-    // eventos
-    pagerEl.querySelectorAll(".btn[data-page]").forEach((b) => {
-      b.addEventListener("click", async () => {
-        const p = Number(b.dataset.page);
-        await goToPage(p);
-      });
+    return fetch(url, o).then(async r => {
+      const isJSON = (r.headers.get('content-type') || '').includes('application/json');
+      const data = isJSON ? await r.json().catch(()=> ({})) : await r.text();
+      if (!r.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${r.status}`);
+      return data;
     });
   }
+  function pickMessagesPayload(j){
+    if (!j) return [];
+    if (Array.isArray(j)) return j;
+    return j.messages || j.results || j.data || j.items || [];
+  }
+  function when(iso){
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleString('pt-BR');
+  }
+  function roleBadge(role){
+    const r = String(role||'').toLowerCase();
+    if (r.includes('mediator')) return 'Mediador';
+    if (r.includes('complain')) return 'Comprador';
+    if (r.includes('respond')) return 'Vendedor';
+    return role || '—';
+  }
 
-  function renderThreads(items) {
-    threads = items;
-    const q = (searchEl?.value || "").trim().toLowerCase();
-    listEl.innerHTML = "";
+  // mensagens
+  async function loadMessages() {
+    const id = state.claimId;
+    el.messages.innerHTML = '<div class="hint">Carregando mensagens…</div>';
+    const j = await api(`/api/ml/claims/${encodeURIComponent(id)}/messages`);
+    const arr = pickMessagesPayload(j);
+    if (!arr.length) {
+      el.messages.innerHTML = '<div class="hint">Sem mensagens.</div>';
+      el.mediationBadge.textContent = 'Mediação: —';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    let hasMediator = false;
+    arr.forEach(m => {
+      const who = m.from?.role || m.sender?.role || m.role || '';
+      if ((who||'').toLowerCase().includes('mediator')) hasMediator = true;
 
-    items.forEach((r) => {
-      const mk = lojaToMarketplace(r.loja_nome || "");
-      const title = r.loja_nome || mk || "Loja";
-      const sub = `Pedido ${r.id_venda || r.id || "—"} • ${(String(r.status || "").replaceAll("_", " ") || "—")}`;
-      if (q && !(title.toLowerCase().includes(q) || sub.toLowerCase().includes(q))) return;
-
-      const li = document.createElement("li");
-      li.className = "thread";
-      li.dataset.id = r.id;
-      li.innerHTML = `
-        <div class="logo">${mkIcon(mk)}</div>
-        <div class="tinfo">
-          <div class="title">${htmlEscape(title)}</div>
-          <div class="sub">${htmlEscape(sub)}</div>
+      const me = /respond/.test(String(who||'').toLowerCase());
+      const box = document.createElement('div');
+      box.className = 'msg' + (me ? ' me' : '');
+      box.innerHTML = `
+        <div class="meta">
+          <span class="pill">${roleBadge(who)}</span>
+          <span>${when(m.date_created || m.created_at || m.date || m.updated_at)}</span>
         </div>
-        <div class="badge">#${r.id}</div>
+        <div class="text">${(m.message || m.text || '').replace(/\n/g,'<br>')}</div>
       `;
-      li.addEventListener("click", () =>
-        openThread(r.id, { title, mk, order: r.id_venda || r.id, loja: r.loja_nome || "" })
-      );
-      listEl.appendChild(li);
+
+      // anexos
+      const atts = Array.isArray(m.attachments) ? m.attachments
+                   : Array.isArray(m.files) ? m.files : [];
+      if (atts.length) {
+        const row = document.createElement('div');
+        row.className = 'attachments';
+        atts.forEach(a => {
+          const id = a.id || a.attachment_id || a.file_name || a.filename || a.name;
+          const label = a.original_filename || a.filename || a.file_name || id || 'arquivo';
+          const elA = document.createElement('a');
+          elA.href = `/api/ml/claims/${encodeURIComponent(state.claimId)}/attachments/${encodeURIComponent(id)}/download`;
+          elA.target = '_blank';
+          elA.rel = 'noopener';
+          elA.className = 'attachment';
+          elA.innerHTML = `📎 <span>${label}</span>`;
+          row.appendChild(elA);
+        });
+        box.appendChild(row);
+      }
+      frag.appendChild(box);
     });
+    el.messages.innerHTML = '';
+    el.messages.appendChild(frag);
+    el.mediationBadge.textContent = `Mediação: ${hasMediator ? 'ATIVA' : '—'}`;
+  }
 
-    // Seleciona a primeira se nada estiver ativo
-    if (!currentId && items.length) {
-      listEl.querySelector(".thread")?.click();
+  async function uploadSelectedFiles() {
+    const files = Array.from(el.fileInput.files || []);
+    if (!files.length) return [];
+    el.uploadPreview.hidden = false;
+    el.uploadPreview.innerHTML = '';
+    const out = [];
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append('file', f, f.name);
+      const j = await fetch(`/api/ml/claims/${encodeURIComponent(state.claimId)}/attachments`, {
+        method: 'POST',
+        body: fd,
+        headers: headers() // não setar content-type manualmente; o browser faz
+      }).then(r => r.json());
+      if (j.error) throw new Error(j.error);
+      const fname = j.filename || j.file_name;
+      out.push(fname);
+      const chip = document.createElement('span');
+      chip.className = 'attachment';
+      chip.textContent = fname;
+      el.uploadPreview.appendChild(chip);
     }
-
-    renderPager();
+    state.pendingAttachments.push(...out);
+    return out;
   }
 
-  async function goToPage(p) {
-    setLoading(true);
+  async function sendMessage() {
+    const role = el.receiverRole.value;
+    const text = (el.msgText.value || '').trim();
+    if (!text) return toast('Escreva uma mensagem.');
+    el.btnSend.disabled = true;
+    el.sendHint.textContent = 'Enviando…';
     try {
-      const items = await fetchThreads(p);
-      renderThreads(items);
-    } catch (e) {
-      listEl.innerHTML = `<li class="thread"><div class="sub">Falha ao carregar conversas: ${htmlEscape(e.message)}</div></li>`;
-      state.page = 1; state.pages = 1; state.total = 0;
-      renderPager();
-    } finally {
-      setLoading(false);
-    }
-  }
+      // sobe anexos (se houver)
+      if (el.fileInput.files?.length) await uploadSelectedFiles();
 
-  function setActive(id) {
-    currentId = id;
-    $$(".thread").forEach((el) => el.classList.toggle("is-active", String(el.dataset.id) === String(id)));
-  }
-
-  function scrollBottom(force = false) {
-    const nearBottom = msgsEl.scrollTop + msgsEl.clientHeight >= msgsEl.scrollHeight - 120;
-    if (force || nearBottom) msgsEl.scrollTop = msgsEl.scrollHeight;
-  }
-
-  // -------------------- Messages --------------------
-  function mapDirectionFromRole(role) {
-    const r = String(role || "").toLowerCase();
-    if (r === "respondent") return "out";
-    return "in";
-  }
-
-  function senderLabel(role) {
-    const r = String(role || "").toLowerCase();
-    if (r === "respondent") return "Você";
-    if (r === "mediator") return "Mediador";
-    return "Cliente";
-  }
-
-  function msgBubble({ direction, body, when, sender, attachments }) {
-    const el = document.createElement("div");
-    el.className = `msg ${direction === "out" ? "out" : "in"}`;
-    const hasAtt = Array.isArray(attachments) && attachments.length;
-    const attHtml = hasAtt
-      ? `<div class="atts">${attachments
-          .map((a) => `<span class="att" title="${htmlEscape(a.original_filename || a.filename || a)}">${htmlEscape(a.original_filename || a.filename || a)}</span>`).join("")}</div>`
-      : "";
-    el.innerHTML = `
-      <div class="bubble">${nl2br(body || "")}${attHtml}</div>
-      <div class="meta"><span>${htmlEscape(sender || "")}</span><span>${when ? new Date(when).toLocaleString("pt-BR") : ""}</span></div>
-    `;
-    return el;
-  }
-
-  async function loadMessages(id) {
-    msgsEl.innerHTML = "";
-    setLoading(true);
-    try {
-      const j = await api(`/api/returns/${encodeURIComponent(id)}/messages`);
-      const items = Array.isArray(j.items) ? j.items : Array.isArray(j) ? j : [];
-
-      if (!items.length) {
-        msgsEl.innerHTML = `<div class="placeholder">Sem mensagens ainda. Envie a primeira resposta.</div>`;
-      } else {
-        items.forEach((m) => {
-          const body = m.body ?? m.message ?? "";
-          const when = m.created_at || m.date_created || m.message_date || m.createdAt;
-          const dir  = m.direction || mapDirectionFromRole(m.sender_role);
-          const sender = m.sender_name || (m.direction === "out" ? "Você" : senderLabel(m.sender_role));
-          msgsEl.appendChild(msgBubble({ direction: dir, body, when, sender, attachments: m.attachments }));
-        });
-      }
-      bodyEl.disabled = false;
-      btnSend.disabled = false;
-    } catch (e) {
-      msgsEl.innerHTML = `<div class="placeholder">Não foi possível carregar as mensagens (${htmlEscape(e.message)}).</div>`;
-      bodyEl.disabled = true;
-      btnSend.disabled = true;
-    } finally {
-      setLoading(false);
-      scrollBottom(true);
-    }
-  }
-
-  async function openThread(id, meta) {
-    setActive(id);
-    titleEl.textContent = meta?.loja || meta?.title || `Devolução #${id}`;
-    subEl.textContent = `Pedido ${meta?.order || id} • ${meta?.mk || ""}`;
-    openEl.href = `devolucao-editar.html?id=${encodeURIComponent(id)}`;
-    openEl.hidden = false;
-    await loadMessages(id);
-  }
-
-  async function sendMessage(ev) {
-    ev.preventDefault();
-    if (!currentId) return;
-
-    const text = (bodyEl.value || "").trim();
-    if (!text) return;
-
-    btnSend.disabled = true;
-
-    // envio otimista
-    const temp = msgBubble({ direction: "out", body: text, when: Date.now(), sender: "Você" });
-    temp.classList.add("pending");
-    msgsEl.appendChild(temp);
-    scrollBottom(true);
-    bodyEl.value = "";
-
-    try {
-      await api(`/api/returns/${encodeURIComponent(currentId)}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ body: text })
+      await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/messages`, {
+        method: 'POST',
+        body: {
+          receiver_role: role,
+          message: text,
+          attachments: state.pendingAttachments.length ? state.pendingAttachments : undefined
+        }
       });
-      temp.classList.remove("pending");
-      await loadMessages(currentId);
+      el.msgText.value = '';
+      el.fileInput.value = '';
+      state.pendingAttachments = [];
+      el.uploadPreview.hidden = true;
+      el.uploadPreview.innerHTML = '';
+      toast('Mensagem enviada!');
+      await loadMessages();
     } catch (e) {
-      const b = temp.querySelector(".bubble");
-      b.innerHTML = `${nl2br(text)}<br><small class="err">Falha ao enviar: ${htmlEscape(e.message)}</small>`;
-      temp.classList.add("failed");
+      toast(e.message || 'Falha ao enviar');
     } finally {
-      btnSend.disabled = false;
-      bodyEl.focus();
+      el.btnSend.disabled = false;
+      el.sendHint.textContent = '';
     }
   }
 
-  // -------------------- Boot & Polling --------------------
-  async function boot() {
-    setLoading(true);
+  // status & ações
+  async function loadAffects() {
     try {
-      const items = await fetchThreads(1);
-      renderThreads(items);
-    } catch (e) {
-      listEl.innerHTML = `<li class="thread"><div class="sub">Falha ao carregar conversas: ${htmlEscape(e.message)}</div></li>`;
-      renderPager();
-    } finally {
-      setLoading(false);
-    }
-
-    // Refresh mensagens da conversa aberta (20s)
-    (async function loopMsgs() {
-      while (true) {
-        await sleep(20000);
-        if (!polling || !currentId) continue;
-        try { await loadMessages(currentId); } catch {}
-      }
-    })();
-
-    // Refresh leve da lista (60s) mantendo página atual
-    (async function loopThreads() {
-      while (true) {
-        await sleep(60000);
-        if (!polling) continue;
-        try {
-          const items = await fetchThreads(state.page);
-          renderThreads(items);
-        } catch {}
-      }
-    })();
-
-    // SSE opcional
+      const j = await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/affects-reputation`);
+      const val = j.ok ? j.data?.affects_reputation : j.affects_reputation;
+      el.affects.textContent = `Atinge reputação: ${val ? 'SIM' : 'NÃO'}`;
+    } catch { el.affects.textContent = 'Atinge reputação: —'; }
+  }
+  async function loadReturnCost() {
     try {
-      if ("EventSource" in window) {
-        const es = new EventSource("/events");
-        es.addEventListener("message:new", (ev) => {
-          const data = JSON.parse(ev.data || "{}");
-          if (data.returnId && String(data.returnId) === String(currentId)) {
-            msgsEl.appendChild(
-              msgBubble({
-                direction: data.direction || "in",
-                body: data.body,
-                when: data.createdAt || Date.now(),
-                sender: data.sender || "Cliente"
-              })
-            );
-            scrollBottom();
-          }
-        });
-      }
-    } catch {}
+      const j = await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/charges/return-cost`);
+      const amt = j?.amount ?? j?.data?.amount ?? null;
+      el.returnCost.textContent = (amt != null) ? amt.toLocaleString('pt-BR', { style:'currency', currency:'BRL' }) : '—';
+    } catch { el.returnCost.textContent = '—'; }
+  }
+  // como ainda não temos uma rota de "claim detail" pura neste módulo,
+  // inferimos status/substatus pelos próprios objetos retornados de endpoints vizinhos quando possível
+  function setClaimStatus(status, substatus) {
+    if (status) el.claimStatus.textContent = status;
+    if (substatus) el.claimSubstatus.textContent = substatus;
   }
 
-  // -------------------- Listeners --------------------
-  searchEl?.addEventListener("input", async () => {
-    // Como a busca é client-side, apenas re-renderizamos os itens atuais.
-    // Se quiser busca server-side, implemente ?q= no backend e chame fetchThreads(1) passando o termo.
-    renderThreads(threads);
-  });
+  // evidências
+  async function loadEvidences() {
+    el.evidences.innerHTML = '<li class="hint">Carregando…</li>';
+    try {
+      const j = await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/evidences`);
+      const arr = Array.isArray(j?.data) ? j.data : (Array.isArray(j) ? j : []);
+      if (!arr.length) { el.evidences.innerHTML = '<li class="hint">Sem evidências.</li>'; return; }
+      el.evidences.innerHTML = '';
+      arr.forEach(ev => {
+        const li = document.createElement('li');
+        li.className = 'row';
+        const atts = Array.isArray(ev.attachments) ? ev.attachments : [];
+        li.innerHTML = `
+          <span class="pill">${ev.type || 'evidence'}</span>
+          <span class="hint">${when(ev.date || ev.created_at || '')}</span>
+        `;
+        if (atts.length) {
+          const wrap = document.createElement('div');
+          wrap.className = 'attachments';
+          atts.forEach(a => {
+            const id = a.id || a.attachment_id || a.file_name || a.filename || a.name;
+            const label = a.original_filename || a.filename || a.file_name || id || 'arquivo';
+            const link = document.createElement('a');
+            link.href = `/api/ml/claims/${encodeURIComponent(state.claimId)}/attachments-evidences/${encodeURIComponent(id)}/download`;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.className = 'attachment';
+            link.innerHTML = `📎 ${label}`;
+            wrap.appendChild(link);
+          });
+          li.appendChild(wrap);
+        }
+        el.evidences.appendChild(li);
+      });
+    } catch (e) {
+      el.evidences.innerHTML = `<li class="hint">Erro: ${e.message || e}</li>`;
+    }
+  }
+  async function uploadEvidence() {
+    const f = el.evidenceFile.files?.[0];
+    if (!f) return toast('Escolha um arquivo.');
+    const fd = new FormData();
+    fd.append('file', f, f.name);
+    try {
+      await fetch(`/api/ml/claims/${encodeURIComponent(state.claimId)}/attachments-evidences`, {
+        method: 'POST', body: fd, headers: headers()
+      }).then(r => r.json()).then(j => { if (j.ok === false || j.error) throw new Error(j.error || 'Falha no upload'); });
+      toast('Evidência anexada!');
+      el.evidenceFile.value = '';
+      loadEvidences();
+    } catch (e) {
+      toast(e.message || 'Falha ao anexar evidência');
+    }
+  }
 
-  formEl?.addEventListener("submit", sendMessage);
+  // returns & reviews
+  async function loadReturnsAndReviews() {
+    el.returnsBox.innerHTML = '<div class="hint">Carregando retornos…</div>';
+    try {
+      const j = await api(`/api/ml/returns/by-claim/${encodeURIComponent(state.claimId)}`);
+      // respostas possíveis: { returns:[{id,status,...}], ... } ou array direto
+      const arr = Array.isArray(j?.returns) ? j.returns : (Array.isArray(j) ? j : j?.data || []);
+      if (!arr.length) {
+        el.returnsBox.innerHTML = '<div class="hint">Sem retornos vinculados.</div>';
+        el.reviewBox.hidden = true;
+        state.returnId = null;
+        return;
+      }
+      const ret = arr[0];
+      state.returnId = ret.id || ret.return_id || null;
+      setClaimStatus(ret.claim_status || ret.status || null, ret.substatus || null);
 
-  bodyEl?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      formEl?.dispatchEvent(new Event("submit", { cancelable: true }));
+      el.returnsBox.innerHTML = `
+        <div class="card">
+          <div class="row"><span class="subtitle">Return ID:</span> <b>${state.returnId || '—'}</b></div>
+          <div class="row"><span class="subtitle">Status do retorno:</span> <span>${ret.status || '—'}</span></div>
+          <div class="row"><span class="subtitle">Última atualização:</span> <span>${when(ret.last_updated || ret.updated_at || '')}</span></div>
+        </div>
+      `;
+
+      // reviews atuais
+      const rev = await api(`/api/ml/returns/${encodeURIComponent(state.returnId)}/reviews`);
+      const items = Array.isArray(rev?.reviews) ? rev.reviews : (Array.isArray(rev) ? rev : rev?.data || []);
+      const list = document.createElement('div');
+      list.className = 'list';
+      list.innerHTML = `<div class="subtitle">Reviews atuais</div>`;
+      if (!items.length) list.innerHTML += `<div class="hint">Nenhum review registrado.</div>`;
+      items.forEach(r => {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `
+          <span class="pill">${r?.status || '—'}</span>
+          <span class="hint">${r?.reason_id || ''}</span>
+          <span class="hint">${(r?.message || '').slice(0,120)}</span>
+        `;
+        list.appendChild(row);
+      });
+      el.returnsBox.appendChild(list);
+
+      // motivos para FAIL
+      const rs = await api(`/api/ml/returns/reasons?flow=seller_return_failed&claim_id=${encodeURIComponent(state.claimId)}`);
+      const reasons = Array.isArray(rs?.reasons) ? rs.reasons : (Array.isArray(rs) ? rs : rs?.data || []);
+      state.reasons = reasons;
+      el.failReason.innerHTML = '';
+      reasons.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.id || r.reason_id || r.key || r.code || r.name;
+        opt.textContent = r.name || r.title || opt.value;
+        el.failReason.appendChild(opt);
+      });
+      el.reviewBox.hidden = false;
+    } catch (e) {
+      el.returnsBox.innerHTML = `<div class="hint">Erro: ${e.message || e}</div>`;
+      el.reviewBox.hidden = true;
+      state.returnId = null;
+    }
+  }
+
+  async function reviewOK() {
+    if (!state.returnId) return toast('Sem return_id.');
+    try {
+      await api(`/api/ml/returns/${encodeURIComponent(state.returnId)}/return-review`, { method: 'POST', body: [] });
+      toast('Review OK enviado!');
+      loadReturnsAndReviews();
+    } catch (e) { toast(e.message || 'Falha no review OK'); }
+  }
+  async function reviewFAIL() {
+    if (!state.returnId) return toast('Sem return_id.');
+    const reason = el.failReason.value;
+    if (!reason) return toast('Escolha um motivo.');
+    const body = [{ order_id: undefined, reason_id: reason }]; // se precisar por-ordem, preenche order_id
+    try {
+      await api(`/api/ml/returns/${encodeURIComponent(state.returnId)}/return-review`, { method: 'POST', body });
+      toast('Review FAIL enviado!');
+      loadReturnsAndReviews();
+    } catch (e) { toast(e.message || 'Falha no review FAIL'); }
+  }
+
+  // mediações / resoluções
+  const withBusy = (btn, fn) => async () => {
+    const txt = btn.textContent; btn.disabled = true; btn.textContent = '...';
+    try { await fn(); } catch (e) { toast(e.message || 'Falha'); } finally { btn.disabled = false; btn.textContent = txt; }
+  };
+  async function openDispute(){ await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/actions/open-dispute`, { method:'POST' }); toast('Mediação aberta!'); loadMessages(); }
+  async function allowReturn(){ await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/expected-resolutions/allow-return`, { method:'POST' }); toast('Devolução autorizada!'); }
+  async function refund(){ await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/expected-resolutions/refund`, { method:'POST' }); toast('Reembolso total solicitado!'); }
+  async function partialRefund(){
+    const pct = Number(el.partialPct.value);
+    if (!pct || pct<=0 || pct>=100) return toast('Informe % entre 1 e 99.');
+    await api(`/api/ml/claims/${encodeURIComponent(state.claimId)}/expected-resolutions/partial-refund`, { method:'POST', body:{ percentage:pct } });
+    toast('Reembolso parcial solicitado!');
+  }
+
+  // boot
+  function restoreFromURL() {
+    const claim = qs.get('claim_id') || qs.get('claim') || '';
+    if (claim) el.claimId.value = claim;
+    const savedTok = localStorage.getItem('rf_seller_token');
+    if (savedTok) el.sellerToken.value = savedTok;
+  }
+  function saveToken() {
+    localStorage.setItem('rf_seller_token', el.sellerToken.value || '');
+    toast('Token salvo.');
+  }
+  async function loadAll() {
+    state.claimId = (el.claimId.value || '').trim();
+    if (!state.claimId) return toast('Informe o Claim ID.');
+    // limpa estado visual
+    el.messages.innerHTML = '';
+    el.uploadPreview.hidden = true;
+    el.uploadPreview.innerHTML = '';
+    state.pendingAttachments = [];
+    state.returnId = null;
+
+    // carrega blocos paralelamente
+    await Promise.allSettled([
+      loadMessages(),
+      loadAffects(),
+      loadReturnCost(),
+      loadEvidences(),
+      loadReturnsAndReviews()
+    ]);
+  }
+
+  // listeners
+  el.btnLoad.addEventListener('click', loadAll);
+  el.btnSaveTok.addEventListener('click', saveToken);
+  el.btnSend.addEventListener('click', sendMessage);
+  el.btnOpenDispute.addEventListener('click', withBusy(el.btnOpenDispute, openDispute));
+  el.btnAllowReturn.addEventListener('click', withBusy(el.btnAllowReturn, allowReturn));
+  el.btnRefund.addEventListener('click', withBusy(el.btnRefund, refund));
+  el.btnPartial.addEventListener('click', withBusy(el.btnPartial, partialRefund));
+  el.btnRefreshEvd.addEventListener('click', loadEvidences);
+  el.btnUpEvidence.addEventListener('click', uploadEvidence);
+  el.btnRefreshReturns.addEventListener('click', loadReturnsAndReviews);
+  el.btnReviewOK.addEventListener('click', reviewOK);
+  el.btnReviewFAIL.addEventListener('click', reviewFAIL);
+
+  // atalhos
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'enter') {
+      e.preventDefault(); sendMessage();
     }
   });
 
-  // init
-  boot();
+  // auto-init se vier claim_id na URL
+  restoreFromURL();
+  if (el.claimId.value) loadAll();
 })();
