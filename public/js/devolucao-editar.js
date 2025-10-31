@@ -216,6 +216,27 @@
     'entrega atrasada': 'entrega_atrasada'
   };
 
+  // rótulos preferidos para seleção por texto
+  var CANON_LABELS = {
+    produto_defeituoso: [
+      'produto defeituoso','defeituoso','não funciona','nao funciona','not working','broken'
+    ],
+    produto_danificado: [
+      'produto danificado','danificado','avariado'
+    ],
+    nao_corresponde: [
+      'não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado',
+      'item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam peças',
+      'faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'
+    ],
+    arrependimento_cliente: [
+      'arrependimento do cliente','mudou de ideia','não quer mais','nao quer mais','não serviu','nao serviu'
+    ],
+    entrega_atrasada: [
+      'entrega atrasada','não entregue','nao entregue','not delivered','shipment delayed'
+    ]
+  };
+
   // reason_key / name ML -> canônico (inclui not_working / different_* / missing_parts)
   var REASONKEY_TO_CANON = {
     product_defective:            'produto_defeituoso',
@@ -293,6 +314,9 @@
     var t = norm(text);
     if (!t) return null;
 
+    // atalho literal mais comum do ML (da sua screenshot)
+    if (/faltam\s+partes\s+ou\s+acess[oó]rios\s+do\s+produto/.test(t)) return 'nao_corresponde';
+
     // arrependimento / não quer mais / tamanho não serviu
     if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|não\s*quero\s*mais|nao\s*precisa\s*mais|não\s*precisa\s*mais|no\s*longer\s*wants?|no\s*longer\s*need(?:ed)?|doesn.?t\s*want|dont\s*want|ya\s*no\s*lo\s*quiere(?:\s*mas)?|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant)/.test(t))
       return 'arrependimento_cliente';
@@ -367,11 +391,26 @@
     return next();
   }
 
+  // --- seleção do motivo no <select> (casa por value OU por texto) ---
   function setMotivoCanon(canon, lock){
     var sel = getMotivoSelect(); if (!sel || !canon) return false;
+
+    // 1) tentar por value exact
     for (var i=0;i<sel.options.length;i++){
       if (sel.options[i].value === canon) {
         sel.value = canon; sel.dispatchEvent(new Event('change'));
+        if (lock) lockMotivo(true,'(ML)');
+        return true;
+      }
+    }
+
+    // 2) tentar por texto da opção (normalizado) com sinônimos
+    var wanted = (CANON_LABELS[canon] || []).map(norm);
+    for (var j=0;j<sel.options.length;j++){
+      var opt = sel.options[j];
+      var labelN = norm(opt.text || opt.label || '');
+      if (labelN && (labelN === norm(canon) || wanted.indexOf(labelN) >= 0)) {
+        sel.value = opt.value; sel.dispatchEvent(new Event('change'));
         if (lock) lockMotivo(true,'(ML)');
         return true;
       }
@@ -405,8 +444,10 @@
     // helpers para varrer campos de "problema da venda"
     function scanProblem(obj){
       if (!obj || typeof obj !== 'object') return null;
-      var cand = obj.problem || obj.problem_title || obj.problem_description || obj.problem_detail ||
-                 obj.sale_problem || obj.issue || obj.issue_title || obj.issue_description || obj.detail;
+      var cand =
+        obj.problem || obj.problem_title || obj.problem_description || obj.problem_detail ||
+        obj.sale_problem || obj.issue || obj.issue_title || obj.issue_description || obj.detail ||
+        obj.problem_text || obj.sale && (obj.sale.problem || obj.sale.problem_description);
       if (cand){ var t = canonFromText(cand); if (t) return t; }
       return null;
     }
@@ -420,8 +461,8 @@
     // problema da venda no nível raiz
     var pr = scanProblem(root); if (pr) return pr;
 
-    // dentro de order / order_info
-    var ord = root.order || root.order_info || null;
+    // dentro de order / order_info / sale / purchase
+    var ord = root.order || root.order_info || root.sale || root.purchase || null;
     var pr2 = scanProblem(ord);
     if (pr2) return pr2;
 
@@ -927,6 +968,10 @@
                 var o = j.order || j.order_info;
                 push(o.problem); push(o.problem_title); push(o.problem_description); push(o.problem_detail);
               }
+              if (j.sale || j.purchase){
+                var s = j.sale || j.purchase;
+                push(s.problem); push(s.problem_description);
+              }
               var best = null;
               texts.some(function(tx){ var c = canonFromText(tx); if (c){ best=c; return true; } return false; });
               return best;
@@ -1116,4 +1161,3 @@
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load); else load();
 })();
-
