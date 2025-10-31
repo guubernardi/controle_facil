@@ -171,6 +171,10 @@
           <label for="sku">SKU / Item ID</label>
           <input id="sku" name="sku" type="text" placeholder="Ex.: SKU-12345" autocomplete="off">
         </div>
+
+        <!-- (Opcional) Inputs ocultos para o JS preencher/usar -->
+        <input id="order_id" name="order_id" type="hidden">
+        <input id="ml_claim_id" name="ml_claim_id" type="hidden">
       </section>
 
       <!-- Valores -->
@@ -179,17 +183,23 @@
 
         <div class="row">
           <label for="valor_produto">Valor do Produto</label>
-          <input id="valor_produto" name="valor_produto" type="text" placeholder="0,00" inputmode="decimal">
+          <input id="valor_produto" name="valor_produto" type="text" placeholder="0,00" inputmode="decimal" autocomplete="off">
         </div>
 
         <div class="row">
           <label for="valor_frete">Valor do Frete</label>
-          <input id="valor_frete" name="valor_frete" type="text" placeholder="0,00" inputmode="decimal">
+          <input id="valor_frete" name="valor_frete" type="text" placeholder="0,00" inputmode="decimal" autocomplete="off">
         </div>
 
         <div class="row">
           <label for="valor_total">Valor Total a Reembolsar</label>
-          <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="font-semibold">
+          <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="font-semibold" readonly>
+        </div>
+
+        <!-- (Opcional) Resumo do ML preenchido pelo JS -->
+        <div class="row ml-summary" aria-live="polite">
+          <div class="ml-pair"><span>Produto (ML):</span> <strong id="ml-product-sum">—</strong></div>
+          <div class="ml-pair"><span>Frete (ML):</span> <strong id="ml-freight">—</strong></div>
         </div>
 
         <div class="status-box">
@@ -203,7 +213,8 @@
             <button type="button" class="btn btn--sm btn--outline" id="btn-cd">Gerenciar</button>
           </div>
 
-          <div id="cd-info" class="cd-details" hidden>
+          <!-- IMPORTANTE: não deixar "hidden" no wrapper -->
+          <div id="cd-info" class="cd-details">
             <span id="pill-cd" class="pill -neutro">Não recebido</span>
             <span id="cd-sep" class="cd-sep" hidden>·</span>
             <span id="cd-resp" class="cd-text" hidden></span>
@@ -223,7 +234,7 @@
 
         <div class="row">
           <label for="nfe_chave">Chave de acesso (44 dígitos)</label>
-          <input id="nfe_chave" name="nfe_chave" type="text" placeholder="35240112345678901234567890123456789012345678" maxlength="44" class="font-mono">
+          <input id="nfe_chave" name="nfe_chave" type="text" placeholder="35240112345678901234567890123456789012345678" maxlength="44" class="font-mono" autocomplete="off">
         </div>
       </section>
 
@@ -240,7 +251,7 @@
   </main>
 
   <!-- Toast -->
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" aria-live="polite"></div>
 
   <!-- Scripts -->
   <script src="js/devolucao-editar.js"></script>

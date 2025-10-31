@@ -1,8 +1,13 @@
-// server/routes/ml-amounts.js — amounts + claim + frete + reason_label + preferência por seller_nick
+// server/routes/ml-amounts.js
+// amounts + claim + frete + reason_label + preferência por seller_nick
+// + proxy de reasons (para o front descobrir motivo por ID)
+// + endpoint /enrich (no-op com log opcional)
+// ----------------------------------------------------------------------------
 'use strict';
 
 const { query } = require('../db');
 
+// ===== Utils básicos ========================================================
 function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : 0; }
 function notBlank(v){ return v !== null && v !== undefined && String(v).trim() !== ''; }
 
@@ -26,7 +31,7 @@ function guessNickFromLoja(lojaNome) {
   return nick || null;
 }
 
-// ================== TOKENS (pool dinâmico) ==================
+// ===== Pool de tokens (ENV + DB) ============================================
 async function listDbTokens() {
   try {
     const { rows } = await query(
@@ -93,16 +98,22 @@ function preferNick(pool, sellerNick) {
   return [...a, ...b];
 }
 
-// ================== HTTP ML ==================
-async function mget(token, path) {
+// ===== HTTP ML com fallback e timeout =======================================
+async function mget(token, path, { timeout = 12000 } = {}) {
   const base = 'https://api.mercadolibre.com';
-  const r = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` } });
-  let j = {}; try { j = await r.json(); } catch {}
-  if (!r.ok) {
-    const e = new Error(`${r.status} ${j?.message || j?.error || r.statusText}`);
-    e.status = r.status; e.payload = j; throw e;
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const r = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
+    let j = {}; try { j = await r.json(); } catch {}
+    if (!r.ok) {
+      const e = new Error(`${r.status} ${j?.message || j?.error || r.statusText}`);
+      e.status = r.status; e.payload = j; throw e;
+    }
+    return j;
+  } finally {
+    clearTimeout(to);
   }
-  return j;
 }
 async function mgetWithAnyToken(tokens, path, meta, tag) {
   let lastErr = null;
@@ -120,7 +131,7 @@ async function mgetWithAnyToken(tokens, path, meta, tag) {
   throw new Error('no_token_available');
 }
 
-// ===== Motivo (normalizado e chave canônica) =====
+// ===== Motivo (normalização e label humano) =================================
 const CODE_TO_LABEL = {
   'PDD9939': 'Pedido incorreto',
   'PDD9904': 'Produto com defeito',
@@ -153,8 +164,11 @@ function labelFromReasonKey(key){
   // transporte
   if (['avaria_transporte','damaged_in_transit','shipping_damage','carrier_damage'].includes(k))
     return 'Avaria no transporte';
-  // pedido incorreto
-  if (['pedido_incorreto','wrong_item','different_from_publication','not_as_described','mixed_order'].includes(k))
+  // pedido incorreto / não corresponde
+  if ([
+    'pedido_incorreto','wrong_item','different_from_publication','not_as_described','mixed_order',
+    'different_product','different_variant','different_color','wrong_color','color_mismatch','variant_mismatch'
+  ].includes(k))
     return 'Pedido incorreto';
   return null;
 }
@@ -169,8 +183,15 @@ function labelFromReasonName(name='') {
     return 'Produto com defeito';
   if (has('transporte') || has('shipping damage') || has('carrier damage'))
     return 'Avaria no transporte';
-  if (has('pedido incorreto') || has('produto errado') || has('wrong item') || has('not as described'))
+
+  // Não corresponde / produto ou cor diferente / errado / trocado
+  if (
+    has('pedido incorreto') || has('produto errado') || has('wrong item') || has('not as described') ||
+    has('produto diferente') || has('modelo diferente') || has('tamanho diferente') ||
+    has('cor diferente') || has('produto ou cor diferente') || has('produto trocado')
+  )
     return 'Pedido incorreto';
+
   return null;
 }
 
@@ -198,7 +219,7 @@ const sumOrderProducts = (o) => {
   return sum > 0 ? sum : null;
 };
 
-// ===== helpers extras =====
+// ===== helpers extras =======================================================
 function pickFreightFromOrder(order) {
   if (!order) return null;
   const cands = [
@@ -229,6 +250,7 @@ function computeReasonExtras(claim) {
   return { reason_label };
 }
 
+// ===== Rotas ================================================================
 module.exports = function registerMlAmounts(app) {
   // GET /api/ml/returns/:id/fetch-amounts[?order_id=...&claim_id=...&seller_nick=...]
   app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
@@ -335,7 +357,7 @@ module.exports = function registerMlAmounts(app) {
       // sugestão de log (pré/transporte/recebido)
       const logHint = claim ? mapClaimToLog(claim.status, claim.substatus) : null;
 
-      // ===== NOVO: reason_label calculado no servidor =====
+      // reason_label calculado no servidor
       const { reason_label } = computeReasonExtras(claim);
 
       return res.json({
@@ -346,16 +368,85 @@ module.exports = function registerMlAmounts(app) {
         order,
         claim,
         // aliases amigáveis + label humano
-        reason_code: (claim && claim.reason_id) || null,                     // ex.: PDD9939
+        reason_code: (claim && claim.reason_id) || null, // ex.: PDD9939
         reason_name: (claim && claim.reason_name) || null,
-        reason_key:  (claim && claim.reason_key) || null,                    // chave canônica
-        reason_label,                                                        // <<<<<< novo
+        reason_key:  (claim && claim.reason_key) || null, // chave canônica
+        reason_label,                                     // ex.: "Pedido incorreto"
         log_status_suggested: logHint,
         meta
       });
     } catch (e) {
       console.error('[ML AMOUNTS] erro geral:', e);
       return res.status(500).json({ error: 'Falha ao buscar valores', detail: e?.message || String(e) });
+    }
+  });
+
+  // === Proxy de REASONS para o front descobrir o canônico por ID =============
+  // O front tenta: /api/ml/claims/reasons/:id, /api/ml/reasons/:id, /api/ml/claim-reasons/:id
+  async function proxyReasonById(req, res) {
+    const meta = { steps: [], errors: [], tried: [] };
+    try {
+      const rid = String(req.params.id || '').trim();
+      if (!rid) return res.status(400).json({ error: 'reason_id ausente' });
+
+      // escolhe qualquer devolução para montar pool (ou faz um pool "global")
+      let dev = { loja_nome: null };
+      try {
+        const { rows } = await query('SELECT loja_nome FROM devolucoes ORDER BY id DESC LIMIT 1');
+        if (rows.length) dev = rows[0];
+      } catch {}
+
+      const { pool } = await buildTokenPool(dev);
+      if (!pool.length) return res.status(400).json({ error: 'Nenhum token disponível' });
+
+      const idEnc = encodeURIComponent(rid);
+      const candidates = [
+        `/post-purchase/v1/claims/reasons/${idEnc}`,
+        `/post-purchase/v1/reasons/${idEnc}`,
+        `/claims/reasons/${idEnc}`
+      ];
+
+      let lastErr = null;
+      for (const p of candidates) {
+        try {
+          meta.steps.push({ try: p });
+          const { data } = await mgetWithAnyToken(pool, p, meta, 'reasons');
+          return res.json({ ok: true, data, meta });
+        } catch (e) {
+          lastErr = e;
+          meta.errors.push({ where: p, message: e.message, status: e.status || null, payload: e.payload || null });
+        }
+      }
+      if (lastErr) return res.status(lastErr.status || 404).json({ error: 'reason não encontrado', meta });
+      return res.status(404).json({ error: 'reason não encontrado', meta });
+    } catch (e) {
+      return res.status(500).json({ error: 'Falha ao consultar reason', detail: e?.message || String(e), meta });
+    }
+  }
+  app.get('/api/ml/claims/reasons/:id', proxyReasonById);
+  app.get('/api/ml/reasons/:id', proxyReasonById);
+  app.get('/api/ml/claim-reasons/:id', proxyReasonById);
+
+  // === Endpoint “enrich” (no-op com log opcional) ============================
+  app.post('/api/ml/returns/:id/enrich', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      // se existir tabela de eventos, registra um log simples; senão, 204
+      const hasDevEv = await tableHasColumns('devolucoes_events', ['devolucao_id','type','title','message','meta']);
+      if (hasDevEv.devolucao_id) {
+        const meta = { source: 'ml-enrich', at: new Date().toISOString() };
+        await query(
+          `INSERT INTO devolucoes_events (devolucao_id, type, title, message, meta)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [id, 'status', 'Enriquecimento ML', 'Amounts/claim atualizados via ML', meta]
+        );
+        return res.status(201).json({ ok: true });
+      }
+      return res.status(204).end();
+    } catch (e) {
+      return res.status(200).json({ ok: true }); // não falha o fluxo do front
     }
   });
 };
