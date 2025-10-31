@@ -3,164 +3,151 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Chat da Reclamação (ML) — Controle Fácil</title>
-  <meta name="description" content="Mensagens, mediações e ações da reclamação do Mercado Livre." />
-  <link rel="icon" href="assets/img/favicon.png" type="image/png"/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
-  <link rel="stylesheet" href="css/chat.css">
-  <style>
-    /* helpers mínimos caso seu chat.css ainda não tenha tudo */
-    :root{--muted:#f8fafc;--border:#e5e7eb}
-    body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#fff;color:#0f172a}
-    .page{max-width:1200px;margin:24px auto;padding:0 16px}
-    .topbar{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
-    .stack{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px}
-    .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
-    .field{display:flex;flex-direction:column;gap:6px}
-    .row{display:flex;gap:8px;align-items:center}
-    input[type="text"], input[type="number"], input[type="file"], textarea, select{
-      width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff
-    }
-    button{border:none;border-radius:10px;padding:10px 14px;cursor:pointer}
-    .btn{background:#2563eb;color:#fff}
-    .btn.ghost{background:#eef2f7;color:#111;border:1px solid var(--border)}
-    .btn.warn{background:#f59e0b}
-    .btn.danger{background:#ef4444}
-    .btn.success{background:#059669}
-    .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--border);background:var(--muted)}
-    .subtitle{font-size:14px;color:#475569}
-    .messages{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto;padding-right:6px}
-    .msg{border:1px solid var(--border);border-radius:12px;padding:10px 12px}
-    .msg .meta{display:flex;gap:8px;align-items:center;font-size:12px;color:#475569;margin-bottom:4px}
-    .msg.me{border-color:#bfdbfe;background:#eff6ff}
-    .bubble-actions{display:flex;gap:8px;align-items:center}
-    .attachments{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
-    .attachment{display:inline-flex;gap:6px;align-items:center;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:#fafafa}
-    .section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-    .list{display:flex;flex-direction:column;gap:8px}
-    .hint{font-size:12px;color:#64748b}
-    .toast{position:fixed;right:16px;bottom:16px;transform:translateY(12px);opacity:0;transition:.2s;padding:10px 12px;background:#111;color:#fff;border-radius:10px}
-    .toast.show{transform:translateY(0);opacity:1}
-    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
-  </style>
+  <title>Chat de Reclamações — Controle Fácil</title>
+  <link rel="stylesheet" href="css/chat.css" />
 </head>
 <body>
-  <div class="page">
-    <div class="topbar">
-      <div class="stack">
-        <a class="row" href="index.html" aria-label="Voltar"><span class="pill">← Voltar</span></a>
-        <div class="row">
-          <label class="pill">Claim ID</label>
-          <input id="claimId" type="text" placeholder="ex.: 1234567890" style="width:260px">
-          <button id="btnLoad" class="btn">Carregar</button>
-        </div>
-      </div>
-      <div class="row">
-        <input id="sellerToken" type="text" placeholder="x-seller-token (opcional)" style="width:320px">
-        <button id="btnSaveTok" class="btn ghost">Salvar token</button>
-      </div>
-    </div>
+  <div class="container">
+    <div class="chat-wrapper">
 
-    <div class="grid">
-      <!-- COLUNA ESQUERDA: MENSAGENS -->
-      <section class="card">
-        <div class="section-title">
-          <h2>Mensagens</h2>
-          <span id="mediationBadge" class="pill">Mediação: —</span>
-        </div>
+      <!-- ===== HEADER (menu de abas) ===== -->
+      <header class="header">
+        <nav class="abas" role="tablist" aria-label="Trocar conversa">
+          <button id="abaCliente" class="aba" role="tab"
+                  aria-selected="true" aria-controls="painel-cliente">
+            👤 Chat com cliente
+          </button>
+          <button id="abaPlataforma" class="aba" role="tab"
+                  aria-selected="false" aria-controls="painel-plataforma">
+            🏢 Chat com a plataforma
+          </button>
+        </nav>
 
-        <div id="messages" class="messages" aria-live="polite"></div>
+        <button class="settings-btn" title="Preferências">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M12 1v6m0 6v6m5.2-13.2l-4.2 4.2m0 6l4.2 4.2M23 12h-6m-6 0H1m18.2-5.2l-4.2 4.2m0 6l4.2 4.2"></path>
+          </svg>
+        </button>
+      </header>
 
-        <div class="card" style="margin-top:12px">
-          <div class="row" style="gap:12px;align-items:flex-start">
-            <div style="min-width:180px">
-              <label class="hint">Enviar para</label>
-              <select id="receiverRole">
-                <option value="complainant">Comprador</option>
-                <option value="respondent" selected>Respondente (você)</option>
-                <option value="mediator">Mediador</option>
-              </select>
+      <!-- ================================================================== -->
+      <!-- ===================== PAINEL: CLIENTE (visível) ================== -->
+      <!-- ================================================================== -->
+      <section id="painel-cliente" class="painel" role="tabpanel" aria-labelledby="abaCliente">
+        <div class="main-content">
+
+          <!-- ===== Coluna esquerda (filtros/lista) ===== -->
+          <aside class="left-panel">
+            <!-- Link de regras -->
+            <div class="search-section" style="border-bottom:none; padding-bottom:0">
+              <a href="#" class="rules-link">
+                Ver regras
+                <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              </a>
             </div>
-            <div class="field">
-              <label class="hint">Mensagem</label>
-              <textarea id="msgText" rows="3" placeholder="Escreva sua mensagem…"></textarea>
-              <div class="bubble-actions">
-                <input id="fileInput" type="file" multiple>
-                <button id="btnSend" class="btn">Enviar</button>
-                <span id="sendHint" class="hint"></span>
+
+            <!-- Busca -->
+            <div class="search-section">
+              <input type="text" class="search-input" placeholder="Buscar por nome" aria-label="Buscar por nome"/>
+              <button class="search-btn" aria-label="Buscar">
+                <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <path d="m21 21-4.35-4.35"></path>
+                </svg>
+              </button>
+            </div>
+
+            <!-- Filtros/ações -->
+            <div class="action-buttons">
+              <button class="btn-primary dropdown-btn" aria-haspopup="listbox" aria-expanded="false">
+                Aguardando respostas <span class="dropdown-icon">▼</span>
+              </button>
+              <button class="btn-outline">
+                <svg class="icon-small" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="2"></circle>
+                  <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path>
+                </svg>
+                Transmitir
+              </button>
+            </div>
+
+            <!-- Estado vazio (lista/conversas) -->
+            <div class="empty-state" aria-live="polite">
+              <div class="empty-icon">
+                <svg class="icon-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
               </div>
-              <div id="uploadPreview" class="attachments" hidden></div>
+              <h3 class="empty-title">Nenhuma mensagem de cliente.</h3>
+              <p class="empty-text">
+                Fique de olho no chat e esteja disponível para oferecer um ótimo atendimento.
+              </p>
             </div>
-          </div>
+          </aside>
+
+          <!-- ===== Coluna direita (chat com cliente) ===== -->
+          <section class="right-panel">
+            <!-- Cabeçalho do chat -->
+            <div class="chat-header">
+              <div class="avatar" aria-hidden="true"></div>
+              <div class="skeleton-wrapper">
+                <div class="skeleton skeleton-line-1"></div>
+                <div class="skeleton skeleton-line-2"></div>
+              </div>
+            </div>
+
+            <!-- Mensagens -->
+            <div class="chat-messages" aria-live="polite" aria-label="Mensagens do cliente">
+              <!-- renderizado via JS -->
+            </div>
+
+            <!-- Composer -->
+            <div class="message-input">
+              <div class="input-skeleton"></div>
+              <div class="send-skeleton"></div>
+            </div>
+          </section>
         </div>
       </section>
 
-      <!-- COLUNA DIREITA: STATUS / AÇÕES -->
-      <section class="card">
-        <div class="section-title">
-          <h2>Status & Ações</h2>
-          <span id="affects" class="pill">Atinge reputação: —</span>
-        </div>
-
-        <div class="list" id="statusList">
-          <div class="row"><span class="subtitle">Claim:</span> <span id="claimStatus">—</span></div>
-          <div class="row"><span class="subtitle">Substatus:</span> <span id="claimSubstatus">—</span></div>
-          <div class="row"><span class="subtitle">Custo retorno:</span> <span id="returnCost">—</span></div>
-        </div>
-
-        <hr style="margin:12px 0;border:none;border-top:1px solid var(--border)">
-
-        <div class="list">
-          <div class="row" style="flex-wrap:wrap;gap:8px">
-            <button id="btnOpenDispute" class="btn warn" title="Abre mediação com o ML">Abrir mediação</button>
-            <button id="btnAllowReturn" class="btn success" title="Autoriza devolução / gera etiqueta">Autorizar devolução</button>
-            <button id="btnRefund" class="btn danger" title="Reembolso total">Reembolsar (total)</button>
-          </div>
-          <div class="row">
-            <input id="partialPct" type="number" min="1" max="99" step="1" placeholder="% parcial" style="width:140px">
-            <button id="btnPartial" class="btn">Reembolso parcial</button>
-          </div>
-        </div>
-
-        <hr style="margin:12px 0;border:none;border-top:1px solid var(--border)">
-
-        <div class="list">
-          <div class="section-title">
-            <h3 style="font-size:16px">Evidências</h3>
-            <button id="btnRefreshEvd" class="btn ghost">Atualizar</button>
-          </div>
-          <ul id="evidences" class="list"></ul>
-          <div class="row" style="margin-top:8px">
-            <input id="evidenceFile" type="file">
-            <button id="btnUpEvidence" class="btn">Anexar evidência</button>
-          </div>
-          <span class="hint">Arquivos enviados aqui vão para <i>/claims/:id/attachments-evidences</i>.</span>
-        </div>
-
-        <hr style="margin:12px 0;border:none;border-top:1px solid var(--border)">
-
-        <div class="list">
-          <div class="section-title">
-            <h3 style="font-size:16px">Returns & Reviews</h3>
-            <button id="btnRefreshReturns" class="btn ghost">Atualizar</button>
-          </div>
-          <div id="returnsBox" class="list"></div>
-          <div id="reviewBox" class="list" hidden>
-            <div class="row" style="gap:8px;flex-wrap:wrap">
-              <button id="btnReviewOK" class="btn success">Review OK</button>
-              <select id="failReason" style="min-width:240px"></select>
-              <button id="btnReviewFAIL" class="btn danger">Review FAIL</button>
+      <!-- ================================================================== -->
+      <!-- =================== PAINEL: PLATAFORMA (oculto) =================== -->
+      <!-- ================================================================== -->
+      <section id="painel-plataforma" class="painel" role="tabpanel" aria-labelledby="abaPlataforma" hidden>
+        <div class="main-content plataforma">
+          <!-- Neste painel mostramos apenas a coluna direita (mediação ML) -->
+          <section class="right-panel">
+            <!-- Cabeçalho da mediação -->
+            <div class="chat-header">
+              <div class="avatar" aria-hidden="true"></div>
+              <div class="skeleton-wrapper">
+                <div class="skeleton skeleton-line-1"></div>
+                <div class="skeleton skeleton-line-2"></div>
+              </div>
             </div>
-            <span class="hint">Motivos carregados de <i>/returns/reasons?flow=seller_return_failed&claim_id=…</i></span>
-          </div>
+
+            <!-- Mensagens de mediação -->
+            <div class="chat-messages" aria-live="polite" aria-label="Mensagens de mediação da plataforma">
+              <!-- renderizado via JS -->
+            </div>
+
+            <!-- Composer da plataforma -->
+            <div class="message-input">
+              <div class="input-skeleton"></div>
+              <div class="send-skeleton"></div>
+            </div>
+          </section>
         </div>
       </section>
+
     </div>
   </div>
 
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <script src="js/chat.js" defer></script>
+  <script src="js/chat.js"></script>
 </body>
 </html>
