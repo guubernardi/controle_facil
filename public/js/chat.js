@@ -3,24 +3,48 @@
   // ===== Config / integração backend =====
   const API = '/api/ml'; // base de rotas do backend
 
-  function authHeaders() {
-    const token = localStorage.getItem('ML_SELLER_TOKEN') || '';
-    const sellerId = localStorage.getItem('ML_SELLER_ID') || '';
-    const h = { 'Content-Type': 'application/json' };
+  // Headers dinâmicos (evita forçar Content-Type em FormData)
+  function authHeaders({ json = true } = {}) {
+    const token =
+      localStorage.getItem('ML_SELLER_TOKEN') ||
+      localStorage.getItem('ML_TOKEN') ||
+      '';
+
+    const sellerId =
+      localStorage.getItem('ML_SELLER_ID') ||
+      localStorage.getItem('ML_OWNER_ID') ||
+      '';
+
+    const h = {};
+    if (json) h['Content-Type'] = 'application/json';
+
     if (token)    h['x-seller-token'] = token;
-    if (sellerId) h['x-seller-id']    = sellerId;
+    if (sellerId) {
+      h['x-seller-id'] = sellerId; // compat frontend antigo
+      h['x-owner']     = sellerId; // alguns backends leem x-owner
+    }
     return h;
   }
 
-  async function jfetch(url, opts={}) {
+  // fetch com cookies de sessão e melhor mensagem de erro
+  async function jfetch(url, opts = {}) {
     const res = await fetch(url, {
+      credentials: 'include',
       ...opts,
-      headers: { ...(opts.headers || {}), ...authHeaders() }
+      headers: {
+        ...(opts.headers || {}),
+        ...authHeaders(opts.json === false ? { json: false } : {}),
+      },
     });
+
     if (!res.ok) {
-      const text = await res.text().catch(()=>'');
-      throw new Error(`HTTP ${res.status} ${res.statusText} – ${text || url}`);
+      const text = await res.text().catch(() => '');
+      const msg = `HTTP ${res.status} ${res.statusText} – ${text || url}`;
+      if (res.status === 401) console.warn('Não autorizado. Faça login.', msg);
+      if (res.status === 404) console.warn('Endpoint não encontrado.', msg);
+      throw new Error(msg);
     }
+
     const ct = res.headers.get('content-type') || '';
     return ct.includes('application/json') ? res.json() : res.text();
   }
@@ -29,7 +53,6 @@
   const $  = (s, ctx=document) => ctx.querySelector(s);
   const $$ = (s, ctx=document) => Array.from(ctx.querySelectorAll(s));
   const when = iso => { const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleString('pt-BR'); };
-  const uid = (p='m') => `${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
   const scrollToEnd = node => { if (node) node.scrollTop = node.scrollHeight; };
 
   // ===== Querystring util =====
@@ -134,7 +157,7 @@
         type: 'claim',
         id,
         label: `Claim #${id}`,
-        subtitle: '' // se quiser, podemos buscar /returns/by-claim/:id e preencher
+        subtitle: '' // opcional: pode preencher com /returns/by-claim/:id
       }));
       state.platActiveId = state.platThreads[0]?.id || null;
       return;
@@ -367,7 +390,7 @@
       if (!text && files.length === 0) return;
 
       try {
-        // CLIENTE (pack): usa endpoint universal /chat/send (sem anexos)
+        // CLIENTE (pack): endpoint universal /chat/send
         if (destino === 'cliente') {
           if (!state.packId) return;
           await jfetch(`${API}/chat/send`, {
@@ -379,21 +402,21 @@
           renderCliente();
         }
 
-        // PLATAFORMA (claim): se tiver arquivo, sobe primeiro no endpoint de anexos de claim,
-        // depois envia pelo endpoint específico de claim (que aceita attachments)
+        // PLATAFORMA (claim): upload + send-message
         if (destino === 'plataforma') {
           const claimId = state.platActiveId;
           if (!claimId) return;
 
+          // 1) Uploads (se houver)
           let attachments = [];
           if (files.length) {
-            attachments = [];
             for (const f of files) {
               const fd = new FormData();
               fd.append('file', f, f.name);
               const res = await fetch(`${API}/claims/${encodeURIComponent(claimId)}/attachments`, {
                 method: 'POST',
-                headers: { ...authHeaders() }, // NÃO adicionar Content-Type aqui (deixa o browser definir o boundary)
+                credentials: 'include',
+                headers: authHeaders({ json: false }), // não seta Content-Type
                 body: fd
               });
               if (!res.ok) {
@@ -401,11 +424,12 @@
                 throw new Error(`Falha no upload: ${res.status} ${t}`);
               }
               const j = await res.json();
-              if (j?.filename || j?.file_name) attachments.push(j.filename || j.file_name);
+              const name = j?.filename || j?.file_name;
+              if (name) attachments.push(name);
             }
           }
 
-          // envia a mensagem (receiver_role = 'mediator' na maioria dos casos)
+          // 2) Envia a mensagem (normalmente para o 'mediator')
           await jfetch(`${API}/claims/${encodeURIComponent(claimId)}/messages`, {
             method: 'POST',
             body: JSON.stringify({
@@ -415,7 +439,7 @@
             })
           });
 
-          // refetch e re-render
+          // 3) Refetch e re-render
           await fetchPlataformaMessages(claimId);
           renderPlataforma();
         }
@@ -456,7 +480,7 @@
     // carrega mensagens iniciais (cliente/plataforma)
     renderSkeletons();
     try {
-      if (state.packId) await fetchClienteMessages();
+      if (state.packId)       await fetchClienteMessages();
       if (state.platActiveId) await fetchPlataformaMessages(state.platActiveId);
     } catch (err) {
       console.error(err);
@@ -465,8 +489,8 @@
     // desenha lista/headers
     renderPlatThreadList();
 
-    // Seleciona aba inicial
-    setAba('cliente'); // você pode trocar para 'plataforma' se preferir iniciar lá
+    // Seleciona aba inicial (se houver claim, começa na Plataforma)
+    setAba(state.platActiveId ? 'plataforma' : 'cliente');
     syncLeftPanelVisibility();
 
     // Ajusta placeholder e header da plataforma
