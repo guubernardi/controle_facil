@@ -248,6 +248,7 @@ async function addReturnEvent(args = {}, req) {
 }
 
 /* ================== Rotas ================== */
+app.use('/api/ml', require('./routes/ml-claims'));
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
 try {

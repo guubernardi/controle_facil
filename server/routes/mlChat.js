@@ -1,6 +1,5 @@
 // server/routes/mlChat.js
 'use strict';
-
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -8,108 +7,139 @@ const multer = require('multer');
 
 const router = express.Router();
 
-/**
- * === Storage para anexos de claim ===
- * (salva em /public/uploads/chat/)
- */
-const UPLOAD_DIR = path.join(__dirname, '..', '..', 'public', 'uploads', 'chat');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// ---- helpers -------------------------------------------------
+const ML_BASE = 'https://api.mercadolibre.com/post-purchase/v1';
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const base = (file.originalname || 'arquivo').replace(/\s+/g, '_');
-    const ext  = path.extname(base);
-    const name = path.basename(base, ext);
-    cb(null, `${Date.now()}_${name}${ext}`);
+function getSellerToken(req) {
+  // prioridade: header -> sessão (se você salvar lá)
+  return req.get('x-seller-token') || req.session?.ml?.access_token || '';
+}
+async function mlFetch(req, url, opts = {}) {
+  const token = getSellerToken(req);
+  if (!token) {
+    const e = new Error('missing_seller_token');
+    e.status = 401;
+    throw e;
   }
-});
-const upload = multer({ storage });
+  const r = await fetch(url, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      ...(opts.headers || {})
+    }
+  });
+  // repassa corpo
+  const ct = r.headers.get('content-type') || '';
+  const body = ct.includes('application/json') ? await r.json().catch(() => null)
+                                               : await r.text().catch(() => '');
+  if (!r.ok) {
+    const err = new Error(body?.message || r.statusText);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+const ok = (res, data = {}) => res.json({ ok: true, ...data });
 
-function nowIsoMinus(ms) { return new Date(Date.now() - ms).toISOString(); }
-function ok(res, data = {}) { return res.json({ ok: true, ...data }); }
-
-/**
- * GET /api/ml/communications/notices
- * Lista “avisos” (stub) só para popular a coluna esquerda com alguns claims.
- */
+// ---- notices (apenas para popular a lista à esquerda; vazio por padrão) ----
 router.get('/communications/notices', (req, res) => {
-  const limit  = Math.max(1, Math.min(parseInt(req.query.limit || '10', 10), 50));
-  const offset = Math.max(0, parseInt(req.query.offset || '0', 10) || 0);
-
-  // Stub simples — devolve 3 claims fake
-  const results = [
-    { id: 'n1', type: 'claim_notice', claim_id: '842199', created_at: nowIsoMinus(60_000) },
-    { id: 'n2', type: 'claim_notice', claim_id: '553120', created_at: nowIsoMinus(5 * 60_000) },
-    { id: 'n3', type: 'claim_notice', claim_id: '909833', created_at: nowIsoMinus(8 * 60_000) },
-  ].slice(offset, offset + limit);
-
-  res.json({ results, limit, offset, total: 3 });
+  res.json({ results: [], limit: 10, offset: 0, total: 0 });
 });
 
-/**
- * GET /api/ml/chat/messages?type=pack|claim&id=...
- * Mensagens do chat (stub – retorna alguns exemplos)
- */
-router.get('/chat/messages', (req, res) => {
+// ---- GET mensagens (pack/claim) -------------------------------------------
+router.get('/chat/messages', async (req, res) => {
   const { type, id } = req.query;
   if (!type || !id) return res.status(400).json({ error: 'type e id são obrigatórios' });
 
-  let messages = [];
-  if (String(type) === 'pack') {
-    messages = [
-      { id: 'm1', author_role: 'buyer',  author_name: 'Comprador', text: 'Olá, tive um problema com o produto.', attachments: [], created_at: nowIsoMinus(6 * 60_000) },
-      { id: 'm2', author_role: 'seller', author_name: 'Vendedor',  text: 'Claro! Vamos resolver.',                attachments: [], created_at: nowIsoMinus(5 * 60_000) },
-    ];
-  } else if (String(type) === 'claim') {
-    messages = [
-      { id: 'p1', author_role: 'platform', author_name: 'Mediador', text: 'Mensagem da mediação.', attachments: [], created_at: nowIsoMinus(60_000) },
-      { id: 'p2', author_role: 'seller',   author_name: 'Vendedor', text: 'Enviarei evidências por aqui.', attachments: [], created_at: nowIsoMinus(30_000) },
-    ];
+  try {
+    if (String(type) === 'claim') {
+      const data = await mlFetch(req, `${ML_BASE}/claims/${encodeURIComponent(id)}/messages`);
+      // adapta para o shape que o front espera
+      const messages = (Array.isArray(data) ? data : []).map((m, i) => ({
+        id: `ml_${i}`,
+        author_role: m.sender_role,          // complainant | respondent | mediator
+        author_name: m.sender_role,
+        text: m.message || '',
+        created_at: m.message_date || m.date_created,
+        attachments: (m.attachments || []).map(a => ({
+          id: a.filename,
+          name: a.original_filename || a.filename,
+          url: null // download exige endpoint ML específico; podemos montar depois
+        }))
+      }));
+      return res.json({ type, id, messages });
+    }
+
+    if (String(type) === 'pack') {
+      // ainda não mapeado (sua fonte é outra). Retorna vazio.
+      return res.json({ type, id, messages: [] });
+    }
+
+    return res.status(400).json({ error: 'type inválido' });
+  } catch (e) {
+    const status = e.status || 500;
+    return res.status(status).json({ error: e.message || 'fail', detail: e.body || null });
   }
-
-  res.json({ type, id, messages });
 });
 
-/**
- * POST /api/ml/chat/send
- * Body: { type: 'pack', id: '...', text: '...' }
- * (Stub: apenas confirma recebimento)
- */
-router.post('/chat/send', express.json(), (req, res) => {
-  const { type, id, text } = req.body || {};
-  if (!type || !id || !text) return res.status(400).json({ error: 'type, id e text são obrigatórios' });
-  return ok(res, { sent_id: `sent_${Date.now()}` });
-});
+// ---- POST upload de anexo (envia para o ML) -------------------------------
+const TMP_DIR = path.join(__dirname, '..', '..', 'tmp-upload');
+fs.mkdirSync(TMP_DIR, { recursive: true });
+const upload = multer({ dest: TMP_DIR });
 
-/**
- * POST /api/ml/claims/:id/attachments
- * Upload de arquivo da mediação (salva no /public/uploads/chat)
- * Resposta: { filename, url }
- */
-router.post('/claims/:id/attachments', upload.single('file'), (req, res) => {
+router.post('/claims/:id/attachments', upload.single('file'), async (req, res) => {
+  const claimId = req.params.id;
   if (!req.file) return res.status(400).json({ error: 'file é obrigatório' });
-  const filename = req.file.filename;
-  const url = `/uploads/chat/${filename}`; // servidos pelo express.static
-  return ok(res, { filename, url });
+
+  try {
+    // monta form-data nativa do fetch do Node 18+
+    const buf = fs.readFileSync(req.file.path);
+    const blob = new Blob([buf], { type: req.file.mimetype || 'application/octet-stream' });
+    const form = new FormData();
+    form.append('file', blob, req.file.originalname || req.file.filename);
+
+    const out = await mlFetch(req, `${ML_BASE}/claims/${encodeURIComponent(claimId)}/attachments`, {
+      method: 'POST',
+      body: form
+    });
+
+    // limpa tmp
+    fs.unlink(req.file.path, () => {});
+    // o ML retorna { user_id, filename } (ou file_name)
+    const filename = out?.filename || out?.file_name;
+    return ok(res, { filename });
+  } catch (e) {
+    fs.unlink(req.file?.path || '', () => {});
+    const status = e.status || 500;
+    return res.status(status).json({ error: e.message || 'upload_fail', detail: e.body || null });
+  }
 });
 
-/**
- * POST /api/ml/claims/:id/messages
- * Body: { receiver_role: 'mediator'|'buyer'|'seller', message: '...', attachments?: [filename] }
- * (Stub: apenas confirma recebimento)
- */
-router.post('/claims/:id/messages', express.json(), (req, res) => {
-  const { id } = req.params;
-  const { receiver_role, message, attachments = [] } = req.body || {};
-  if (!id || !receiver_role || !message) {
-    return res.status(400).json({ error: 'id, receiver_role e message são obrigatórios' });
+// ---- POST enviar mensagem (usa actions/send-message) ----------------------
+router.post('/claims/:id/messages', express.json(), async (req, res) => {
+  const claimId = req.params.id;
+  const { receiver_role, message, attachments } = req.body || {};
+  if (!receiver_role || !message) {
+    return res.status(400).json({ error: 'receiver_role e message são obrigatórios' });
   }
-  return ok(res, {
-    claim_id: id,
-    created_at: new Date().toISOString(),
-    attachments
-  });
+  try {
+    // corpo aceito pela API do ML
+    const body = { receiver_role, message };
+    if (Array.isArray(attachments) && attachments.length) body.attachments = attachments;
+
+    await mlFetch(req, `${ML_BASE}/claims/${encodeURIComponent(claimId)}/actions/send-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    return ok(res, { claim_id: claimId, sent: true });
+  } catch (e) {
+    const status = e.status || 500;
+    return res.status(status).json({ error: e.message || 'send_fail', detail: e.body || null });
+  }
 });
 
 module.exports = router;
