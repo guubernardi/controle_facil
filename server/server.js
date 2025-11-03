@@ -48,7 +48,7 @@ if (process.env.NODE_ENV !== 'production') {
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders: [
       'Content-Type','Accept','Idempotency-Key','x-job-token',
-      'x-seller-token','x-owner','Authorization'
+      'x-seller-token','x-owner','x-seller-id','Authorization'
     ]
   }));
 }
@@ -248,9 +248,12 @@ async function addReturnEvent(args = {}, req) {
 }
 
 /* ================== Rotas ================== */
-app.use('/api/ml', require('./routes/ml-claims'));
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
+/* === NOVAS ROTAS DE RECLAMAÇÕES (messages/attachments/resolutions/evidences) === */
+app.use('/api/ml', require('./routes/ml-claims')); // <= AQUI
+
+/* Demais módulos */
 try {
   const registerCsvUploadExtended = require('./routes/csv-upload-extended');
   registerCsvUploadExtended(app, { addReturnEvent });
@@ -293,7 +296,7 @@ try {
   console.log('[BOOT] ML Enrich ok');
 } catch (e) { console.warn('[BOOT] ML Enrich opcional:', e?.message || e); }
 
-/* === ML Chat / Communications === */
+/* === ML Chat / Communications (aggregador) === */
 try {
   let mlChatRoutes = null;
   try { mlChatRoutes = require('./routes/mlChat.js'); } catch (_) {}
