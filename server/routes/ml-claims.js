@@ -2,27 +2,67 @@
 'use strict';
 /**
  * Proxy de rotas oficiais do Mercado Livre (Claims):
- * - messages/attachments (já coberto em mlChat.js; aqui focamos em resoluções, mediação e evidences)
- * - open-dispute, expected-resolutions (GET/POST), partial-refund (GET/POST), refund total,
- *   allow-return, evidences (GET/POST), attachments-evidences (POST/GET/download).
+ * - messages (GET)
+ * - open-dispute, expected-resolutions (GET/POST), partial-refund (GET/POST),
+ *   refund total, allow-return, evidences (GET/POST),
+ *   attachments-evidences (POST/GET/download).
  *
- * Requer:
- * - Header: x-seller-token: <ACCESS_TOKEN> (ou token em req.session.ml.access_token)
+ * Token:
+ * - Header preferencial: x-seller-token: <ACCESS_TOKEN>
+ * - Ou, se vier x-seller-id, tenta buscar token no banco
+ * - Ou fallback: process.env.MELI_OWNER_TOKEN
  *
  * Respostas de erro propagam status e corpo do ML quando possível.
  */
 
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const multer = require('multer');
+const fs      = require('fs');
+const path    = require('path');
+const multer  = require('multer');
+const { query } = require('../db');
 
-const router = express.Router();
-
+const router  = express.Router();
 const ML_BASE = 'https://api.mercadolibre.com/post-purchase/v1';
 
-function getSellerToken(req) {
-  return req.get('x-seller-token') || req.session?.ml?.access_token || '';
+/* ============================== Token resolver ============================== */
+
+async function lookupTokenBySellerId(sellerId) {
+  if (!sellerId) return null;
+  // Tentativas em tabelas comuns deste projeto; ignora silenciosamente se não existir
+  const tries = [
+    "SELECT access_token FROM ml_accounts         WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
+    "SELECT access_token FROM meli_accounts       WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
+    "SELECT access_token FROM ml_oauth_accounts   WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
+    "SELECT access_token FROM ml_stores           WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
+  ];
+  for (const sql of tries) {
+    try {
+      const { rows } = await query(sql, [sellerId]);
+      const tok = rows?.[0]?.access_token;
+      if (tok) return tok;
+    } catch (_e) { /* continua */ }
+  }
+  return null;
+}
+
+async function resolveSellerToken(req) {
+  // 1) Se veio token direto no header, prioriza
+  const direct = req.get('x-seller-token');
+  if (direct) return direct;
+
+  // 2) Se veio seller_id, tenta achar no banco
+  const sellerId = String(req.get('x-seller-id') || req.query.seller_id || '')
+    .replace(/\D/g,'');
+  if (sellerId) {
+    const tok = await lookupTokenBySellerId(sellerId);
+    if (tok) return tok;
+  }
+
+  // 3) Sessão (se houver fluxo de OAuth integrado)
+  if (req.session?.ml?.access_token) return req.session.ml.access_token;
+
+  // 4) Fallback: token do owner
+  return process.env.MELI_OWNER_TOKEN || '';
 }
 
 function pick(obj, keys) {
@@ -33,9 +73,9 @@ function pick(obj, keys) {
 
 /** Fetch JSON/text (levanta erro com .status e .body) */
 async function mlFetch(req, url, opts = {}) {
-  const token = getSellerToken(req);
+  const token = await resolveSellerToken(req);
   if (!token) {
-    const e = new Error('missing_seller_token');
+    const e = new Error('missing_access_token');
     e.status = 401;
     throw e;
   }
@@ -62,9 +102,9 @@ async function mlFetch(req, url, opts = {}) {
 
 /** Fetch bruto (para download/stream) */
 async function mlFetchRaw(req, url, opts = {}) {
-  const token = getSellerToken(req);
+  const token = await resolveSellerToken(req);
   if (!token) {
-    const e = new Error('missing_seller_token');
+    const e = new Error('missing_access_token');
     e.status = 401;
     throw e;
   }
@@ -89,6 +129,28 @@ async function mlFetchRaw(req, url, opts = {}) {
 }
 
 const ok = (res, data = {}) => res.json({ ok: true, ...data });
+
+/* =========================================================================
+ *  0) MENSAGENS DA RECLAMAÇÃO
+ * ========================================================================= */
+
+/** Obter todas as mensagens da claim */
+router.get('/claims/:id/messages', async (req, res) => {
+  try {
+    const claimId = String(req.params.id || '').replace(/\D/g,'');
+    if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
+
+    const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}/messages`;
+    const data = await mlFetch(req, url);
+
+    // Normaliza sempre para { messages: [...] }
+    const messages = Array.isArray(data) ? data : (data?.messages ?? []);
+    return res.json({ messages });
+  } catch (e) {
+    const s = e.status || 500;
+    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
 
 /* =========================================================================
  *  1) MEDIAÇÃO
