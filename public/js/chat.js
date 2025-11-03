@@ -1,87 +1,66 @@
-/* Chat — Cliente | Plataforma (composer persistente + threads de mediação) */
+/* Chat — Cliente | Plataforma (composer persistente + threads de mediação)
+ * Boot automático:
+ *  - Tenta ler claims de ?claims=, ?claim=, ?claim_id= ou ?id=
+ *  - Se não vier nada, busca em /api/ml/communications/notices (últimas mediações)
+ *  - Seleciona a primeira claim e carrega as mensagens
+ *  - Se vier ?pack=, carrega mensagens do cliente (pack)
+ */
 ;(() => {
-  // ===== Config / integração backend =====
+  // ===== Config backend =====
   const API = '/api/ml'; // base de rotas do backend
 
-  // Headers dinâmicos (evita forçar Content-Type em FormData)
-  function authHeaders({ json = true } = {}) {
-    const token =
-      localStorage.getItem('ML_SELLER_TOKEN') ||
-      localStorage.getItem('ML_TOKEN') ||
-      '';
-
-    const sellerId =
-      localStorage.getItem('ML_SELLER_ID') ||
-      localStorage.getItem('ML_OWNER_ID') ||
-      '';
-
-    const h = {};
-    if (json) h['Content-Type'] = 'application/json';
-
+  function authHeaders() {
+    const token    = localStorage.getItem('ML_SELLER_TOKEN') || '';
+    const sellerId = localStorage.getItem('ML_SELLER_ID')    || '';
+    const h = { 'Content-Type': 'application/json' };
     if (token)    h['x-seller-token'] = token;
-    if (sellerId) {
-      h['x-seller-id'] = sellerId; // compat frontend antigo
-      h['x-owner']     = sellerId; // alguns backends leem x-owner
-    }
+    if (sellerId) h['x-seller-id']    = sellerId;
     return h;
   }
 
-  // fetch com cookies de sessão e melhor mensagem de erro
   async function jfetch(url, opts = {}) {
-    const res = await fetch(url, {
-      credentials: 'include',
-      ...opts,
-      headers: {
-        ...(opts.headers || {}),
-        ...authHeaders(opts.json === false ? { json: false } : {}),
-      },
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      const msg = `HTTP ${res.status} ${res.statusText} – ${text || url}`;
-      if (res.status === 401) console.warn('Não autorizado. Faça login.', msg);
-      if (res.status === 404) console.warn('Endpoint não encontrado.', msg);
-      throw new Error(msg);
-    }
-
+    const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...authHeaders() } });
     const ct = res.headers.get('content-type') || '';
-    return ct.includes('application/json') ? res.json() : res.text();
+    const body = ct.includes('application/json') ? await res.json().catch(()=>null) : await res.text().catch(()=> '');
+    if (!res.ok) {
+      const msg = (body && (body.error || body.message)) || `HTTP ${res.status}`;
+      const detail = body && body.detail ? body.detail : null;
+      throw new Error(`${msg}${detail ? ` — ${detail}` : ''}`);
+    }
+    return body;
   }
 
-  // ===== Helpers visuais / DOM =====
+  // ===== Helpers de DOM =====
   const $  = (s, ctx=document) => ctx.querySelector(s);
   const $$ = (s, ctx=document) => Array.from(ctx.querySelectorAll(s));
   const when = iso => { const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleString('pt-BR'); };
+  const uid  = (p='m') => `${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
   const scrollToEnd = node => { if (node) node.scrollTop = node.scrollHeight; };
 
-  // ===== Querystring util =====
+  // ===== Querystring =====
   const qs = new URLSearchParams(location.search);
-  const PACK_ID   = (qs.get('pack')   || '').replace(/[^\d]/g,'');
-  const CLAIM_IDS = (qs.get('claims') || '')
-                      .split(',')
-                      .map(s => s.replace(/[^\d]/g,''))
-                      .filter(Boolean);
+  const PACK_ID = (qs.get('pack') || '').replace(/[^\w\-:.]/g,'');
+  // aceita várias formas: claims, claim, claim_id, id
+  const RAW_CLAIMS =
+    (qs.get('claims')   || qs.get('claim') || qs.get('claim_id') || qs.get('id') || '')
+      .split(',')
+      .map(s => s.replace(/[^\d]/g,''))
+      .filter(Boolean);
 
-  // ===== Elementos
+  // ===== Elementos =====
   const el = {
-    // abas
     abaCliente:      $('#abaCliente'),
     abaPlataforma:   $('#abaPlataforma'),
-    // painéis
     painelCliente:    $('#painel-cliente'),
     painelPlataforma: $('#painel-plataforma'),
-    // msgs
     msgsCliente:     $('#mensagensCliente'),
     msgsPlataforma:  $('#mensagensPlataforma'),
-    // layout
-    mainContent: $('.main-content'),
-    leftPanel:   $('.left-panel'),
-    // blocos da coluna esquerda
-    clienteTools:   $('#cliente-tools'),
-    platSide:       $('#plat-side'),
-    platSearch:     $('#platSearch'),
-    platThreadList: $('#platThreadList'),
+    mainContent:     $('.main-content'),
+    leftPanel:       $('.left-panel'),
+    // lateral (plataforma)
+    platSide:        $('#plat-side'),
+    platSearch:      $('#platSearch'),
+    platThreadList:  $('#platThreadList'),
     // composers
     compCli:     $('#composerCliente'),
     compPlat:    $('#composerPlataforma'),
@@ -91,41 +70,31 @@
     upPlat:      $('#uploadPlataforma'),
     btnUpCli:    $('#btnFileCliente'),
     btnUpPlat:   $('#btnFilePlataforma'),
-    // header da plataforma
+    // header plataforma
     headerPlatName:  $('#painel-plataforma .header-name'),
   };
 
-  // ===== Estado
+  // ===== Estado =====
   const state = {
-    active: 'cliente',               // 'cliente' | 'plataforma'
-    // Cliente (pack)
+    active: 'plataforma', // se houver claim ativa, começamos na aba de plataforma
     packId: PACK_ID || null,
-    cliente: [],                     // mensagens do pack
-    // Plataforma (claims)
-    platThreads: [],                 // [{type:'claim', id:'5319...', label:'Claim #5319...', subtitle:''}]
-    platActiveId: null,              // claim selecionado (string)
+    cliente: [],
+
+    platThreads: [],       // [{type:'claim', id, label, subtitle}]
+    platActiveId: null,    // claim selecionada
   };
   const platMsgsById = Object.create(null); // { claimId: [msgs] }
 
-  // ===== Garantias (composer fora da área de mensagens)
+  // ===== Garantias de layout =====
   function ensureComposerPlacement() {
-    // Cliente
     if (el.compCli && el.painelCliente && el.compCli.parentElement !== el.painelCliente) {
       el.painelCliente.appendChild(el.compCli);
     }
-    if (el.compCli && el.msgsCliente && el.msgsCliente.contains(el.compCli)) {
-      el.painelCliente.appendChild(el.compCli);
-    }
-    // Plataforma
     if (el.compPlat && el.painelPlataforma && el.compPlat.parentElement !== el.painelPlataforma) {
-      el.painelPlataforma.appendChild(el.compPlat);
-    }
-    if (el.compPlat && el.msgsPlataforma && el.msgsPlataforma.contains(el.compPlat)) {
       el.painelPlataforma.appendChild(el.compPlat);
     }
   }
 
-  // ===== Responsivo — deixa a coluna visível na aba Plataforma
   function syncLeftPanelVisibility() {
     if (!el.leftPanel) return;
     const wide = window.innerWidth >= 1024;
@@ -135,76 +104,81 @@
   /* =====================================================================
    * INTEGRAÇÃO: Carregar mensagens reais
    * ===================================================================*/
-
-  // ---- Cliente (pack)
   async function fetchClienteMessages() {
-    if (!state.packId) return; // sem pack definido, deixa vazio
-    const data = await jfetch(`${API}/chat/messages?type=pack&id=${state.packId}`);
+    if (!state.packId) return;
+    const data = await jfetch(`${API}/chat/messages?type=pack&id=${encodeURIComponent(state.packId)}`);
     state.cliente = Array.isArray(data?.messages) ? data.messages : [];
   }
 
-  // ---- Plataforma (claim)
   async function fetchPlataformaMessages(claimId) {
     if (!claimId) return;
-    const data = await jfetch(`${API}/chat/messages?type=claim&id=${claimId}`);
+    const data = await jfetch(`${API}/claims/${encodeURIComponent(claimId)}/messages`);
     platMsgsById[claimId] = Array.isArray(data?.messages) ? data.messages : [];
   }
 
-  // Lista de threads (claims)
-  async function buildPlatThreads() {
-    if (CLAIM_IDS.length) {
-      state.platThreads = CLAIM_IDS.map(id => ({
-        type: 'claim',
-        id,
-        label: `Claim #${id}`,
-        subtitle: '' // opcional: pode preencher com /returns/by-claim/:id
-      }));
-      state.platActiveId = state.platThreads[0]?.id || null;
-      return;
-    }
-
-    // fallback: tenta últimas comunicações para achar claims (opcional)
+  async function discoverThreadsFromNotices(limit = 20, offset = 0) {
     try {
-      const notices = await jfetch(`${API}/communications/notices?limit=10&offset=0`);
+      const notices = await jfetch(`${API}/communications/notices?limit=${limit}&offset=${offset}`);
       const found = new Set();
       const out = [];
-      for (const n of (notices?.results || notices || [])) {
+      const list = notices?.results || notices || [];
+      for (const n of list) {
         const cid = String(n?.claim_id || n?.payload?.claim_id || '').replace(/[^\d]/g,'');
         if (cid && !found.has(cid)) {
           found.add(cid);
-          out.push({ type:'claim', id:cid, label:`Claim #${cid}`, subtitle: '' });
+          out.push({ type: 'claim', id: cid, label: `Claim #${cid}`, subtitle: '' });
         }
       }
-      if (out.length) {
-        state.platThreads = out;
-        state.platActiveId = out[0].id;
-      }
-    } catch (_) {
-      // se falhar, mantém vazio
+      return out;
+    } catch {
+      return [];
     }
+  }
+
+  async function buildPlatThreads() {
+    // 1) claims via URL
+    if (RAW_CLAIMS.length) {
+      state.platThreads = RAW_CLAIMS.map(id => ({ type:'claim', id, label:`Claim #${id}`, subtitle:'' }));
+      state.platActiveId = state.platThreads[0]?.id || null;
+      return;
+    }
+    // 2) tenta descobrir pelas notices (mediações recentes)
+    const fromNotices = await discoverThreadsFromNotices(20, 0);
+    if (fromNotices.length) {
+      state.platThreads = fromNotices;
+      state.platActiveId = fromNotices[0].id;
+      return;
+    }
+    // 3) sem nada encontrado: mantém vazio; UI mostrará instruções
+    state.platThreads = [];
+    state.platActiveId = null;
   }
 
   /* =====================================================================
    * Render
    * ===================================================================*/
-
   function bubble(m) {
-    const isSeller = /seller|respond/.test((m.author_role || '').toLowerCase());
+    const isSeller = /seller|respond/.test((m.sender_role || m.author_role || '').toLowerCase());
     const side = isSeller ? 'out' : 'in';
     const wrap = document.createElement('div');
     wrap.className = `msg ${side}`;
     wrap.innerHTML = `
-      <div class="meta"><span>${m.author_name || m.author_role || ''}</span> • <span>${when(m.created_at)}</span></div>
-      <div class="bubble">${(m.text || '').replace(/\n/g,'<br>')}</div>
+      <div class="meta"><span>${m.author_name || m.sender_role || ''}</span> • <span>${when(m.date_created || m.created_at)}</span></div>
+      <div class="bubble">${(m.message || m.text || '').replace(/\n/g,'<br>')}</div>
     `;
-    if (Array.isArray(m.attachments) && m.attachments.length) {
-      m.attachments.forEach(a => {
+    const atts = m.attachments || [];
+    if (Array.isArray(atts) && atts.length) {
+      atts.forEach(a => {
         const link = document.createElement('a');
         link.className = 'attachment';
-        link.href = a.url || '#';
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.textContent = a.name || a.id || 'arquivo';
+        const fname = a.filename || a.file_name || a.original_filename || 'arquivo';
+        link.textContent = fname;
+        // se vier URL direta:
+        if (a.url) {
+          link.href = a.url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+        }
         wrap.appendChild(link);
       });
     }
@@ -224,7 +198,7 @@
     box.innerHTML = '';
     const list = state.cliente || [];
     if (!state.packId) {
-      box.innerHTML = `<div class="empty-text-centered">Defina ?pack=ID na URL para carregar o chat com o cliente.</div>`;
+      box.innerHTML = `<div class="empty-text-centered">Abra com <code>?pack=ID</code> para ver o chat com o cliente.</div>`;
       return;
     }
     if (!list.length) {
@@ -245,7 +219,12 @@
 
     const list = platMsgsById[state.platActiveId] || [];
     if (!state.platActiveId) {
-      box.innerHTML = `<div class="empty-text-centered">Selecione uma mediação na esquerda.</div>`;
+      box.innerHTML = `
+        <div class="empty-text-centered">
+          Nenhuma mediação selecionada.<br>
+          Dica: abra com <code>?claim=ID</code> ou <code>?claims=ID1,ID2</code>,<br>
+          ou aguarde a coluna esquerda listar mediações recentes.
+        </div>`;
       return;
     }
     if (!list.length) {
@@ -259,17 +238,17 @@
   }
 
   function render() {
-    if (state.active === 'cliente') renderCliente();
-    else renderPlataforma();
+    if (state.active === 'plataforma') renderPlataforma();
+    else renderCliente();
   }
 
-  // ===== Lista de threads da plataforma (coluna esquerda)
+  // ===== Lista lateral (plataforma)
   function renderPlatThreadList() {
     if (!el.platThreadList) return;
     const q = (el.platSearch?.value || '').trim().toLowerCase();
-
     el.platThreadList.innerHTML = '';
-    const items = state.platThreads.filter(t => {
+
+    const items = (state.platThreads || []).filter(t => {
       if (!q) return true;
       return (
         t.id.toLowerCase().includes(q) ||
@@ -292,9 +271,7 @@
         <div class="thread-title">${t.label}</div>
         <div class="thread-sub">${t.subtitle || ''}</div>
       `;
-      li.addEventListener('click', async () => {
-        await setPlatActive(t.id);
-      });
+      li.addEventListener('click', async () => { await setPlatActive(t.id); });
       frag.appendChild(li);
     }
     el.platThreadList.appendChild(frag);
@@ -303,18 +280,11 @@
   async function setPlatActive(claimId, opts = {}) {
     state.platActiveId = claimId;
 
-    // Atualiza placeholder / título
+    // UI
     const thr = state.platThreads.find(t => t.id === claimId);
-    if (el.txtPlat) {
-      el.txtPlat.placeholder = thr
-        ? `Fale com a plataforma sobre ${thr.label}...`
-        : 'Fale com a plataforma (mediação)...';
-    }
-    if (el.headerPlatName) {
-      el.headerPlatName.textContent = thr ? `Mediação — ${thr.label}` : 'Mediação';
-    }
+    if (el.txtPlat) el.txtPlat.placeholder = thr ? `Fale com a plataforma sobre ${thr.label}...` : 'Fale com a plataforma (mediação)...';
+    if (el.headerPlatName) el.headerPlatName.textContent = thr ? `Mediação — ${thr.label}` : 'Mediação';
 
-    // Busca mensagens reais da mediação
     try {
       renderSkeletons();
       await fetchPlataformaMessages(claimId);
@@ -337,14 +307,7 @@
     el.painelCliente.hidden    = !isCliente;
     el.painelPlataforma.hidden =  isCliente;
 
-    // Alterna os blocos da coluna esquerda
-    if (el.clienteTools) el.clienteTools.hidden = !isCliente;
-    if (el.platSide)     el.platSide.hidden     = isCliente;
-
-    // Classe de layout
     el.mainContent?.classList.toggle('plataforma', !isCliente);
-
-    // Coluna esquerda visível na Plataforma
     syncLeftPanelVisibility();
 
     ensureComposerPlacement();
@@ -363,7 +326,7 @@
     }
   }
 
-  // ===== Envio / anexos
+  // ===== Composer
   function autoresize(ta) {
     if (!ta) return;
     ta.style.height = '0px';
@@ -374,40 +337,32 @@
   function wireComposer({ form, textarea, upload, btnUpload, destino }) {
     if (!form || !textarea) return;
 
-    // abrir seletor de arquivos
     btnUpload?.addEventListener('click', () => upload?.click());
 
-    // autoresize
     textarea.addEventListener('input', () => autoresize(textarea));
     autoresize(textarea);
 
-    // enviar
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const text = (textarea.value || '').trim();
+      const text  = (textarea.value || '').trim();
       const files = Array.from(upload?.files || []);
-
       if (!text && files.length === 0) return;
 
       try {
-        // CLIENTE (pack): endpoint universal /chat/send
         if (destino === 'cliente') {
           if (!state.packId) return;
           await jfetch(`${API}/chat/send`, {
             method: 'POST',
             body: JSON.stringify({ type: 'pack', id: state.packId, text })
           });
-          // refetch após enviar
           await fetchClienteMessages();
           renderCliente();
         }
 
-        // PLATAFORMA (claim): upload + send-message
         if (destino === 'plataforma') {
           const claimId = state.platActiveId;
           if (!claimId) return;
 
-          // 1) Uploads (se houver)
           let attachments = [];
           if (files.length) {
             for (const f of files) {
@@ -415,37 +370,29 @@
               fd.append('file', f, f.name);
               const res = await fetch(`${API}/claims/${encodeURIComponent(claimId)}/attachments`, {
                 method: 'POST',
-                credentials: 'include',
-                headers: authHeaders({ json: false }), // não seta Content-Type
+                headers: { ...authHeaders() }, // sem forçar Content-Type
                 body: fd
               });
-              if (!res.ok) {
-                const t = await res.text().catch(()=> '');
-                throw new Error(`Falha no upload: ${res.status} ${t}`);
-              }
               const j = await res.json();
-              const name = j?.filename || j?.file_name;
-              if (name) attachments.push(name);
+              if (j?.filename || j?.file_name) attachments.push(j.filename || j.file_name);
             }
           }
 
-          // 2) Envia a mensagem (normalmente para o 'mediator')
           await jfetch(`${API}/claims/${encodeURIComponent(claimId)}/messages`, {
             method: 'POST',
             body: JSON.stringify({
-              receiver_role: 'mediator',
+              receiver_role: 'mediator', // se não estiver em disputa, ajuste para 'complainant'
               message: text,
               attachments
             })
           });
 
-          // 3) Refetch e re-render
           await fetchPlataformaMessages(claimId);
           renderPlataforma();
         }
       } catch (err) {
         console.error(err);
-        alert('Falha ao enviar mensagem. Verifique o token e os IDs.');
+        alert('Falha ao enviar mensagem. Confira loja/claim.');
       } finally {
         textarea.value = '';
         if (upload) upload.value = '';
@@ -459,48 +406,43 @@
   el.abaPlataforma?.addEventListener('click', () => setAba('plataforma'));
   el.abaCliente?.addEventListener('keydown', handleTabKeys);
   el.abaPlataforma?.addEventListener('keydown', handleTabKeys);
-
-  // Busca de threads (plataforma)
   el.platSearch?.addEventListener('input', renderPlatThreadList);
 
-  // Conecta composers
   wireComposer({ form: el.compCli,  textarea: el.txtCli,  upload: el.upCli,  btnUpload: el.btnUpCli,  destino: 'cliente' });
   wireComposer({ form: el.compPlat, textarea: el.txtPlat, upload: el.upPlat, btnUpload: el.btnUpPlat, destino: 'plataforma' });
 
-  // Responsivo
   window.addEventListener('resize', syncLeftPanelVisibility);
 
-  // ===== Boot
+  // ===== Boot =====
   (async () => {
     ensureComposerPlacement();
 
-    // monta lista de mediações (coluna esquerda)
+    // descobre threads (URL -> notices)
     await buildPlatThreads();
 
-    // carrega mensagens iniciais (cliente/plataforma)
+    // se tiver claim ativa, começa na aba plataforma
+    state.active = state.platActiveId ? 'plataforma' : (state.packId ? 'cliente' : 'plataforma');
+
+    // carrega mensagens iniciais
     renderSkeletons();
     try {
-      if (state.packId)       await fetchClienteMessages();
+      if (state.packId) await fetchClienteMessages();
       if (state.platActiveId) await fetchPlataformaMessages(state.platActiveId);
     } catch (err) {
       console.error(err);
     }
 
-    // desenha lista/headers
+    // pinta lista lateral e seleciona primeira claim (se existir)
     renderPlatThreadList();
-
-    // Seleciona aba inicial (se houver claim, começa na Plataforma)
-    setAba(state.platActiveId ? 'plataforma' : 'cliente');
-    syncLeftPanelVisibility();
-
-    // Ajusta placeholder e header da plataforma
     if (state.platActiveId) {
       const thr = state.platThreads.find(t => t.id === state.platActiveId);
       if (el.txtPlat) el.txtPlat.placeholder = `Fale com a plataforma sobre ${thr?.label || 'Mediação'}...`;
       if (el.headerPlatName) el.headerPlatName.textContent = `Mediação — ${thr?.label || ''}`;
     }
 
-    // Render final
+    // exibe a aba correta e renderiza
+    setAba(state.active);
+    syncLeftPanelVisibility();
     render();
   })();
 })();
