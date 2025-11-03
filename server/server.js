@@ -473,7 +473,7 @@ try {
 }
 
 /* ========= Importador Mercado Livre (Sync Claims -> devolucoes) ========= */
-let _mlSyncRegistered = false;
+let _mlSyncRegistered = false; // única definição
 try {
   const registerMlSync = require('./routes/ml-sync'); // expõe /api/ml/claims/import
   if (typeof registerMlSync === 'function') {
@@ -709,7 +709,17 @@ const server = app.listen(port, host, () => {
   setupMlAutoSync();
 });
 
+/* ===========================
+ *  AUTO SYNC (ML) — JOB PERIÓDICO
+ * =========================== */
+let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
+
 function setupMlAutoSync() {
+  if (!_mlSyncRegistered) {
+    console.warn('[ML AUTO] Importador ML não está registrado; AutoSync desabilitado.');
+    return;
+  }
+
   const enabled = String(process.env.ML_AUTO_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
   if (!enabled) {
     console.log('[ML AUTO] Desabilitado por ML_AUTO_SYNC_ENABLED=false');
