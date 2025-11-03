@@ -9,7 +9,6 @@
 
 // Polyfill de fetch p/ Node < 18
 if (typeof fetch !== 'function') {
-  // carregamento dinâmico para evitar dependência dura em prod
   global.fetch = (...args) => import('node-fetch').then(m => m.default(...args));
 }
 
@@ -36,7 +35,7 @@ app.disable('x-powered-by');
 
 /** ================== Segurança base ================== */
 app.use(helmet({
-  contentSecurityPolicy: false, // para não quebrar inline scripts do front atual
+  contentSecurityPolicy: false,
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   referrerPolicy: { policy: 'no-referrer' }
 }));
@@ -44,10 +43,14 @@ app.use(helmet({
 /** ================== CORS (apenas dev) ================== */
 if (process.env.NODE_ENV !== 'production') {
   app.use(cors({
-    origin: true,           // ecoa origem do navegador
-    credentials: true,      // permite cookie de sessão
+    origin: true,
+    credentials: true,
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-    allowedHeaders: ['Content-Type','Accept','Idempotency-Key','x-job-token']
+    // adiciona headers usados nas rotas ML
+    allowedHeaders: [
+      'Content-Type','Accept','Idempotency-Key','x-job-token',
+      'x-seller-token','x-owner','Authorization'
+    ]
   }));
 }
 
@@ -89,15 +92,12 @@ app.use(session({
   cookie: sessCookie
 }));
 
-
 /** Static (raiz /public) */
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// dashboard routes are mounted later once (see bottom of this file)
+/** Health + util estático */
+app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
-/** Aliases para documentação estática */
 app.get('/docs', (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'docs', 'index.html'));
 });
@@ -112,7 +112,7 @@ app.get('/', (req, res) => {
   return res.redirect('/login.html');
 });
 
-/** SSE (antes do middleware que toca Content-Type) */
+/** SSE (opcional) */
 try {
   const events = require('./events');
   if (typeof events?.sse === 'function') {
@@ -127,8 +127,7 @@ try {
 }
 
 /**
- * Patch seguro: ao usar res.json em /api, garante Content-Type JSON
- * (sem afetar endpoints binários como /api/uploads).
+ * Patch seguro: res.json força Content-Type JSON em /api
  */
 app.use('/api', (_req, res, next) => {
   if (!res.locals.__jsonPatched) {
@@ -174,7 +173,6 @@ app.get('/api/auth/session', (req, res) => {
   const u = req.session?.user || null;
   res.json(u ? { id: u.id, nome: u.nome, email: u.email, roles: u.roles || [] } : null);
 });
-// Compat com requisito: /api/auth/me
 app.get('/api/auth/me', (req, res) => {
   const u = req.session?.user || null;
   if (!u) return res.status(401).json({ error: 'unauthorized' });
@@ -443,7 +441,6 @@ try {
 try {
   const registerMlEnrich = require('./routes/ml-enrich');
   if (typeof registerMlEnrich === 'function') {
-    // suporta assinatura opcional (app, { addReturnEvent })
     if (registerMlEnrich.length >= 2) registerMlEnrich(app, { addReturnEvent });
     else registerMlEnrich(app);
     console.log('[BOOT] Rota ML Enrich registrada (/api/ml/returns/:id/enrich)');
@@ -454,13 +451,20 @@ try {
 
 /* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
 try {
-  const mlChatRoutes = require('./routes/ml-chat');
+  // tenta ambos os nomes de arquivo para evitar 404 por path
+  let mlChatRoutes = null;
+  try { mlChatRoutes = require('./routes/mlChat'); } catch (_) {}
+  if (!mlChatRoutes) {
+    try { mlChatRoutes = require('./routes/ml-chat'); } catch (_) {}
+  }
   if (mlChatRoutes) {
     app.use('/api/ml', mlChatRoutes);
     console.log('[BOOT] Rotas ML Chat registradas (/api/ml/...)');
+  } else {
+    console.warn('[BOOT] Rotas ML Chat não encontradas (routes/mlChat.js ou routes/ml-chat.js).');
   }
 } catch (e) {
-  console.warn('[BOOT] Rotas ML Chat não carregadas (opcional):', e?.message || e);
+  console.warn('[BOOT] Falha ao montar ML Chat:', e?.message || e);
 }
 
 /* ========= Importador Mercado Livre (Sync Claims -> devolucoes) ========= */
@@ -494,9 +498,8 @@ try {
 }
 
 /* ------------------------------------------------------------
- *  Healthchecks
+ *  Healthchecks adicionais
  * ------------------------------------------------------------ */
-app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 app.get('/api/db/ping', async (req, res) => {
   try {
     const q = qOf(req);
@@ -778,7 +781,6 @@ function setupMlAutoSync() {
 }
 
 app.use('/api/dashboard', require('./routes/dashboard'));
-
 
 /* ===========================
  *  ERROS NÃO TRATADOS
