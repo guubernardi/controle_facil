@@ -1,101 +1,180 @@
-/* Chat — abas Cliente | Plataforma
- * - Composer com textarea, anexos e enviar (Ctrl/⌘+Enter)
- * - Filtra por canal (cliente|plataforma) + role
- * - Esconde coluna esquerda na aba "Plataforma"
- */
+/* Chat — Cliente | Plataforma (composer persistente + threads de mediação) */
 ;(() => {
-  // ===== Helpers
+  // ===== Config / integração backend =====
+  const API = '/api/ml'; // base de rotas do backend
+
+  function authHeaders() {
+    const token = localStorage.getItem('ML_SELLER_TOKEN') || '';
+    const sellerId = localStorage.getItem('ML_SELLER_ID') || '';
+    const h = { 'Content-Type': 'application/json' };
+    if (token)    h['x-seller-token'] = token;
+    if (sellerId) h['x-seller-id']    = sellerId;
+    return h;
+  }
+
+  async function jfetch(url, opts={}) {
+    const res = await fetch(url, {
+      ...opts,
+      headers: { ...(opts.headers || {}), ...authHeaders() }
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(()=>'');
+      throw new Error(`HTTP ${res.status} ${res.statusText} – ${text || url}`);
+    }
+    const ct = res.headers.get('content-type') || '';
+    return ct.includes('application/json') ? res.json() : res.text();
+  }
+
+  // ===== Helpers visuais / DOM =====
   const $  = (s, ctx=document) => ctx.querySelector(s);
   const $$ = (s, ctx=document) => Array.from(ctx.querySelectorAll(s));
-  const when = (iso) => {
-    const d = new Date(iso);
-    return isNaN(d) ? '—' : d.toLocaleString('pt-BR');
-  };
+  const when = iso => { const d = new Date(iso); return isNaN(d) ? '—' : d.toLocaleString('pt-BR'); };
   const uid = (p='m') => `${p}_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  function scrollToBottom(box, force=false){
-    if (!box) return;
-    const nearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
-    if (force || nearBottom) box.scrollTop = box.scrollHeight;
-  }
-  function autoResize(t){
-    if (!t) return;
-    t.style.height = 'auto';
-    t.style.height  = Math.min(t.scrollHeight, 320) + 'px';
-  }
+  const scrollToEnd = node => { if (node) node.scrollTop = node.scrollHeight; };
+
+  // ===== Querystring util =====
+  const qs = new URLSearchParams(location.search);
+  const PACK_ID   = (qs.get('pack')   || '').replace(/[^\d]/g,'');
+  const CLAIM_IDS = (qs.get('claims') || '')
+                      .split(',')
+                      .map(s => s.replace(/[^\d]/g,''))
+                      .filter(Boolean);
 
   // ===== Elementos
   const el = {
     // abas
-    abaCliente: $('#abaCliente'),
-    abaPlataforma: $('#abaPlataforma'),
+    abaCliente:      $('#abaCliente'),
+    abaPlataforma:   $('#abaPlataforma'),
     // painéis
-    painelCliente: $('#painel-cliente'),
+    painelCliente:    $('#painel-cliente'),
     painelPlataforma: $('#painel-plataforma'),
-    // mensagens
-    mensagensCliente: $('#mensagensCliente'),
-    mensagensPlataforma: $('#mensagensPlataforma'),
+    // msgs
+    msgsCliente:     $('#mensagensCliente'),
+    msgsPlataforma:  $('#mensagensPlataforma'),
     // layout
     mainContent: $('.main-content'),
-    leftPanel: $('.left-panel'),
-    // composer cliente
-    formCliente: $('#formCliente'),
-    textoCliente: $('#textoCliente'),
-    arquivoCliente: $('#arquivoCliente'),
-    btnEnviarCliente: $('#btnEnviarCliente'),
-    prevCliente: $('#prevCliente'),
-    // composer plataforma
-    formPlataforma: $('#formPlataforma'),
-    textoPlataforma: $('#textoPlataforma'),
-    arquivoPlataforma: $('#arquivoPlataforma'),
-    btnEnviarPlataforma: $('#btnEnviarPlataforma'),
-    prevPlataforma: $('#prevPlataforma'),
+    leftPanel:   $('.left-panel'),
+    // blocos da coluna esquerda
+    clienteTools:   $('#cliente-tools'),
+    platSide:       $('#plat-side'),
+    platSearch:     $('#platSearch'),
+    platThreadList: $('#platThreadList'),
+    // composers
+    compCli:     $('#composerCliente'),
+    compPlat:    $('#composerPlataforma'),
+    txtCli:      $('#msgInputCliente'),
+    txtPlat:     $('#msgInputPlataforma'),
+    upCli:       $('#uploadCliente'),
+    upPlat:      $('#uploadPlataforma'),
+    btnUpCli:    $('#btnFileCliente'),
+    btnUpPlat:   $('#btnFilePlataforma'),
+    // header da plataforma
+    headerPlatName:  $('#painel-plataforma .header-name'),
   };
 
   // ===== Estado
   const state = {
-    active: 'cliente', // 'cliente' | 'plataforma'
-    mensagens: [],     // { id, canal: 'cliente'|'plataforma', author_role, author_name, text, attachments[], created_at }
-    carregando: false,
+    active: 'cliente',               // 'cliente' | 'plataforma'
+    // Cliente (pack)
+    packId: PACK_ID || null,
+    cliente: [],                     // mensagens do pack
+    // Plataforma (claims)
+    platThreads: [],                 // [{type:'claim', id:'5319...', label:'Claim #5319...', subtitle:''}]
+    platActiveId: null,              // claim selecionado (string)
   };
+  const platMsgsById = Object.create(null); // { claimId: [msgs] }
 
-  // ===== Mocks (substitua por fetch real)
-  async function carregarMensagens(){
-    state.carregando = true;
-    renderSkeletons();
-    const now = Date.now();
-    await new Promise(r => setTimeout(r, 400));
-    state.mensagens = Array.from({length: 18}).map((_, i) => {
-      const role  = ['buyer','seller','platform'][i % 3];
-      const canal = role === 'platform' ? 'plataforma' : 'cliente';
-      return {
-        id: uid(),
-        canal,
-        author_role: role,
-        author_name: role === 'buyer' ? 'Comprador' : role === 'seller' ? 'Vendedor' : 'Mediador',
-        text: role === 'platform'
-              ? 'Mensagem da mediação do Mercado Livre.'
-              : role === 'buyer'
-                ? 'Olá, tive um problema com o produto.'
-                : 'Claro! Vamos resolver.',
-        attachments: i === 2 ? [{ id:'a1', name:'foto.jpg', url:'#', mime:'image/jpeg' }] : [],
-        created_at: new Date(now - i*90*1000).toISOString(),
-      };
-    });
-    state.carregando = false;
-    render();
+  // ===== Garantias (composer fora da área de mensagens)
+  function ensureComposerPlacement() {
+    // Cliente
+    if (el.compCli && el.painelCliente && el.compCli.parentElement !== el.painelCliente) {
+      el.painelCliente.appendChild(el.compCli);
+    }
+    if (el.compCli && el.msgsCliente && el.msgsCliente.contains(el.compCli)) {
+      el.painelCliente.appendChild(el.compCli);
+    }
+    // Plataforma
+    if (el.compPlat && el.painelPlataforma && el.compPlat.parentElement !== el.painelPlataforma) {
+      el.painelPlataforma.appendChild(el.compPlat);
+    }
+    if (el.compPlat && el.msgsPlataforma && el.msgsPlataforma.contains(el.compPlat)) {
+      el.painelPlataforma.appendChild(el.compPlat);
+    }
   }
 
-  // ===== Render
-  function bubble(m){
-    const isSeller = /seller|respond/i.test(m.author_role || '');
-    const lado = isSeller ? 'out' : 'in';
+  // ===== Responsivo — deixa a coluna visível na aba Plataforma
+  function syncLeftPanelVisibility() {
+    if (!el.leftPanel) return;
+    const wide = window.innerWidth >= 1024;
+    el.leftPanel.style.display = (state.active === 'plataforma' || wide) ? '' : 'none';
+  }
+
+  /* =====================================================================
+   * INTEGRAÇÃO: Carregar mensagens reais
+   * ===================================================================*/
+
+  // ---- Cliente (pack)
+  async function fetchClienteMessages() {
+    if (!state.packId) return; // sem pack definido, deixa vazio
+    const data = await jfetch(`${API}/chat/messages?type=pack&id=${state.packId}`);
+    state.cliente = Array.isArray(data?.messages) ? data.messages : [];
+  }
+
+  // ---- Plataforma (claim)
+  async function fetchPlataformaMessages(claimId) {
+    if (!claimId) return;
+    const data = await jfetch(`${API}/chat/messages?type=claim&id=${claimId}`);
+    platMsgsById[claimId] = Array.isArray(data?.messages) ? data.messages : [];
+  }
+
+  // Lista de threads (claims)
+  async function buildPlatThreads() {
+    if (CLAIM_IDS.length) {
+      state.platThreads = CLAIM_IDS.map(id => ({
+        type: 'claim',
+        id,
+        label: `Claim #${id}`,
+        subtitle: '' // se quiser, podemos buscar /returns/by-claim/:id e preencher
+      }));
+      state.platActiveId = state.platThreads[0]?.id || null;
+      return;
+    }
+
+    // fallback: tenta últimas comunicações para achar claims (opcional)
+    try {
+      const notices = await jfetch(`${API}/communications/notices?limit=10&offset=0`);
+      const found = new Set();
+      const out = [];
+      for (const n of (notices?.results || notices || [])) {
+        const cid = String(n?.claim_id || n?.payload?.claim_id || '').replace(/[^\d]/g,'');
+        if (cid && !found.has(cid)) {
+          found.add(cid);
+          out.push({ type:'claim', id:cid, label:`Claim #${cid}`, subtitle: '' });
+        }
+      }
+      if (out.length) {
+        state.platThreads = out;
+        state.platActiveId = out[0].id;
+      }
+    } catch (_) {
+      // se falhar, mantém vazio
+    }
+  }
+
+  /* =====================================================================
+   * Render
+   * ===================================================================*/
+
+  function bubble(m) {
+    const isSeller = /seller|respond/.test((m.author_role || '').toLowerCase());
+    const side = isSeller ? 'out' : 'in';
     const wrap = document.createElement('div');
-    wrap.className = `msg ${lado}`;
+    wrap.className = `msg ${side}`;
     wrap.innerHTML = `
-      <div class="meta"><span>${m.author_name || m.author_role}</span> • <span>${when(m.created_at)}</span></div>
-      <div class="bubble">${(m.text || '').replace(/\n/g, '<br>')}</div>
+      <div class="meta"><span>${m.author_name || m.author_role || ''}</span> • <span>${when(m.created_at)}</span></div>
+      <div class="bubble">${(m.text || '').replace(/\n/g,'<br>')}</div>
     `;
-    if (Array.isArray(m.attachments) && m.attachments.length){
+    if (Array.isArray(m.attachments) && m.attachments.length) {
       m.attachments.forEach(a => {
         const link = document.createElement('a');
         link.className = 'attachment';
@@ -109,190 +188,295 @@
     return wrap;
   }
 
-  function renderSkeletons(){
-    const alvo = state.active === 'plataforma' ? el.mensagensPlataforma : el.mensagensCliente;
+  function renderSkeletons() {
+    ensureComposerPlacement();
+    const alvo = state.active === 'plataforma' ? el.msgsPlataforma : el.msgsCliente;
     if (alvo) alvo.innerHTML = `<div class="loading">Carregando mensagens...</div>`;
   }
 
-  function renderCliente(){
-    const msgs = state.mensagens.filter(m =>
-      (m.canal ? m.canal === 'cliente' : /buyer|seller|complain|respond/i.test(m.author_role || ''))
-    );
-    const box = el.mensagensCliente;
+  function renderCliente() {
+    ensureComposerPlacement();
+    const box = el.msgsCliente;
+    if (!box) return;
     box.innerHTML = '';
-    if (!msgs.length){
+    const list = state.cliente || [];
+    if (!state.packId) {
+      box.innerHTML = `<div class="empty-text-centered">Defina ?pack=ID na URL para carregar o chat com o cliente.</div>`;
+      return;
+    }
+    if (!list.length) {
       box.innerHTML = `<div class="empty-text-centered">Nenhuma mensagem do cliente.</div>`;
       return;
     }
     const frag = document.createDocumentFragment();
-    msgs.forEach(m => frag.appendChild(bubble(m)));
+    list.forEach(m => frag.appendChild(bubble(m)));
     box.appendChild(frag);
-    scrollToBottom(box);
+    scrollToEnd(box);
   }
 
-  function renderPlataforma(){
-    const msgs = state.mensagens.filter(m =>
-      (m.canal ? m.canal === 'plataforma' : /platform|mediator|system/i.test(m.author_role || ''))
-    );
-    const box = el.mensagensPlataforma;
+  function renderPlataforma() {
+    ensureComposerPlacement();
+    const box = el.msgsPlataforma;
+    if (!box) return;
     box.innerHTML = '';
-    if (!msgs.length){
+
+    const list = platMsgsById[state.platActiveId] || [];
+    if (!state.platActiveId) {
+      box.innerHTML = `<div class="empty-text-centered">Selecione uma mediação na esquerda.</div>`;
+      return;
+    }
+    if (!list.length) {
       box.innerHTML = `<div class="empty-text-centered">Nenhuma mensagem de mediação ainda.</div>`;
       return;
     }
     const frag = document.createDocumentFragment();
-    msgs.forEach(m => frag.appendChild(bubble(m)));
+    list.forEach(m => frag.appendChild(bubble(m)));
     box.appendChild(frag);
-    scrollToBottom(box);
+    scrollToEnd(box);
   }
 
-  function render(){
+  function render() {
     if (state.active === 'cliente') renderCliente();
     else renderPlataforma();
   }
 
+  // ===== Lista de threads da plataforma (coluna esquerda)
+  function renderPlatThreadList() {
+    if (!el.platThreadList) return;
+    const q = (el.platSearch?.value || '').trim().toLowerCase();
+
+    el.platThreadList.innerHTML = '';
+    const items = state.platThreads.filter(t => {
+      if (!q) return true;
+      return (
+        t.id.toLowerCase().includes(q) ||
+        (t.label||'').toLowerCase().includes(q) ||
+        (t.subtitle||'').toLowerCase().includes(q)
+      );
+    });
+
+    if (!items.length) {
+      el.platThreadList.innerHTML = `<li class="thread-empty">Nada encontrado</li>`;
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const t of items) {
+      const li = document.createElement('li');
+      li.className = 'thread-item' + (t.id === state.platActiveId ? ' active' : '');
+      li.dataset.tid = t.id;
+      li.innerHTML = `
+        <div class="thread-title">${t.label}</div>
+        <div class="thread-sub">${t.subtitle || ''}</div>
+      `;
+      li.addEventListener('click', async () => {
+        await setPlatActive(t.id);
+      });
+      frag.appendChild(li);
+    }
+    el.platThreadList.appendChild(frag);
+  }
+
+  async function setPlatActive(claimId, opts = {}) {
+    state.platActiveId = claimId;
+
+    // Atualiza placeholder / título
+    const thr = state.platThreads.find(t => t.id === claimId);
+    if (el.txtPlat) {
+      el.txtPlat.placeholder = thr
+        ? `Fale com a plataforma sobre ${thr.label}...`
+        : 'Fale com a plataforma (mediação)...';
+    }
+    if (el.headerPlatName) {
+      el.headerPlatName.textContent = thr ? `Mediação — ${thr.label}` : 'Mediação';
+    }
+
+    // Busca mensagens reais da mediação
+    try {
+      renderSkeletons();
+      await fetchPlataformaMessages(claimId);
+    } catch (err) {
+      console.error(err);
+    }
+
+    if (!opts.skipRenderList) renderPlatThreadList();
+    renderPlataforma();
+  }
+
   // ===== Abas
-  function setAba(key){
+  function setAba(key) {
     state.active = key;
     const isCliente = key === 'cliente';
-    // visuais
-    el.abaCliente.setAttribute('aria-selected', String(isCliente));
-    el.abaPlataforma.setAttribute('aria-selected', String(!isCliente));
-    // painéis
-    el.painelCliente.hidden     = !isCliente;
-    el.painelPlataforma.hidden  =  isCliente;
-    // layout (CSS usa .plataforma para remover coluna esquerda)
-    if (el.mainContent) el.mainContent.classList.toggle('plataforma', !isCliente);
-    try { localStorage.setItem('rf_chat_tab', key); } catch {}
+
+    el.abaCliente?.setAttribute('aria-selected', String(isCliente));
+    el.abaPlataforma?.setAttribute('aria-selected', String(!isCliente));
+
+    el.painelCliente.hidden    = !isCliente;
+    el.painelPlataforma.hidden =  isCliente;
+
+    // Alterna os blocos da coluna esquerda
+    if (el.clienteTools) el.clienteTools.hidden = !isCliente;
+    if (el.platSide)     el.platSide.hidden     = isCliente;
+
+    // Classe de layout
+    el.mainContent?.classList.toggle('plataforma', !isCliente);
+
+    // Coluna esquerda visível na Plataforma
+    syncLeftPanelVisibility();
+
+    ensureComposerPlacement();
     render();
   }
 
-  function handleTabKeys(e){
+  function handleTabKeys(e) {
     const tabs = [el.abaCliente, el.abaPlataforma];
     const idx = tabs.indexOf(document.activeElement);
     if (idx < 0) return;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft'){
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       e.preventDefault();
       const next = e.key === 'ArrowRight' ? (idx + 1) % tabs.length : (idx - 1 + tabs.length) % tabs.length;
-      const key  = next === 0 ? 'cliente' : 'plataforma';
-      setAba(key); tabs[next].focus();
+      setAba(next === 0 ? 'cliente' : 'plataforma');
+      tabs[next].focus();
     }
   }
 
-  // ===== Composer (envio)
-  function getFilesArray(input){
-    const arr = [];
-    if (!input?.files) return arr;
-    for (const f of input.files){
-      arr.push({ id: uid('f'), name: f.name, url: '#', mime: f.type || 'application/octet-stream' });
-    }
-    return arr;
+  // ===== Envio / anexos
+  function autoresize(ta) {
+    if (!ta) return;
+    ta.style.height = '0px';
+    const max = 140;
+    ta.style.height = Math.min(ta.scrollHeight, max) + 'px';
   }
 
-  function limparComposer({ textarea, inputFile, previews }){
-    if (textarea){ textarea.value=''; autoResize(textarea); }
-    if (inputFile){ inputFile.value=''; }
-    if (previews){ previews.hidden = true; previews.innerHTML = ''; }
-  }
+  function wireComposer({ form, textarea, upload, btnUpload, destino }) {
+    if (!form || !textarea) return;
 
-  function renderPreviews(input, box){
-    if (!input || !box) return;
-    const files = Array.from(input.files || []);
-    box.innerHTML = '';
-    if (!files.length){ box.hidden = true; return; }
-    files.forEach(f => {
-      const div = document.createElement('div');
-      div.className = 'preview';
-      div.textContent = f.name.split('.').pop()?.toUpperCase() || 'ARQ';
-      const rm = document.createElement('button');
-      rm.className = 'rm'; rm.type='button'; rm.textContent='×';
-      rm.onclick = () => { input.value=''; renderPreviews(input, box); };
-      div.appendChild(rm);
-      box.appendChild(div);
+    // abrir seletor de arquivos
+    btnUpload?.addEventListener('click', () => upload?.click());
+
+    // autoresize
+    textarea.addEventListener('input', () => autoresize(textarea));
+    autoresize(textarea);
+
+    // enviar
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = (textarea.value || '').trim();
+      const files = Array.from(upload?.files || []);
+
+      if (!text && files.length === 0) return;
+
+      try {
+        // CLIENTE (pack): usa endpoint universal /chat/send (sem anexos)
+        if (destino === 'cliente') {
+          if (!state.packId) return;
+          await jfetch(`${API}/chat/send`, {
+            method: 'POST',
+            body: JSON.stringify({ type: 'pack', id: state.packId, text })
+          });
+          // refetch após enviar
+          await fetchClienteMessages();
+          renderCliente();
+        }
+
+        // PLATAFORMA (claim): se tiver arquivo, sobe primeiro no endpoint de anexos de claim,
+        // depois envia pelo endpoint específico de claim (que aceita attachments)
+        if (destino === 'plataforma') {
+          const claimId = state.platActiveId;
+          if (!claimId) return;
+
+          let attachments = [];
+          if (files.length) {
+            attachments = [];
+            for (const f of files) {
+              const fd = new FormData();
+              fd.append('file', f, f.name);
+              const res = await fetch(`${API}/claims/${encodeURIComponent(claimId)}/attachments`, {
+                method: 'POST',
+                headers: { ...authHeaders() }, // NÃO adicionar Content-Type aqui (deixa o browser definir o boundary)
+                body: fd
+              });
+              if (!res.ok) {
+                const t = await res.text().catch(()=> '');
+                throw new Error(`Falha no upload: ${res.status} ${t}`);
+              }
+              const j = await res.json();
+              if (j?.filename || j?.file_name) attachments.push(j.filename || j.file_name);
+            }
+          }
+
+          // envia a mensagem (receiver_role = 'mediator' na maioria dos casos)
+          await jfetch(`${API}/claims/${encodeURIComponent(claimId)}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({
+              receiver_role: 'mediator',
+              message: text,
+              attachments
+            })
+          });
+
+          // refetch e re-render
+          await fetchPlataformaMessages(claimId);
+          renderPlataforma();
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Falha ao enviar mensagem. Verifique o token e os IDs.');
+      } finally {
+        textarea.value = '';
+        if (upload) upload.value = '';
+        autoresize(textarea);
+      }
     });
-    box.hidden = false;
   }
 
-  function toggleButton(textarea, btn){
-    if (!textarea || !btn) return;
-    btn.disabled = !textarea.value.trim();
-  }
+  // ===== Eventos
+  el.abaCliente?.addEventListener('click', () => setAba('cliente'));
+  el.abaPlataforma?.addEventListener('click', () => setAba('plataforma'));
+  el.abaCliente?.addEventListener('keydown', handleTabKeys);
+  el.abaPlataforma?.addEventListener('keydown', handleTabKeys);
 
-  function submitCliente(e){
-    e.preventDefault();
-    const text = (el.textoCliente.value || '').trim();
-    if (!text) return;
-    state.mensagens.push({
-      id: uid(),
-      canal: 'cliente',
-      author_role: 'seller',
-      author_name: 'Vendedor',
-      text,
-      attachments: getFilesArray(el.arquivoCliente),
-      created_at: new Date().toISOString(),
-    });
-    limparComposer({ textarea: el.textoCliente, inputFile: el.arquivoCliente, previews: el.prevCliente });
-    renderCliente();
-    scrollToBottom(el.mensagensCliente, true);
-    el.textoCliente.focus();
-  }
+  // Busca de threads (plataforma)
+  el.platSearch?.addEventListener('input', renderPlatThreadList);
 
-  function submitPlataforma(e){
-    e.preventDefault();
-    const text = (el.textoPlataforma.value || '').trim();
-    if (!text) return;
-    state.mensagens.push({
-      id: uid(),
-      canal: 'plataforma',
-      author_role: 'seller', // vendedor falando com a plataforma
-      author_name: 'Vendedor',
-      text,
-      attachments: getFilesArray(el.arquivoPlataforma),
-      created_at: new Date().toISOString(),
-    });
-    limparComposer({ textarea: el.textoPlataforma, inputFile: el.arquivoPlataforma, previews: el.prevPlataforma });
-    renderPlataforma();
-    scrollToBottom(el.mensagensPlataforma, true);
-    el.textoPlataforma.focus();
-  }
+  // Conecta composers
+  wireComposer({ form: el.compCli,  textarea: el.txtCli,  upload: el.upCli,  btnUpload: el.btnUpCli,  destino: 'cliente' });
+  wireComposer({ form: el.compPlat, textarea: el.txtPlat, upload: el.upPlat, btnUpload: el.btnUpPlat, destino: 'plataforma' });
 
-  function handleHotkeySubmit(e, submitFn){
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
-      e.preventDefault(); submitFn(e);
-    }
-  }
-
-  // ===== Eventos de abas
-  el.abaCliente.addEventListener('click', () => setAba('cliente'));
-  el.abaPlataforma.addEventListener('click', () => setAba('plataforma'));
-  el.abaCliente.addEventListener('keydown', handleTabKeys);
-  el.abaPlataforma.addEventListener('keydown', handleTabKeys);
-
-  // ===== Eventos composer — Cliente
-  if (el.formCliente){
-    el.formCliente.addEventListener('submit', submitCliente);
-    el.textoCliente?.addEventListener('input', () => {
-      autoResize(el.textoCliente); toggleButton(el.textoCliente, el.btnEnviarCliente);
-    });
-    el.textoCliente?.addEventListener('keydown', (e) => handleHotkeySubmit(e, submitCliente));
-    el.arquivoCliente?.addEventListener('change', () => renderPreviews(el.arquivoCliente, el.prevCliente));
-  }
-
-  // ===== Eventos composer — Plataforma
-  if (el.formPlataforma){
-    el.formPlataforma.addEventListener('submit', submitPlataforma);
-    el.textoPlataforma?.addEventListener('input', () => {
-      autoResize(el.textoPlataforma); toggleButton(el.textoPlataforma, el.btnEnviarPlataforma);
-    });
-    el.textoPlataforma?.addEventListener('keydown', (e) => handleHotkeySubmit(e, submitPlataforma));
-    el.arquivoPlataforma?.addEventListener('change', () => renderPreviews(el.arquivoPlataforma, el.prevPlataforma));
-  }
+  // Responsivo
+  window.addEventListener('resize', syncLeftPanelVisibility);
 
   // ===== Boot
   (async () => {
-    await carregarMensagens();
-    let saved = 'cliente';
-    try { const s = localStorage.getItem('rf_chat_tab'); if (s === 'plataforma') saved = 'plataforma'; } catch {}
-    setAba(saved);
+    ensureComposerPlacement();
+
+    // monta lista de mediações (coluna esquerda)
+    await buildPlatThreads();
+
+    // carrega mensagens iniciais (cliente/plataforma)
+    renderSkeletons();
+    try {
+      if (state.packId) await fetchClienteMessages();
+      if (state.platActiveId) await fetchPlataformaMessages(state.platActiveId);
+    } catch (err) {
+      console.error(err);
+    }
+
+    // desenha lista/headers
+    renderPlatThreadList();
+
+    // Seleciona aba inicial
+    setAba('cliente'); // você pode trocar para 'plataforma' se preferir iniciar lá
+    syncLeftPanelVisibility();
+
+    // Ajusta placeholder e header da plataforma
+    if (state.platActiveId) {
+      const thr = state.platThreads.find(t => t.id === state.platActiveId);
+      if (el.txtPlat) el.txtPlat.placeholder = `Fale com a plataforma sobre ${thr?.label || 'Mediação'}...`;
+      if (el.headerPlatName) el.headerPlatName.textContent = `Mediação — ${thr?.label || ''}`;
+    }
+
+    // Render final
+    render();
   })();
 })();
