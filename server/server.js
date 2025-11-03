@@ -35,7 +35,7 @@ app.disable('x-powered-by');
 
 /** ================== Segurança base ================== */
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: false, // para não quebrar inline scripts do front atual
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   referrerPolicy: { policy: 'no-referrer' }
 }));
@@ -46,7 +46,7 @@ if (process.env.NODE_ENV !== 'production') {
     origin: true,
     credentials: true,
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-    // adiciona headers usados nas rotas ML
+    // headers usados nas rotas ML
     allowedHeaders: [
       'Content-Type','Accept','Idempotency-Key','x-job-token',
       'x-seller-token','x-owner','Authorization'
@@ -216,13 +216,18 @@ try {
 
 /** --------- RBAC enforce nas rotas /api PATCH --------- */
 try {
-  const { rbacEnforce } = require('./middlewares/auth'); // se existir
+  // tenta ./middleware/auth e ./middlewares/auth
+  let authMw = null;
+  try { authMw = require('./middleware/auth'); } catch (_) {}
+  if (!authMw) { try { authMw = require('./middlewares/auth'); } catch (_) {} }
+
+  const rbacEnforce = authMw && authMw.rbacEnforce;
   if (typeof rbacEnforce === 'function') {
     app.use('/api', rbacEnforce());
     console.log('[BOOT] RBAC enforce aplicado em /api (PATCH rules)');
   }
 } catch (e) {
-  console.warn('[BOOT] RBAC middleware não encontrado (./middlewares/auth):', e?.message || e);
+  console.warn('[BOOT] RBAC middleware não encontrado:', e?.message || e);
 }
 
 /** --------- Helpers --------- */
@@ -449,9 +454,9 @@ try {
   console.warn('[BOOT] ML Enrich não carregado (opcional):', e?.message || e);
 }
 
-/* ========= ML – Chat/Returns/Reviews (NOVO / opcional) ========= */
+/* ========= ML – Chat/Returns/Reviews ========= */
 try {
-  // tenta ambos os nomes de arquivo para evitar 404 por path
+  // tenta ambos os nomes de arquivo para evitar problemas de case/slug
   let mlChatRoutes = null;
   try { mlChatRoutes = require('./routes/mlChat'); } catch (_) {}
   if (!mlChatRoutes) {
@@ -704,17 +709,7 @@ const server = app.listen(port, host, () => {
   setupMlAutoSync();
 });
 
-/* ===========================
- *  AUTO SYNC (ML) — JOB PERIÓDICO
- * =========================== */
-let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
-
 function setupMlAutoSync() {
-  if (!_mlSyncRegistered) {
-    console.warn('[ML AUTO] Importador ML não está registrado; AutoSync desabilitado.');
-    return;
-  }
-
   const enabled = String(process.env.ML_AUTO_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
   if (!enabled) {
     console.log('[ML AUTO] Desabilitado por ML_AUTO_SYNC_ENABLED=false');
