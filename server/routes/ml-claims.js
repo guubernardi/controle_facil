@@ -1,5 +1,6 @@
 // server/routes/ml-claims.js
 'use strict';
+
 /**
  * Proxy de rotas oficiais do Mercado Livre (Claims):
  * - messages (GET)
@@ -9,10 +10,9 @@
  *
  * Token:
  * - Header preferencial: x-seller-token: <ACCESS_TOKEN>
- * - Ou, se vier x-seller-id, tenta buscar token no banco
- * - Ou fallback: process.env.MELI_OWNER_TOKEN
- *
- * Respostas de erro propagam status e corpo do ML quando possível.
+ * - Ou, se vier x-seller-id, busca token no banco e faz AUTO-REFRESH quando necessário
+ * - Ou fallback: req.session.ml.access_token
+ * - Ou último recurso: process.env.MELI_OWNER_TOKEN
  */
 
 const express = require('express');
@@ -23,45 +23,120 @@ const { query } = require('../db');
 
 const router  = express.Router();
 const ML_BASE = 'https://api.mercadolibre.com/post-purchase/v1';
+const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
+const AHEAD_SEC = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600; // renova 10min antes
 
-/* ============================== Token resolver ============================== */
+/* ============================== Helpers de token ============================== */
 
-async function lookupTokenBySellerId(sellerId) {
-  if (!sellerId) return null;
-  // Tentativas em tabelas comuns deste projeto; ignora silenciosamente se não existir
-  const tries = [
-    "SELECT access_token FROM ml_accounts         WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
-    "SELECT access_token FROM meli_accounts       WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
-    "SELECT access_token FROM ml_oauth_accounts   WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
-    "SELECT access_token FROM ml_stores           WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 1",
-  ];
-  for (const sql of tries) {
-    try {
-      const { rows } = await query(sql, [sellerId]);
-      const tok = rows?.[0]?.access_token;
-      if (tok) return tok;
-    } catch (_e) { /* continua */ }
-  }
-  return null;
+/** Lê o registro mais recente da tabela pública ml_tokens */
+async function loadTokenRowFromDb(sellerId, q = query) {
+  const sql = `
+    SELECT user_id, nickname, access_token, refresh_token, expires_at
+      FROM public.ml_tokens
+     WHERE user_id = $1
+     ORDER BY updated_at DESC
+     LIMIT 1`;
+  const { rows } = await q(sql, [sellerId]);
+  return rows[0] || null;
 }
 
-async function resolveSellerToken(req) {
-  // 1) Se veio token direto no header, prioriza
+function isExpiringSoon(expiresAtIso, aheadSec = AHEAD_SEC) {
+  if (!expiresAtIso) return true;
+  const exp = new Date(expiresAtIso).getTime();
+  if (!Number.isFinite(exp)) return true;
+  return (exp - Date.now()) <= aheadSec * 1000;
+}
+
+/** Faz refresh no OAuth do ML e persiste no DB */
+async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
+  if (!refreshToken) return null;
+
+  const form = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id:     process.env.ML_CLIENT_ID || '',
+    client_secret: process.env.ML_CLIENT_SECRET || '',
+    refresh_token: refreshToken
+  });
+
+  const r = await fetch(ML_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString()
+  });
+
+  const ct = r.headers.get('content-type') || '';
+  const body = ct.includes('application/json') ? await r.json().catch(() => null)
+                                               : await r.text().catch(() => '');
+
+  if (!r.ok) {
+    const msg = (body && (body.message || body.error)) || r.statusText || 'refresh_failed';
+    const err = new Error(msg);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+
+  const { access_token, refresh_token, token_type, scope, expires_in } = body || {};
+  const expiresAt = new Date(Date.now() + (Math.max(60, Number(expires_in) || 600)) * 1000).toISOString();
+
+  // UPSERT no DB
+  await q(`
+    INSERT INTO public.ml_tokens
+      (user_id, access_token, refresh_token, token_type, scope, expires_at, raw, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+    ON CONFLICT (user_id) DO UPDATE SET
+      access_token = EXCLUDED.access_token,
+      refresh_token= EXCLUDED.refresh_token,
+      token_type   = EXCLUDED.token_type,
+      scope        = EXCLUDED.scope,
+      expires_at   = EXCLUDED.expires_at,
+      raw          = EXCLUDED.raw,
+      updated_at   = now()
+  `, [sellerId, access_token || null, refresh_token || null, token_type || null, scope || null, expiresAt, JSON.stringify(body || {})]);
+
+  return { access_token, refresh_token, expires_at: expiresAt };
+}
+
+/** Resolve o access_token: header -> DB (com auto-refresh) -> sessão -> env */
+async function resolveSellerAccessToken(req) {
+  // 1) Header direto (debug/forçado)
   const direct = req.get('x-seller-token');
   if (direct) return direct;
 
-  // 2) Se veio seller_id, tenta achar no banco
-  const sellerId = String(req.get('x-seller-id') || req.query.seller_id || '')
-    .replace(/\D/g,'');
+  // 2) Seller id: header, query ou sessão
+  const sellerId = String(
+    req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || ''
+  ).replace(/\D/g, '');
+
   if (sellerId) {
-    const tok = await lookupTokenBySellerId(sellerId);
-    if (tok) return tok;
+    const row = await loadTokenRowFromDb(sellerId, req.q || query);
+    if (row?.access_token) {
+      if (!isExpiringSoon(row.expires_at)) {
+        return row.access_token;
+      }
+      // vai expirar: tenta refresh
+      try {
+        const refreshed = await refreshAccessToken({
+          sellerId,
+          refreshToken: row.refresh_token,
+          q: req.q || query
+        });
+        if (refreshed?.access_token) return refreshed.access_token;
+      } catch (e) {
+        // Se falhar o refresh, ainda tenta usar o token atual (pode estar válido por poucos minutos)
+        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) {
+          return row.access_token;
+        }
+        // Se realmente não der, propaga o erro
+        throw e;
+      }
+    }
   }
 
-  // 3) Sessão (se houver fluxo de OAuth integrado)
+  // 3) Sessão (se você coloca access_token aí ao logar)
   if (req.session?.ml?.access_token) return req.session.ml.access_token;
 
-  // 4) Fallback: token do owner
+  // 4) Fallback owner (ENV)
   return process.env.MELI_OWNER_TOKEN || '';
 }
 
@@ -73,7 +148,7 @@ function pick(obj, keys) {
 
 /** Fetch JSON/text (levanta erro com .status e .body) */
 async function mlFetch(req, url, opts = {}) {
-  const token = await resolveSellerToken(req);
+  const token = await resolveSellerAccessToken(req);
   if (!token) {
     const e = new Error('missing_access_token');
     e.status = 401;
@@ -102,7 +177,7 @@ async function mlFetch(req, url, opts = {}) {
 
 /** Fetch bruto (para download/stream) */
 async function mlFetchRaw(req, url, opts = {}) {
-  const token = await resolveSellerToken(req);
+  const token = await resolveSellerAccessToken(req);
   if (!token) {
     const e = new Error('missing_access_token');
     e.status = 401;
@@ -137,7 +212,7 @@ const ok = (res, data = {}) => res.json({ ok: true, ...data });
 /** Obter todas as mensagens da claim */
 router.get('/claims/:id/messages', async (req, res) => {
   try {
-    const claimId = String(req.params.id || '').replace(/\D/g,'');
+    const claimId = String(req.params.id || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
 
     const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}/messages`;

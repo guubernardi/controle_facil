@@ -5,12 +5,13 @@ const express = require('express');
 const axios = require('axios');
 const dayjs = require('dayjs');
 const cookieParser = require('cookie-parser');
-const { query } = require('../db');          // <- usamos o DB direto
-const ml = require('../mlClient');           // <- mantemos compat (single/multi)
+const { query } = require('../db');
+const ml = require('../mlClient'); // opcional/compat
 
 const ML_AUTH_URL  = process.env.ML_AUTH_URL  || 'https://auth.mercadolivre.com.br/authorization';
 const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
 const ML_BASE      = process.env.ML_BASE_URL  || 'https://api.mercadolibre.com';
+const AHEAD_SEC    = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600; // 10min
 
 module.exports = function registerMlAuth(app) {
   const CLIENT_ID     = process.env.ML_CLIENT_ID;
@@ -72,6 +73,79 @@ ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(red
   <small class="hint">${ok ? 'Você será redirecionado automaticamente em instantes…' : 'Revise as credenciais e tente novamente.'}</small>
 </main>
 </body></html>`;
+  }
+
+  // ---------- Persistência ----------
+  async function upsertTokens({ user_id, nickname, token }) {
+    const expiresAt = dayjs()
+      .add(Math.max(60, (token.expires_in || 600) - 300), 'seconds') // margem de 5 min
+      .toISOString();
+
+    await query(`
+      INSERT INTO public.ml_tokens
+        (user_id, nickname, access_token, refresh_token, scope, token_type, expires_at, raw, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+      ON CONFLICT (user_id) DO UPDATE SET
+        nickname     = EXCLUDED.nickname,
+        access_token = EXCLUDED.access_token,
+        refresh_token= EXCLUDED.refresh_token,
+        scope        = EXCLUDED.scope,
+        token_type   = EXCLUDED.token_type,
+        expires_at   = EXCLUDED.expires_at,
+        raw          = EXCLUDED.raw,
+        updated_at   = now()
+    `, [
+      user_id,
+      nickname || null,
+      token.access_token || null,
+      token.refresh_token || null,
+      token.scope || null,
+      token.token_type || null,
+      expiresAt,
+      JSON.stringify(token || {})
+    ]);
+
+    return { user_id, nickname, expires_at: expiresAt };
+  }
+
+  async function loadLatestAccount(userId = null) {
+    if (userId) {
+      const { rows } = await query(`
+        SELECT user_id, nickname, access_token, refresh_token, expires_at
+          FROM public.ml_tokens
+         WHERE user_id = $1
+         ORDER BY updated_at DESC
+         LIMIT 1
+      `, [userId]);
+      return rows[0] || null;
+    }
+    const { rows } = await query(`
+      SELECT user_id, nickname, access_token, refresh_token, expires_at
+        FROM public.ml_tokens
+       WHERE access_token IS NOT NULL AND access_token <> ''
+       ORDER BY updated_at DESC
+       LIMIT 1
+    `);
+    return rows[0] || null;
+  }
+
+  async function refreshAccessToken({ user_id, refresh_token }) {
+    if (!refresh_token) throw new Error('missing_refresh_token');
+
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: CLIENT_ID || '',
+      client_secret: CLIENT_SECRET || '',
+      refresh_token
+    });
+
+    const { data: token } = await axios.post(ML_TOKEN_URL, body.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 15000
+    });
+
+    await upsertTokens({ user_id, nickname: null, token });
+    return token;
   }
 
   // ---------- LOGIN ----------
@@ -147,66 +221,52 @@ ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(red
         timeout: 15000
       });
 
-      // quem é o usuário?
-      const me = await axios.get(`${ML_BASE}/users/me`, {
+      const { data: me } = await axios.get(`${ML_BASE}/users/me`, {
         headers: { Authorization: `Bearer ${token.access_token}` },
         timeout: 15000
       });
 
-      // --------- persistência no DB (UPSERT) -----------
-      const expiresAt = dayjs().add(token.expires_in || 600, 'seconds').toISOString();
+      const saved = await upsertTokens({
+        user_id: me.id,
+        nickname: me.nickname || null,
+        token
+      });
 
-      await query(`
-        INSERT INTO public.ml_tokens
-          (user_id, nickname, access_token, refresh_token, scope, token_type, expires_at, raw)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (user_id) DO UPDATE SET
-          nickname     = EXCLUDED.nickname,
-          access_token = EXCLUDED.access_token,
-          refresh_token= EXCLUDED.refresh_token,
-          scope        = EXCLUDED.scope,
-          token_type   = EXCLUDED.token_type,
-          expires_at   = EXCLUDED.expires_at,
-          raw          = EXCLUDED.raw,
-          updated_at   = now()
-      `, [
-        me.data.id,
-        me.data.nickname || null,
-        token.access_token || null,
-        token.refresh_token || null,
-        token.scope || null,
-        token.token_type || null,
-        expiresAt,
-        JSON.stringify(token)
-      ]);
-
-      // --------- compat: também salva no mlClient (se usado em outras rotas) ----------
-      const acc = {
-        user_id: me.data.id,
-        nickname: me.data.nickname,
-        access_token: token.access_token,
-        refresh_token: token.refresh_token,
-        scope: token.scope,
-        token_type: token.token_type,
-        expires_at: expiresAt
-      };
+      // compat com mlClient (se usado noutros pontos)
       if (typeof ml.saveAccount === 'function') {
-        try { await ml.saveAccount(acc); } catch {}
+        try {
+          await ml.saveAccount({
+            user_id: me.id,
+            nickname: me.nickname,
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            scope: token.scope,
+            token_type: token.token_type,
+            expires_at: saved.expires_at
+          });
+        } catch {}
       }
+
+      // opcional: popular sessão (algumas rotas usam req.session.ml.*)
+      req.session.ml = {
+        user_id: String(me.id),
+        access_token: token.access_token
+      };
 
       return res.send(renderAuthResult({
         ok: true,
         title: 'Conectado ao Mercado Livre',
-        message: `<p>Conta: <strong>${escapeHtml(acc.nickname)}</strong> <small>(user_id ${escapeHtml(String(acc.user_id))})</small></p>`,
+        message: `<p>Conta: <strong>${escapeHtml(me.nickname)}</strong> <small>(user_id ${escapeHtml(String(me.id))})</small></p>`,
         detailsHTML: '<p>Tokens salvos com sucesso.</p>',
       }));
     } catch (e) {
-      console.error('[ml-auth] callback error', e?.response?.data || e);
+      const data = e?.response?.data || e;
+      console.error('[ml-auth] callback error', data);
       return res.status(500).send(renderAuthResult({
         ok: false,
         title: 'Erro inesperado no OAuth',
         message: '<p>Ocorreu um erro ao concluir a conexão.</p>',
-        detailsHTML: `<pre>${escapeHtml(String(e?.response?.data || e.message || e))}</pre>`,
+        detailsHTML: `<pre>${escapeHtml(String(data?.message || data))}</pre>`,
       }));
     }
   });
@@ -245,7 +305,7 @@ ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(red
         user_id: String(row.user_id),
         expires_at: row.expires_at
       });
-    } catch (e) {
+    } catch {
       return res.json({ connected: false, error: 'not_connected' });
     }
   });
@@ -265,6 +325,29 @@ ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(red
     }
   });
 
+  // ---------- Forçar Refresh (útil p/ CRON/ajustes) ----------
+  // POST /api/ml/refresh  { user_id?: "1182709105" }
+  app.post('/api/ml/refresh', async (req, res) => {
+    try {
+      const userId = (req.body?.user_id || '').toString().replace(/\D/g, '');
+      const acc = await loadLatestAccount(userId || null);
+      if (!acc) return res.status(404).json({ ok: false, error: 'account_not_found' });
+
+      // se não está perto de expirar, ainda atualizamos para padronizar
+      const now = dayjs();
+      const exp = dayjs(acc.expires_at);
+      const near = !exp.isValid() || exp.diff(now, 'second') <= AHEAD_SEC;
+
+      const token = near
+        ? await refreshAccessToken({ user_id: acc.user_id, refresh_token: acc.refresh_token })
+        : { access_token: acc.access_token, refresh_token: acc.refresh_token };
+
+      res.json({ ok: true, user_id: String(acc.user_id), refreshed: !!near, token_type: 'Bearer' });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String(e?.response?.data || e.message || e) });
+    }
+  });
+
   // ---------- Desconectar ----------
   app.post('/api/ml/disconnect', async (req, res) => {
     try {
@@ -274,7 +357,6 @@ ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(red
       } else {
         await query(`UPDATE public.ml_tokens SET access_token=NULL, refresh_token=NULL, updated_at=now()`);
       }
-      // compat com mlClient
       if (typeof ml.saveAccount === 'function') {
         try { await ml.saveAccount({}); } catch {}
       }
@@ -287,18 +369,11 @@ ${redirectTo ? `<script>setTimeout(function(){location.href=${JSON.stringify(red
   // ---------- /api/ml/me (teste rápido) ----------
   app.get('/api/ml/me', async (_req, res) => {
     try {
-      const q = await query(`
-        SELECT user_id, access_token
-          FROM public.ml_tokens
-         WHERE access_token IS NOT NULL AND access_token <> ''
-         ORDER BY updated_at DESC
-         LIMIT 1
-      `);
-      if (!q.rows.length) return res.status(400).json({ ok: false, error: 'no_token' });
-      const row = q.rows[0];
+      const acc = await loadLatestAccount();
+      if (!acc?.access_token) return res.status(400).json({ ok: false, error: 'no_token' });
 
       const me = await axios.get(`${ML_BASE}/users/me`, {
-        headers: { Authorization: `Bearer ${row.access_token}` },
+        headers: { Authorization: `Bearer ${acc.access_token}` },
         timeout: 15000
       });
 
