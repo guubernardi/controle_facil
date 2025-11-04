@@ -355,10 +355,15 @@ function preencherRanking(items) {
 
   sorted.forEach((it, idx) => {
     const pos = idx + 1;
-    const sku = escapeHtml(String(it.sku || it.nome || it.title || '—'));
+    // aceita diversas chaves, mas PRIORIZA SKU
+    const skuTxt = String(
+      it.sku || it.codigo_sku || it.seller_sku || it.title || it.nome || it.item || '—'
+    );
+    const sku = escapeHtml(skuTxt);
     const qtd = Number(it.devolucoes || 0);
     const preju = Number(it.prejuizo || 0);
-    const motivo = escapeHtml(String(it.motivo || it.tipo_reclamacao || '—'));
+    // aceita motivo_comum vindo do builder local
+    const motivo = escapeHtml(String(it.motivo || it.motivo_comum || it.tipo_reclamacao || '—'));
     const prejuFmt = currencyBR(preju);
 
     const item = document.createElement('div');
@@ -461,7 +466,7 @@ async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) 
     }
   }
 
-  // KPIs (mantém as mesmas chaves que a API envia)
+  // KPIs
   document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = data.totals?.total ?? 0);
   document.getElementById('dash-pend')  && (document.getElementById('dash-pend').textContent  = data.totals?.pendentes ?? 0);
   document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = data.totals?.aprovadas ?? 0);
@@ -511,12 +516,51 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     return vp + vf;
   }
 
+  // helper: seletor de SKU (prioriza campos de produto; NÃO cai no número do pedido)
+  const parseMaybeJson = (x) => {
+    if (!x) return null;
+    if (typeof x === 'object') return x;
+    try { return JSON.parse(String(x)); } catch { return null; }
+  };
+  const firstNonEmpty = (...vals) => {
+    for (const v of vals) {
+      if (v === null || v === undefined) continue;
+      const s = String(v).trim();
+      if (s && s.toLowerCase() !== 'null' && s.toLowerCase() !== 'undefined') return s;
+    }
+    return null;
+  };
+  function pickSku(it) {
+    const meta  = parseMaybeJson(it.meta)  || {};
+    const dados = parseMaybeJson(it.dados) || {};
+    const info  = parseMaybeJson(it.info)  || {};
+
+    return firstNonEmpty(
+      it.sku,
+      it.item_sku,
+      it.seller_sku,
+      it.sku_produto,
+      it.bling_sku,
+      it.codigo_sku,
+      it.ml_seller_sku,
+      it.ml_item_sku,
+      it.ml_item_seller_sku,
+      it.ml_listing_seller_custom_field,
+      it.ml_variation_seller_custom_field,
+      meta.sku, meta.seller_sku, meta.item?.seller_sku,
+      dados.sku, dados.seller_sku,
+      info.sku,  info.seller_sku,
+      // nenhum fallback para id de venda/listing aqui (evita mostrar número do pedido)
+      null
+    ) || '—';
+  }
+
   // totals e agrupamentos
   const totals = { total: 0, pendentes: 0, aprovadas: 0, rejeitadas: 0, prejuizo_total: 0 };
-  const dailyMap = {}; // YYYY-MM-DD -> sum prejuizo
+  const dailyMap = {};   // YYYY-MM-DD -> sum prejuizo
   const monthlyMap = {}; // YYYY-MM -> sum
   const statusMap = {};
-  const skuMap = {}; // sku -> {sku, devolucoes, prejuizo, motivo_count}
+  const skuMap = {};     // sku -> {sku, devolucoes, prejuizo, motivos{}}
 
   for (const it of items) {
     totals.total += 1;
@@ -524,7 +568,6 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     if (st.includes('pend')) totals.pendentes += 1;
     else if (st.includes('aprov')) totals.aprovadas += 1;
     else if (st.includes('rej') || st.includes('neg')) totals.rejeitadas += 1;
-    else { /* outros não incrementam */ }
 
     const preju = calcPrejuizoFor(it);
     totals.prejuizo_total += preju;
@@ -533,10 +576,7 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     const created = it.created_at || it.data_compra || it.created || null;
     let day = null;
     try { if (created) day = new Date(created).toISOString().slice(0,10); } catch(_) { day = null; }
-    if (!day) {
-      // fallback para data_compra se existente
-      if (it.data_compra) day = String(it.data_compra).slice(0,10);
-    }
+    if (!day && it.data_compra) day = String(it.data_compra).slice(0,10);
     if (day) {
       dailyMap[day] = (dailyMap[day] || 0) + preju;
       const ym = day.slice(0,7);
@@ -547,12 +587,12 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     const keyStatus = String(it.status || it.log_status || 'outros').toLowerCase();
     statusMap[keyStatus] = (statusMap[keyStatus] || 0) + 1;
 
-    // sku ranking
-    const sku = String(it.sku || it.item_sku || it.id_venda || '—');
+    // sku ranking (PRIORIDADE SKU)
+    const sku = pickSku(it);
     const motivo = String(it.tipo_reclamacao || it.motivo || it.reclamacao || '—');
     const s = skuMap[sku] || { sku, devolucoes: 0, prejuizo: 0, motivos: {} };
     s.devolucoes += 1;
-    s.prejuizo += preju;
+    s.prejuizo   += preju;
     s.motivos[motivo] = (s.motivos[motivo] || 0) + 1;
     skuMap[sku] = s;
   }
@@ -563,7 +603,12 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
 
   // top items by devolucoes
   const top_items = Object.values(skuMap)
-    .map(s => ({ sku: s.sku, devolucoes: s.devolucoes, prejuizo: s.prejuizo, motivo_comum: Object.entries(s.motivos).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—' }))
+    .map(s => ({
+      sku: s.sku,
+      devolucoes: s.devolucoes,
+      prejuizo: s.prejuizo,
+      motivo_comum: Object.entries(s.motivos).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—'
+    }))
     .sort((a,b) => b.devolucoes - a.devolucoes)
     .slice(0, limitTop);
 
