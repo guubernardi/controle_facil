@@ -1,76 +1,101 @@
-// server/routes/returns-log.js
+// server/routes/returns-logs.js
 'use strict';
 
 const express = require('express');
-const router = express.Router();
-const { query } = require('../db');
-const { requireRole } = require('../security/rbac'); // arquivo abaixo
-const dayjs = require('dayjs');
+const router  = express.Router();
+const { query } = require('../db'); // usa seu pool central
 
-/**
- * PATCH /api/returns/:id/log
- * Body: { log_status?, tipo_reclamacao?, source? }
- * Efeito: atualiza e insere em return_events.
- */
-router.patch('/:id/log', requireRole('operador','admin'), async (req, res) => {
+// Campos permitidos no ORDER BY
+const ORDER_ALLOW = new Set(['event_at','total','valor_produto','valor_frete','numero_pedido','cliente_nome','loja_nome']);
+
+// Normaliza datas YYYY-MM-DD
+function parseDate(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+router.get('/api/returns/logs', async (req, res) => {
+  const {
+    from, to,
+    status = '',
+    responsavel = '',
+    loja = '',
+    q = '',
+    page = '1',
+    pageSize = '50',
+    orderBy = 'event_at',
+    orderDir = 'desc'
+  } = req.query;
+
+  const pageNum = Math.max(1, parseInt(page || '1', 10));
+  const sizeNum = Math.min(200, Math.max(1, parseInt(pageSize || '50', 10)));
+  const offset  = (pageNum - 1) * sizeNum;
+
+  const orderCol = ORDER_ALLOW.has(String(orderBy).toLowerCase()) ? orderBy : 'event_at';
+  const dir = String(orderDir).toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+  const where = [];
+  const params = [];
+  const add = (sql, val) => { params.push(val); where.push(sql.replace('?$', `$${params.length}`)); };
+
   try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
+    const dfrom = parseDate(from);
+    const dto   = parseDate(to);
 
-    const { log_status, tipo_reclamacao, source } = req.body || {};
-    if (!log_status && !tipo_reclamacao) {
-      return res.status(400).json({ error: 'nothing_to_update' });
+    if (dfrom) add(`event_at >= ?$::date`, dfrom);
+    // to **inclusivo**: soma 1 dia no comparador
+    if (dto)   add(`event_at <  ?$::date + interval '1 day'`, dto);
+
+    if (status)      add(`LOWER(status) = LOWER(?$)`, status);
+    if (responsavel) add(`LOWER(responsavel_custo) = LOWER(?$)`, responsavel);
+    if (loja)        add(`LOWER(loja_nome) ILIKE LOWER(?$)`, `%${loja}%`);
+    if (q) {
+      // match simples em campos comuns
+      add(`(
+            CAST(numero_pedido AS TEXT) ILIKE ?$
+         OR LOWER(COALESCE(cliente_nome,'')) ILIKE LOWER(?$)
+         OR LOWER(COALESCE(sku,''))          ILIKE LOWER(?$)
+         OR LOWER(COALESCE(motivo_codigo,'')) ILIKE LOWER(?$)
+         OR LOWER(COALESCE(reclamacao,''))   ILIKE LOWER(?$)
+         )`, `%${q}%`);
+      // empurra os 4 extras
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
     }
 
-    const tenantId = (req.tenant && req.tenant.id) || req.session?.tenant_id || null;
-    const userId   = req.session?.user?.id || null;
-    const userRole = req.session?.user?.role || 'leitura';
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-    // lê valores antigos
-    const { rows: prevRows } = await query(
-      `SELECT id, tenant_id, log_status, tipo_reclamacao FROM returns WHERE id=$1`,
-      [id]
-    );
-    if (!prevRows.length) return res.status(404).json({ error: 'return_not_found' });
-    const prev = prevRows[0];
+    // 1) agregados
+    const aggSql = `
+      SELECT COUNT(*)::int AS total,
+             COALESCE(SUM(total),0)::numeric AS sum_total
+      FROM return_cost_log
+      ${whereSql}
+    `;
+    const agg = await query(aggSql, params);
+    const total = agg.rows[0]?.total || 0;
+    const sum_total = Number(agg.rows[0]?.sum_total || 0);
 
-    // aplica update (só campos enviados)
-    const updates = [];
-    const params = [];
-    let idx = 1;
+    // 2) listagem paginada
+    const listSql = `
+      SELECT
+        id, return_id,
+        event_at, status, regra_aplicada, responsavel_custo,
+        valor_produto, valor_frete, total,
+        loja_nome, numero_pedido, cliente_nome, sku, motivo_codigo, reclamacao
+      FROM return_cost_log
+      ${whereSql}
+      ORDER BY ${orderCol} ${dir}
+      LIMIT $${params.length + 1}
+      OFFSET $${params.length + 2}
+    `;
+    const list = await query(listSql, [...params, sizeNum, offset]);
 
-    if (log_status) { updates.push(`log_status=$${idx++}`); params.push(log_status); }
-    if (tipo_reclamacao) { updates.push(`tipo_reclamacao=$${idx++}`); params.push(tipo_reclamacao); }
-    updates.push(`updated_at=NOW()`);
-
-    params.push(id);
-
-    const { rows: upRows } = await query(
-      `UPDATE returns SET ${updates.join(', ')} WHERE id=$${idx} RETURNING id, log_status, tipo_reclamacao, updated_at`,
-      params
-    );
-    const updated = upRows[0];
-
-    // cria evento
-    const payload = {
-      source: source || 'manual',
-      before: { log_status: prev.log_status, tipo_reclamacao: prev.tipo_reclamacao },
-      after:  { log_status: updated.log_status, tipo_reclamacao: updated.tipo_reclamacao },
-      actor: { id: userId, role: userRole },
-    };
-
-    const { rows: evRows } = await query(
-      `INSERT INTO return_events (tenant_id, return_id, event_type, payload, created_by)
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING id, event_type, payload, created_at`,
-      [ tenantId, id, 'log_status.update', payload, userId ]
-    );
-    const event = evRows[0];
-
-    res.json({ ok: true, updated, event });
-  } catch (err) {
-    console.error('[PATCH /api/returns/:id/log] error', err);
-    res.status(500).json({ error: 'server_error' });
+    res.json({ items: list.rows, total, sum_total });
+  } catch (e) {
+    console.error('[GET /api/returns/logs] erro:', e);
+    res.status(500).json({ error: 'Falha ao carregar logs', detail: e.message });
   }
 });
 
