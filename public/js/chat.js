@@ -266,7 +266,7 @@
     box.innerHTML = '';
     const list = state.cliente || [];
     if (!state.packId) {
-      box.innerHTML = `<div class="empty-text-centered">Chat do cliente: tentando resolver o pack automaticamente. Se preferir, abra com <code>?pack=ID</code>.</div>`;
+      box.innerHTML = `<div class="empty-text-centered">Nenhum chat de cliente selecionado.</div>`;
       return;
     }
     if (!list.length) {
@@ -290,8 +290,6 @@
       box.innerHTML = `
         <div class="empty-text-centered">
           Nenhuma mediação selecionada.<br>
-          Dica: abra com <code>?claim=ID</code> ou <code>?claims=ID1,ID2</code>,<br>
-          ou aguarde a coluna esquerda listar mediações recentes automaticamente.
         </div>`;
       return;
     }
