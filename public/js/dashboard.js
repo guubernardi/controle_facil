@@ -1,9 +1,10 @@
+// public/js/dashboard.js
 /*
-  dashboard.js — usa Chart.js para renderizar gráficos interativos.
-  - inicializa 4 charts (dia, mês, 6 meses, status)
-  - busca /api/dashboard?from=...&to=...&limitTop=...
-  - atualiza resumos e ranking
-  - rótulos claros: "Abertas" e "Autorizadas p/ postagem"
+  dashboard.js — Dashboard enxuto (KPIs + Ranking por padrão) + gráficos on-demand (lazy-load Chart.js)
+  - Tenta primeiro GET /api/dashboard/summary?from=YYYY-MM-DD&to=YYYY-MM-DD
+  - Se não houver, tenta /api/dashboard; se falhar, compila a partir de /api/returns ou usa mock
+  - Ranking sempre renderizado. Gráficos só quando o usuário clicar em "Mostrar gráficos".
+  - Rótulos claros: "Abertas" e "Autorizadas p/ postagem"
 */
 
 let chartDay = null;
@@ -11,6 +12,29 @@ let chartMes = null;
 let chart6Mes = null;
 let chartStatus = null;
 let currentFetch = null; // AbortController
+let chartsEnabled = false; // toggle do usuário
+let lastChartsData = null; // cache para re-render imediato após habilitar gráficos
+
+/* ------------------------------
+   Lazy-load Chart.js + helpers
+--------------------------------*/
+function loadChartJsOnce() {
+  return new Promise((resolve, reject) => {
+    if (window.Chart) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4';
+    s.onload = () => resolve();
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+function destroyChartsIfAny() {
+  try { chartDay?.destroy();   chartDay   = null; } catch {}
+  try { chartMes?.destroy();   chartMes   = null; } catch {}
+  try { chart6Mes?.destroy();  chart6Mes  = null; } catch {}
+  try { chartStatus?.destroy();chartStatus = null; } catch {}
+}
 
 /* ------------------------------
    Utils
@@ -100,9 +124,11 @@ function baseBarOptions() {
 }
 
 /* ------------------------------
-   Inicialização dos gráficos
+   Inicialização dos gráficos (chamada APENAS quando Chart.js estiver carregado)
 --------------------------------*/
 function initCharts() {
+  if (!window.Chart) return; // segurança
+
   const accent      = getCssVar('--accent', '#ff7a00');       // ABERTAS
   const destructive = getCssVar('--destructive', '#e11d48');  // REJEITADAS
   const primary     = getCssVar('--primary', '#0b5fff');      // AUTORIZADAS
@@ -150,7 +176,7 @@ function initCharts() {
     });
   }
 
-  // Mês atual
+  // Mês atual (usamos série diária agrupada)
   if (elMes) {
     const ctx = elMes.getContext('2d');
     chartMes = new Chart(ctx, {
@@ -265,7 +291,9 @@ function initCharts() {
    Atualiza os gráficos com dados
 --------------------------------*/
 function updateCharts(data) {
-  // 30 dias
+  lastChartsData = data || null;
+
+  // 30 dias (usa série diária já normalizada)
   if (chartDay) {
     const pontos = (data.daily || []).slice(-30);
     const labels = pontos.map(d => d.date || d.day || d.label || '');
@@ -275,7 +303,7 @@ function updateCharts(data) {
     chartDay.update();
   }
 
-  // mês (usa série diária do período aplicado)
+  // mês (agrupa série diária do período aplicado)
   if (chartMes) {
     const series = data.daily || [];
     const grouped = {};
@@ -358,11 +386,10 @@ function preencherRanking(items) {
     // aceita diversas chaves, mas PRIORIZA SKU
     const skuTxt = String(
       it.sku || it.codigo_sku || it.seller_sku || it.title || it.nome || it.item || '—'
-    );
+    ).toUpperCase();
     const sku = escapeHtml(skuTxt);
     const qtd = Number(it.devolucoes || 0);
     const preju = Number(it.prejuizo || 0);
-    // aceita motivo_comum vindo do builder local
     const motivo = escapeHtml(String(it.motivo || it.motivo_comum || it.tipo_reclamacao || '—'));
     const prejuFmt = currencyBR(preju);
 
@@ -416,7 +443,7 @@ function preencherRanking(items) {
 }
 
 /* ------------------------------
-   Resumo do período
+   Resumo do período (cards da lateral)
 --------------------------------*/
 function preencherResumo(totals = {}) {
   const el = document.getElementById('resumo-periodo');
@@ -433,6 +460,55 @@ function preencherResumo(totals = {}) {
 }
 
 /* ------------------------------
+   Normalizações de payload
+--------------------------------*/
+function normalizeFromSummaryApi(j) {
+  // j: { range, cards, series:{labels,abertas,autorizadas,rejeitadas,prejuizo?}, top_items }
+  const cards = j?.cards || {};
+  const series = j?.series || {};
+  const labels = Array.isArray(series.labels) ? series.labels : [];
+  const preju = Array.isArray(series.prejuizo) ? series.prejuizo : labels.map(_ => 0);
+
+  // daily para gráficos de prejuízo
+  const daily = labels.map((lbl, i) => ({ date: lbl, prejuizo: Number(preju[i] || 0) }));
+
+  // monthly (agrupa daily por YYYY-MM)
+  const monthlyMap = {};
+  for (const d of daily) {
+    const ym = String(d.date || '').slice(0, 7);
+    if (!ym) continue;
+    monthlyMap[ym] = (monthlyMap[ym] || 0) + Number(d.prejuizo || 0);
+  }
+  const monthly = Object.keys(monthlyMap).sort().map(ym => ({ month: ym, prejuizo: monthlyMap[ym] }));
+
+  // status para pizza
+  const sum = (arr) => (Array.isArray(arr) ? arr.reduce((a,b)=>a+Number(b||0),0) : 0);
+  const status = {
+    pendente:  sum(series.abertas),
+    aprovado:  sum(series.autorizadas),
+    rejeitado: sum(series.rejeitadas)
+  };
+
+  // top items -> formato da lista
+  const top_items = (j.top_items || []).map(t => ({
+    sku: String(t.sku || '—').toUpperCase(),
+    devolucoes: Number(t.qtd || 0),
+    prejuizo: Number(t.custo_acumulado || 0),
+    motivo_comum: t.motivo_mais_comum || '—'
+  }));
+
+  const totals = {
+    total: Number(cards.devolucoes || 0),
+    pendentes: Number(cards.abertas || 0),
+    aprovadas: Number(cards.autorizadas || 0),
+    rejeitadas: Number(cards.rejeitadas || 0),
+    prejuizo_total: Number(cards.prejuizo_total || 0)
+  };
+
+  return { daily, monthly, status, top_items, totals };
+}
+
+/* ------------------------------
    Carregamento / API
 --------------------------------*/
 async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) {
@@ -445,52 +521,87 @@ async function carregarDashboard({ from = null, to = null, limitTop = 5 } = {}) 
   if (to)   params.set('to', to);
   params.set('limitTop', String(limitTop));
 
-  let data = null;
+  let dataNorm = null;
+
+  // 1) Tenta /api/dashboard/summary
   try {
-    const r = await fetch(`/api/dashboard?${params.toString()}`, { signal: currentFetch.signal });
-    if (r.ok) {
-      data = await r.json();
-    } else {
-      // se /api/dashboard não existir, caímos para montar a partir de /api/returns
-      console.warn('/api/dashboard retornou', r.status, '— tentando compilar dados a partir de /api/returns');
-      data = await buildDashboardFromReturns({ from, to, limitTop });
+    const r1 = await fetch(`/api/dashboard/summary?${params.toString()}`, { signal: currentFetch.signal, credentials: 'include' });
+    if (r1.ok) {
+      const j = await r1.json();
+      dataNorm = normalizeFromSummaryApi(j);
     }
   } catch (e) {
-    if (e.name === 'AbortError') return; // requisição abortada
-    console.warn('Erro ao buscar /api/dashboard, tentando /api/returns:', e);
+    if (e.name !== 'AbortError') console.warn('summary API falhou:', e);
+  }
+
+  // 2) Se não houver, tenta /api/dashboard (compat direto)
+  if (!dataNorm) {
     try {
-      data = await buildDashboardFromReturns({ from, to, limitTop });
-    } catch (ee) {
-      console.error('Falha ao compilar dashboard a partir de /api/returns:', ee);
-      data = mockDashboardData();
+      const r2 = await fetch(`/api/dashboard?${params.toString()}`, { signal: currentFetch.signal, credentials: 'include' });
+      if (r2.ok) {
+        const j = await r2.json();
+        // j pode já estar no formato {daily, monthly, status, top_items, totals}
+        dataNorm = {
+          daily:   j.daily   || j.by_day    || [],
+          monthly: j.monthly || j.by_month  || [],
+          status:  j.status  || {},
+          top_items: j.top_items || j.ranking || [],
+          totals:  j.totals  || j.summary   || {}
+        };
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') console.warn('dashboard API falhou:', e);
     }
   }
 
-  // KPIs
-  document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = data.totals?.total ?? 0);
-  document.getElementById('dash-pend')  && (document.getElementById('dash-pend').textContent  = data.totals?.pendentes ?? 0);
-  document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = data.totals?.aprovadas ?? 0);
-  document.getElementById('dash-rej')   && (document.getElementById('dash-rej').textContent   = data.totals?.rejeitadas ?? 0);
+  // 3) Se ainda não deu, compila a partir de /api/returns
+  if (!dataNorm) {
+    try {
+      dataNorm = await buildDashboardFromReturns({ from, to, limitTop });
+    } catch (ee) {
+      console.error('Falha ao compilar dashboard a partir de /api/returns:', ee);
+      dataNorm = mockDashboardData();
+    }
+  }
 
-  // compatibiliza chaves (API custom ou construída localmente)
-  const topItems = data.top_items || data.ranking || data.top_items_local || [];
-  const totals = data.totals || data.summary || data.totals_local || {};
-  const chartsData = {
-    daily: data.daily || data.by_day || data.daily_local || [],
-    monthly: data.monthly || data.by_month || data.monthly_local || [],
-    status: data.status || data.status_local || {},
+  // KPIs superiores (cards grandes)
+  document.getElementById('dash-total') && (document.getElementById('dash-total').textContent = dataNorm.totals?.total ?? 0);
+  document.getElementById('dash-pend')  && (document.getElementById('dash-pend').textContent  = dataNorm.totals?.pendentes ?? 0);
+  document.getElementById('dash-aprov') && (document.getElementById('dash-aprov').textContent = dataNorm.totals?.aprovadas ?? 0);
+  document.getElementById('dash-rej')   && (document.getElementById('dash-rej').textContent   = dataNorm.totals?.rejeitadas ?? 0);
+
+  preencherRanking(dataNorm.top_items || []);
+  preencherResumo(dataNorm.totals || {});
+
+  // Atualiza dados dos gráficos (mesmo que estejam ocultos; fica cacheado)
+  // Também gera monthly a partir de daily se não existir
+  if (!dataNorm.monthly || !dataNorm.monthly.length) {
+    const monthlyMap = {};
+    (dataNorm.daily || []).forEach(d => {
+      const ym = String(d.date || d.day || '').slice(0,7);
+      if (!ym) return;
+      monthlyMap[ym] = (monthlyMap[ym] || 0) + Number(d.prejuizo || 0);
+    });
+    dataNorm.monthly = Object.keys(monthlyMap).sort().map(ym => ({ month: ym, prejuizo: monthlyMap[ym] }));
+  }
+
+  lastChartsData = {
+    daily: dataNorm.daily || [],
+    monthly: dataNorm.monthly || [],
+    status: dataNorm.status || {}
   };
 
-  preencherRanking(topItems);
-  preencherResumo(totals);
-  updateCharts(chartsData);
+  if (chartsEnabled && window.Chart) {
+    updateCharts(lastChartsData);
+  }
+
+  return dataNorm; // útil se alguém quiser encadear
 }
 
 /* ------------------------------
-   Constroi dados do dashboard a partir de /api/returns
+   Construção via /api/returns (fallback)
 --------------------------------*/
 async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 } = {}) {
-  // pede itens (tamanho grande para o período)
   const params = new URLSearchParams();
   if (from) params.set('from', from);
   if (to) params.set('to', to);
@@ -498,12 +609,11 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
   params.set('page', '1');
 
   const url = `/api/returns/search?${params.toString()}`;
-  const r = await fetch(url);
+  const r = await fetch(url, { credentials: 'include' });
   if (!r.ok) throw new Error('Falha ao buscar devoluções: ' + r.status);
   const j = await r.json();
   const items = Array.isArray(j.items) ? j.items : (j.items || []);
 
-  // helper: regra de prejuízo — replica calcTotalByRules do front de devolucao-editar
   function calcPrejuizoFor(it) {
     const st = String(it.status || '').toLowerCase();
     const mot = String(it.tipo_reclamacao || it.motivo || it.reclamacao || '').toLowerCase();
@@ -516,7 +626,6 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     return vp + vf;
   }
 
-  // helper: seletor de SKU (prioriza campos de produto; NÃO cai no número do pedido)
   const parseMaybeJson = (x) => {
     if (!x) return null;
     if (typeof x === 'object') return x;
@@ -550,12 +659,10 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
       meta.sku, meta.seller_sku, meta.item?.seller_sku,
       dados.sku, dados.seller_sku,
       info.sku,  info.seller_sku,
-      // nenhum fallback para id de venda/listing aqui (evita mostrar número do pedido)
       null
     ) || '—';
   }
 
-  // totals e agrupamentos
   const totals = { total: 0, pendentes: 0, aprovadas: 0, rejeitadas: 0, prejuizo_total: 0 };
   const dailyMap = {};   // YYYY-MM-DD -> sum prejuizo
   const monthlyMap = {}; // YYYY-MM -> sum
@@ -572,7 +679,6 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     const preju = calcPrejuizoFor(it);
     totals.prejuizo_total += preju;
 
-    // data (criado em)
     const created = it.created_at || it.data_compra || it.created || null;
     let day = null;
     try { if (created) day = new Date(created).toISOString().slice(0,10); } catch(_) { day = null; }
@@ -583,11 +689,9 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
       monthlyMap[ym] = (monthlyMap[ym] || 0) + preju;
     }
 
-    // status
     const keyStatus = String(it.status || it.log_status || 'outros').toLowerCase();
     statusMap[keyStatus] = (statusMap[keyStatus] || 0) + 1;
 
-    // sku ranking (PRIORIDADE SKU)
     const sku = pickSku(it);
     const motivo = String(it.tipo_reclamacao || it.motivo || it.reclamacao || '—');
     const s = skuMap[sku] || { sku, devolucoes: 0, prejuizo: 0, motivos: {} };
@@ -597,14 +701,12 @@ async function buildDashboardFromReturns({ from = null, to = null, limitTop = 5 
     skuMap[sku] = s;
   }
 
-  // monta arrays
   const daily = Object.keys(dailyMap).sort().map(k => ({ date: k, prejuizo: dailyMap[k] }));
   const monthly = Object.keys(monthlyMap).sort().map(k => ({ month: k, prejuizo: monthlyMap[k] }));
 
-  // top items by devolucoes
   const top_items = Object.values(skuMap)
     .map(s => ({
-      sku: s.sku,
+      sku: String(s.sku || '—').toUpperCase(),
       devolucoes: s.devolucoes,
       prejuizo: s.prejuizo,
       motivo_comum: Object.entries(s.motivos).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—'
@@ -629,7 +731,7 @@ function mockDashboardData() {
   });
   const monthly = Array.from({ length: 6 }).map((_, i) => {
     const dt = new Date(today.getFullYear(), today.getMonth() - 5 + i, 1);
-    return { month: dt.toLocaleString('pt-BR', { month: 'short', year: 'numeric' }), prejuizo: Math.round(Math.random() * 8000) };
+    return { month: dt.toISOString().slice(0,7), prejuizo: Math.round(Math.random() * 8000) };
   });
   const status = { pendente: 12, aprovado: 34, rejeitado: 7 };
   const top_items = Array.from({ length: 5 }).map((_, i) => ({
@@ -651,8 +753,6 @@ function mockDashboardData() {
    Boot
 --------------------------------*/
 document.addEventListener('DOMContentLoaded', () => {
-  initCharts();
-
   // filtros: padrão mês atual
   const hoje = new Date();
   const from = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10);
@@ -687,9 +787,34 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-graf-mes')?.addEventListener('click', () => showOnly('chart-prejuizo-mes'));
   document.getElementById('btn-graf-6mes')?.addEventListener('click', () => showOnly('chart-prejuizo-6mes'));
   document.getElementById('btn-graf-status')?.addEventListener('click', () => showOnly('chart-status'));
-  showOnly('chart-prejuizo-dia'); // padrão
+  showOnly('chart-prejuizo-dia'); // padrão quando visível
 
-  // carregar dados iniciais
+  // Toggle "Mostrar gráficos" (Opção A)
+  const btnToggle = document.getElementById('toggle-charts');
+  const chartCard = document.getElementById('chart-card');
+
+  async function enableChartsFlow() {
+    await loadChartJsOnce();
+    if (!chartDay && typeof initCharts === 'function') initCharts();
+    if (lastChartsData) updateCharts(lastChartsData);
+  }
+
+  btnToggle?.addEventListener('click', async () => {
+    chartsEnabled = !chartsEnabled;
+    btnToggle.textContent = chartsEnabled ? 'Esconder gráficos' : 'Mostrar gráficos';
+    btnToggle.setAttribute('aria-pressed', chartsEnabled ? 'true' : 'false');
+
+    if (chartsEnabled) {
+      chartCard.hidden = false;
+      showOnly('chart-prejuizo-dia');
+      await enableChartsFlow();
+    } else {
+      chartCard.hidden = true;
+      destroyChartsIfAny();
+    }
+  });
+
+  // carregar dados iniciais (KPIs + Ranking)
   carregarDashboard({ from, to }).catch(console.error);
 
   // aplicar filtros

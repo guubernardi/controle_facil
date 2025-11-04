@@ -1,3 +1,4 @@
+<!-- public/dashboard.html -->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -12,15 +13,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="css/navigation.css">
   <link rel="shortcut icon" href="assets/img/favicon.png" type="image/x-icon">
+
+  <!-- Navegação/Layout -->
   <script src="js/navigation.js"></script>
 
-  <!-- Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <!-- IMPORTANTE (Opção A): NÃO carregar Chart.js aqui. 
+       O dashboard.js vai fazer lazy-load quando o usuário clicar no toggle. -->
 </head>
 <body class="dashboard-page">
 
 <div class="app-shell">
-  <!-- SIDEBAR (idêntico ao home, com 'Dashboards & Relatórios' ativo) -->
+  <!-- SIDEBAR -->
   <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
     <div class="sidebar-header">
       <a href="home.html" class="sidebar-logo" aria-label="Controle Fácil">
@@ -138,6 +141,11 @@
           Aplicar
         </button>
 
+        <!-- Toggle para gráficos (Opção A) -->
+        <button id="toggle-charts" class="botao-principal" type="button" aria-pressed="false">
+          Mostrar gráficos
+        </button>
+
         <a id="link-log" class="btn-link" href="/logs.html">
           Ver linha do tempo do período
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 18l6-6-6-6"/></svg>
@@ -182,7 +190,8 @@
 
     <!-- GRÁFICOS + RESUMO -->
     <section class="dashboard-main-grid">
-      <article class="dashboard-card chart-card">
+      <!-- Opção A: começa oculto e com id para o JS controlar -->
+      <article id="chart-card" class="dashboard-card chart-card" hidden>
         <div class="dashboard-card-header">
           <div>
             <h3 class="dashboard-card-title">Gráficos</h3>
@@ -246,7 +255,6 @@
         toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       });
     }
-    // garante highlight correto
     var cur = document.querySelector('.sidebar-nav [data-page="dashboards"]');
     if (cur){
       document.querySelectorAll('.sidebar-nav .sidebar-nav-item').forEach(function(a){ a.classList.remove('active'); a.removeAttribute('aria-current'); });
@@ -255,7 +263,7 @@
   })();
 </script>
 
-<!-- JS do dashboard -->
+<!-- JS do dashboard (fará lazy-load de Chart.js ao clicar em "Mostrar gráficos") -->
 <script defer src="/js/dashboard.js"></script>
 </body>
 </html>

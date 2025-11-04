@@ -5,6 +5,7 @@ const express = require('express');
 const dayjs   = require('dayjs');
 const router  = express.Router();
 const { query } = require('../db');
+const { ensureRole } = require('../middleware/auth'); // exige 'admin' ou 'gestor' para /api/dashboard/*
 
 // Usa o pool da request (quando existir) ou o global
 const qOf = (req) => req.q || query;
@@ -40,7 +41,6 @@ function buildStatusCase(colName = 'status') {
 }
 
 // Constrói expressão SQL para pegar **SKU** (nunca id de pedido)
-// Usa COALESCE de várias colunas textuais e, quando existirem, campos JSON.
 function buildSkuExpr(cols) {
   const parts = [];
 
@@ -71,7 +71,6 @@ function buildSkuExpr(cols) {
     }
   });
 
-  // Se nada existir, cai no '—'
   if (!parts.length) return `'—'`;
 
   // Limpa strings "null" e "undefined"
@@ -104,10 +103,145 @@ function buildMotivoExpr(cols) {
 
 router.get('/ping', (_req, res) => res.json({ ok: true }));
 
-// =======================
-// GET /api/dashboard
-// =======================
-router.get('/', async (req, res) => {
+// =====================================================================
+// GET /api/dashboard/summary  (RBAC: admin|gestor)
+// Estrutura:
+// {
+//   range: { from,to },
+//   cards: { devolucoes, abertas, autorizadas, rejeitadas, prejuizo_total },
+//   series: { labels: [...YYYY-MM-DD], abertas:[], autorizadas:[], rejeitadas:[], prejuizo:[] },
+//   top_items: [ { sku, qtd, motivo_mais_comum, custo_acumulado } ]
+// }
+// - Séries diárias contínuas (zeros onde não houver dados)
+// - SKU do ranking em UPPER
+// =====================================================================
+router.get('/summary', ensureRole('admin', 'gestor'), async (req, res) => {
+  try {
+    const q = qOf(req);
+
+    // Período (default: mês atual)
+    const today = dayjs();
+    const defFrom = today.startOf('month').format('YYYY-MM-DD');
+    const defTo   = today.add(1, 'month').startOf('month').format('YYYY-MM-DD');
+
+    const dfrom = parseDate(req.query.from) || defFrom;
+    const dto   = parseDate(req.query.to)   || defTo;
+
+    let limitTop = Math.min(20, Math.max(1, parseInt(req.query.limitTop || '10', 10) || 10));
+
+    // Colunas da tabela devolucoes
+    const cols = await columnsOf(q, 'devolucoes');
+
+    // Coluna de data preferida
+    const dateCol =
+      (cols.has('created_at') && 'created_at') ||
+      (cols.has('data_compra') && 'data_compra') ||
+      (cols.has('data')       && 'data')       ||
+      (cols.has('dt')         && 'dt')         ||
+      'created_at';
+
+    // Coluna de status
+    const statusCol = cols.has('status') ? 'status' : (cols.has('log_status') ? 'log_status' : 'status');
+    const statusCase = buildStatusCase(`r.${statusCol}`);
+
+    // Coluna de prejuízo (opcional)
+    const prejuCol = cols.has('prejuizo_aplicado') ? 'prejuizo_aplicado'
+                    : (cols.has('custo_total') ? 'custo_total' : null);
+
+    // --------- Séries diárias contínuas (generate_series + LEFT JOIN) ----------
+    const dailySql = `
+      WITH dates AS (
+        SELECT gs::date AS day
+        FROM generate_series($1::date, ($2::date - INTERVAL '1 day'), INTERVAL '1 day') gs
+      )
+      SELECT
+        d.day::date AS day,
+        -- contagens por categoria (conta só quando existe linha na esquerda)
+        SUM(CASE WHEN ${statusCase} = 'pendente'  AND r.${dateCol} IS NOT NULL THEN 1 ELSE 0 END)::int   AS abertas,
+        SUM(CASE WHEN ${statusCase} = 'aprovado'  AND r.${dateCol} IS NOT NULL THEN 1 ELSE 0 END)::int   AS autorizadas,
+        SUM(CASE WHEN ${statusCase} = 'rejeitado' AND r.${dateCol} IS NOT NULL THEN 1 ELSE 0 END)::int   AS rejeitadas
+        ${prejuCol ? `, SUM(CASE WHEN r.${dateCol} IS NOT NULL THEN COALESCE(r.${prejuCol},0) ELSE 0 END)::numeric AS prejuizo` 
+                   : `, 0::numeric AS prejuizo`}
+      FROM dates d
+      LEFT JOIN devolucoes r
+        ON r.${dateCol}::date = d.day::date
+      GROUP BY 1
+      ORDER BY 1;
+    `;
+    const dailyRows = (await q(dailySql, [dfrom, dto])).rows || [];
+
+    const labels      = dailyRows.map(r => dayjs(r.day).format('YYYY-MM-DD'));
+    const abertas     = dailyRows.map(r => Number(r.abertas || 0));
+    const autorizadas = dailyRows.map(r => Number(r.autorizadas || 0));
+    const rejeitadas  = dailyRows.map(r => Number(r.rejeitadas || 0));
+    const prejuizo    = dailyRows.map(r => Number(r.prejuizo || 0));
+
+    // --------- Cards (totais no período) ----------
+    const totalsSql = `
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE ${buildStatusCase(statusCol)}='pendente')::int   AS pendentes,
+        COUNT(*) FILTER (WHERE ${buildStatusCase(statusCol)}='aprovado')::int   AS aprovadas,
+        COUNT(*) FILTER (WHERE ${buildStatusCase(statusCol)}='rejeitado')::int  AS rejeitadas
+        ${prejuCol ? `, COALESCE(SUM(${prejuCol}),0)::numeric AS prej` : `, 0::numeric AS prej`}
+      FROM devolucoes
+      WHERE ${dateCol}::date >= $1 AND ${dateCol}::date < $2
+    `;
+    const totalsRow = (await q(totalsSql, [dfrom, dto])).rows[0] || {};
+    const cards = {
+      devolucoes: totalsRow.total || 0,
+      abertas: totalsRow.pendentes || 0,
+      autorizadas: totalsRow.aprovadas || 0,
+      rejeitadas: totalsRow.rejeitadas || 0,
+      prejuizo_total: Number(totalsRow.prej || 0)
+    };
+
+    // --------- Top itens (SKU UPPER + motivo mais comum + custo acumulado) ----------
+    const skuExpr = buildSkuExpr(cols);
+    const motivoExpr = buildMotivoExpr(cols);
+
+    let top_items = [];
+    if (skuExpr !== `'—'`) {
+      const topSql = `
+        SELECT
+          UPPER(${skuExpr}) AS sku,
+          COUNT(*)::int AS qtd,
+          MODE() WITHIN GROUP (ORDER BY ${motivoExpr}) AS motivo_mais_comum
+          ${prejuCol ? `, COALESCE(SUM(${prejuCol}),0)::numeric AS custo_acumulado` : `, 0::numeric AS custo_acumulado`}
+        FROM devolucoes
+        WHERE ${dateCol}::date >= $1 AND ${dateCol}::date < $2
+          AND ${skuExpr} IS NOT NULL AND ${skuExpr} <> '—'
+        GROUP BY 1
+        ORDER BY qtd DESC, sku ASC
+        LIMIT ${limitTop}
+      `;
+      top_items = (await q(topSql, [dfrom, dto])).rows || [];
+    }
+
+    res.json({
+      range: { from: dfrom, to: dto },
+      cards,
+      series: {
+        labels,
+        abertas,
+        autorizadas,
+        rejeitadas,
+        prejuizo
+      },
+      top_items
+    });
+  } catch (e) {
+    console.error('[dashboard/summary] fail', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// =====================================================================
+// GET /api/dashboard  (RBAC: admin|gestor)
+// Mantido por compatibilidade com front antigo:
+// retorna { period, totals, daily, monthly, status, top_items }
+// =====================================================================
+router.get('/', ensureRole('admin', 'gestor'), async (req, res) => {
   try {
     const q = qOf(req);
 
@@ -121,10 +255,8 @@ router.get('/', async (req, res) => {
 
     let limitTop = Math.min(20, Math.max(1, parseInt(req.query.limitTop || '5', 10) || 5));
 
-    // Checa colunas da tabela
     const cols = await columnsOf(q, 'devolucoes');
 
-    // Coluna de data preferida
     const dateCol =
       (cols.has('created_at') && 'created_at') ||
       (cols.has('data_compra') && 'data_compra') ||
@@ -132,11 +264,9 @@ router.get('/', async (req, res) => {
       (cols.has('dt')         && 'dt')         ||
       'created_at';
 
-    // Nome da coluna de status (fallback: status)
     const statusCol = cols.has('status') ? 'status' : (cols.has('log_status') ? 'log_status' : 'status');
     const statusCase = buildStatusCase(statusCol);
 
-    // Coluna de prejuízo (opcional)
     const prejuCol = cols.has('prejuizo_aplicado') ? 'prejuizo_aplicado'
                     : (cols.has('custo_total') ? 'custo_total' : null);
 
@@ -160,7 +290,7 @@ router.get('/', async (req, res) => {
       prejuizo_total: Number(totalsRow.prej || 0)
     };
 
-    // ---------- daily ----------
+    // ---------- daily (pode haver buracos; front preenche se quiser) ----------
     const dailySql = `
       SELECT
         to_char(${dateCol}::date,'YYYY-MM-DD') AS d
@@ -205,12 +335,11 @@ router.get('/', async (req, res) => {
     const skuExpr = buildSkuExpr(cols);
     const motivoExpr = buildMotivoExpr(cols);
 
-    // Se não houver nenhuma forma de SKU, devolve vazio
     let top_items = [];
     if (skuExpr !== `'—'`) {
       const topSql = `
         SELECT
-          ${skuExpr} AS sku,
+          UPPER(${skuExpr}) AS sku,
           COUNT(*)::int AS devolucoes,
           MODE() WITHIN GROUP (ORDER BY ${motivoExpr}) AS motivo_comum
           ${prejuCol ? `, COALESCE(SUM(${prejuCol}),0)::numeric AS prejuizo` : `, 0::numeric AS prejuizo`}
