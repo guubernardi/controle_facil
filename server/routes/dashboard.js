@@ -2,117 +2,149 @@
 'use strict';
 
 const express = require('express');
-const router  = express.Router();
+const dayjs = require('dayjs');
+const router = express.Router();
 const { query } = require('../db');
 
-// Mesma regra usada nos logs: custo aplicado por devolução
-const COST_EXPR = `
-  CASE
-    WHEN lower(coalesce(status,'')) ~ 'rej|neg' THEN 0
-    WHEN lower(coalesce(tipo_reclamacao, reclamacao, '')) LIKE 'cliente%' THEN 0
-    WHEN lower(coalesce(log_status,'')) IN ('recebido_cd','em_inspecao') THEN coalesce(valor_frete,0)
-    ELSE coalesce(valor_produto,0) + coalesce(valor_frete,0)
-  END
-`;
+// Usa o pool da request (quando existir) ou o global
+const qOf = (req) => req.q || query;
 
-router.get('/', async (req, res) => {
+function parseDate(s) {
+  if (!s) return null;
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/); // YYYY-MM-DD
+  if (!m) return null;
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+  return Number.isNaN(+d) ? null : `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+async function columnsOf(q, table) {
+  const { rows } = await q(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  return new Set(rows.map(r => r.column_name));
+}
+
+router.get('/ping', (_req, res) => res.json({ ok: true }));
+
+router.get('/summary', async (req, res) => {
   try {
-    const { from, to } = req.query;
-    const limitTop = Math.max(1, Math.min(parseInt(req.query.limitTop || '10', 10), 50));
+    const q = qOf(req);
 
-    const params = [];
-    const where = ['deleted_at IS NULL'];
-    if (from) { params.push(from); where.push(`data_compra >= $${params.length}::date`); }
-    if (to)   { params.push(to);   where.push(`data_compra <  ($${params.length}::date + interval '1 day')`); }
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    // Período (default: últimos 30 dias)
+    const today = dayjs().format('YYYY-MM-DD');
+    const dfrom = parseDate(req.query.from) || dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+    const dto   = parseDate(req.query.to)   || today;
 
-    // Totais do período
-    const sqlTotals = `
+    // Descobre colunas disponíveis de 'devolucoes'
+    const cols = await columnsOf(q, 'devolucoes');
+
+    // Coluna de data preferida
+    const dateCol =
+      (cols.has('created_at') && 'created_at') ||
+      (cols.has('data')       && 'data')       ||
+      (cols.has('dt')         && 'dt')         ||
+      'created_at';
+
+    // Expressão de categoria de status
+    const statusCat = `
+      CASE
+        WHEN LOWER(COALESCE(status,'')) IN ('rejeitado','rejeitada','negado','negada') THEN 'rejeitado'
+        WHEN LOWER(COALESCE(status,'')) IN ('autorizado','autorizada','aprovado','aprovada') THEN 'autorizado'
+        WHEN LOWER(COALESCE(status,'')) IN ('concluido','concluida','finalizado','finalizada','fechado','fechada','encerrado','encerrada') THEN 'finalizado'
+        ELSE 'aberto'
+      END
+    `;
+
+    // Contagens
+    const { rows: [counts] } = await q(
+      `
       SELECT
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE lower(status) LIKE 'pend%')::int AS pendentes,
-        COUNT(*) FILTER (WHERE lower(status) LIKE 'autor%' OR lower(status) LIKE 'aprov%')::int AS aprovadas,
-        COUNT(*) FILTER (WHERE lower(status) LIKE 'rej%'  OR lower(status) LIKE 'neg%')::int   AS rejeitadas,
-        COALESCE(SUM(${COST_EXPR}),0)::numeric(12,2) AS prejuizo_total
+        COUNT(*) FILTER (WHERE ${statusCat}='aberto')::int      AS abertas,
+        COUNT(*) FILTER (WHERE ${statusCat}='autorizado')::int  AS autorizadas,
+        COUNT(*) FILTER (WHERE ${statusCat}='rejeitado')::int   AS rejeitadas
       FROM devolucoes
-      ${whereSql}
-    `;
+      WHERE ${dateCol}::date BETWEEN $1 AND $2
+      `,
+      [dfrom, dto]
+    );
 
-    // Séries
-    const sqlDaily = `
-      SELECT to_char(data_compra::date,'YYYY-MM-DD') AS date,
-             COALESCE(SUM(${COST_EXPR}),0)::numeric(12,2) AS prejuizo
-      FROM devolucoes
-      ${whereSql}
-      GROUP BY 1 ORDER BY 1
-    `;
-    const sqlMonthly = `
-      SELECT to_char(date_trunc('month', data_compra),'YYYY-MM') AS ym,
-             COALESCE(SUM(${COST_EXPR}),0)::numeric(12,2) AS prejuizo
-      FROM devolucoes
-      ${whereSql}
-      GROUP BY 1 ORDER BY 1
-    `;
-    const sqlStatus = `
+    // Prejuízo total (se existir coluna)
+    let prejuizoTotal = 0;
+    if (cols.has('prejuizo_aplicado')) {
+      const { rows: [r] } = await q(
+        `SELECT COALESCE(SUM(prejuizo_aplicado),0)::numeric AS n
+           FROM devolucoes
+          WHERE ${dateCol}::date BETWEEN $1 AND $2`,
+        [dfrom, dto]
+      );
+      prejuizoTotal = Number(r?.n || 0);
+    }
+
+    // Série diária (contagens + prejuízo se existir)
+    const serieSql = `
       SELECT
-        CASE
-          WHEN lower(status) LIKE 'pend%' THEN 'pendente'
-          WHEN lower(status) LIKE 'autor%' OR lower(status) LIKE 'aprov%' THEN 'aprovado'
-          WHEN lower(status) LIKE 'rej%'   OR lower(status) LIKE 'neg%'   THEN 'rejeitado'
-          ELSE 'outros'
-        END AS k,
-        COUNT(*)::int AS n
+        to_char(${dateCol}::date,'YYYY-MM-DD') AS d,
+        COUNT(*) FILTER (WHERE ${statusCat}='aberto')::int     AS abertas,
+        COUNT(*) FILTER (WHERE ${statusCat}='autorizado')::int AS autorizadas,
+        COUNT(*) FILTER (WHERE ${statusCat}='rejeitado')::int  AS rejeitadas
+        ${cols.has('prejuizo_aplicado') ? ', COALESCE(SUM(prejuizo_aplicado),0)::numeric AS prejuizo' : ''}
       FROM devolucoes
-      ${whereSql}
+      WHERE ${dateCol}::date BETWEEN $1 AND $2
       GROUP BY 1
+      ORDER BY 1
     `;
+    const series = (await q(serieSql, [dfrom, dto])).rows.map(r => ({
+      date: r.d,
+      abertas: r.abertas,
+      autorizadas: r.autorizadas,
+      rejeitadas: r.rejeitadas,
+      prejuizo: Number(r.prejuizo || 0)
+    }));
 
-    // Top itens (SKU)
-    const sqlTop = `
-      SELECT
-        sku,
-        COUNT(*)::int AS count,
-        mode() within group (
-          ORDER BY coalesce(nullif(trim(tipo_reclamacao),''), nullif(trim(reclamacao),''), '—')
-        ) AS motivo,
-        COALESCE(SUM(${COST_EXPR}),0)::numeric(12,2) AS custo
-      FROM devolucoes
-      ${whereSql} AND sku IS NOT NULL AND trim(sku) <> ''
-      GROUP BY sku
-      ORDER BY count DESC, custo DESC
-      LIMIT $${params.length + 1}
-    `;
-
-    const [tQ, dQ, mQ, sQ, topQ] = await Promise.all([
-      query(sqlTotals,  params),
-      query(sqlDaily,   params),
-      query(sqlMonthly, params),
-      query(sqlStatus,  params),
-      query(sqlTop,   [...params, limitTop]),
-    ]);
-
-    const totalsRow = tQ.rows[0] || {};
-    const statusMap = { pendente: 0, aprovado: 0, rejeitado: 0 };
-    for (const r of sQ.rows) if (r.k in statusMap) statusMap[r.k] = r.n;
+    // Top itens (se existir alguma coluna de item/sku)
+    let top_items = [];
+    const itemCol = (cols.has('sku') && 'sku') || (cols.has('item_id') && 'item_id') || null;
+    if (itemCol) {
+      const motivoCol = (cols.has('motivo') && 'motivo') || (cols.has('motivo_cliente') && 'motivo_cliente') || null;
+      const custoCol  = cols.has('prejuizo_aplicado') ? 'prejuizo_aplicado' : null;
+      const sql = `
+        SELECT
+          ${itemCol} AS item,
+          COUNT(*)::int AS qtd
+          ${motivoCol ? `, MODE() WITHIN GROUP (ORDER BY ${motivoCol}) AS motivo` : ''}
+          ${custoCol  ? `, COALESCE(SUM(${custoCol}),0)::numeric AS custo` : ''}
+        FROM devolucoes
+        WHERE ${dateCol}::date BETWEEN $1 AND $2
+        GROUP BY ${itemCol}
+        ORDER BY COUNT(*) DESC
+        LIMIT 10
+      `;
+      top_items = (await q(sql, [dfrom, dto])).rows.map(r => ({
+        item: r.item,
+        qtd: r.qtd,
+        motivo: r.motivo || null,
+        custo: Number(r.custo || 0)
+      }));
+    }
 
     res.json({
+      period: { from: dfrom, to: dto },
       totals: {
-        total:      totalsRow.total ?? 0,
-        pendentes:  totalsRow.pendentes ?? 0,
-        aprovadas:  totalsRow.aprovadas ?? 0,
-        rejeitadas: totalsRow.rejeitadas ?? 0,
-        prejuizo:   Number(totalsRow.prejuizo_total || 0),
+        devolucoes: counts?.total || 0,
+        abertas: counts?.abertas || 0,
+        autorizadas: counts?.autorizadas || 0,
+        rejeitadas: counts?.rejeitadas || 0,
+        prejuizo_total: prejuizoTotal
       },
-      daily:   dQ.rows.map(r => ({ date: r.date, prejuizo: Number(r.prejuizo) })),
-      monthly: mQ.rows.map(r => ({ ym: r.ym, prejuizo: Number(r.prejuizo) })),
-      status:  statusMap,
-      top_items: topQ.rows.map(r => ({
-        sku: r.sku, count: r.count, motivo: r.motivo || '—', custo: Number(r.custo || 0)
-      })),
+      series,
+      top_items
     });
   } catch (e) {
-    console.error('GET /api/dashboard erro:', e);
-    res.status(500).json({ error: 'Falha ao montar dashboard' });
+    console.error('[dashboard] fail', e);
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
