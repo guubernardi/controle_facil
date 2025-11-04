@@ -151,7 +151,11 @@ app.use('/api', (req, res, next) => {
   const isOpen = p === '/health' || p === '/db/ping' || orig.startsWith('/api/auth/');
   const jobHeader = req.get('x-job-token');
   const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
-  const isJob = orig.startsWith('/api/ml/claims/import') && jobHeader && jobToken && jobHeader === jobToken;
+  const isJob = (
+    orig.startsWith('/api/ml/claims/import') ||
+    orig.startsWith('/api/ml/refresh')
+  ) && jobHeader && jobToken && jobHeader === jobToken;
+
   if (isOpen || isJob) return next();
   if (req.session?.user) return next();
   return res.status(401).json({ error:'Não autorizado' });
@@ -368,6 +372,7 @@ const host = '0.0.0.0';
 const server = app.listen(port, host, () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`);
   setupMlAutoSync();
+  setupMlAutoRefresh(); // <<< habilita o AutoRefresh de tokens
 });
 
 /* ================== ML AutoSync ================== */
@@ -412,6 +417,133 @@ function setupMlAutoSync() {
   });
 
   console.log(`[BOOT] ML AutoSync ON: intervalo=${intervalMs}ms, janela=${windowDays}d`);
+}
+
+/* ================== ML AutoRefresh de Tokens ================== */
+let _mlRefresh_lastRun = null; // exposto em /api/ml/refresh/last-run
+
+function setupMlAutoRefresh() {
+  const enabled = String(process.env.ML_AUTO_REFRESH_ENABLED ?? 'true').toLowerCase() === 'true';
+  if (!enabled) { console.log('[ML REFRESH] Desabilitado por env'); return; }
+
+  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_REFRESH_INTERVAL_MS || '900000',10) || 900_000); // 15min
+  const aheadSec   = Math.max(60, parseInt(process.env.ML_REFRESH_AHEAD_SEC || '900',10) || 900); // 15min
+  const runOnStart = String(process.env.ML_AUTO_REFRESH_ON_START ?? 'true').toLowerCase() === 'true';
+
+  const tokenUrl   = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
+  const clientId   = process.env.ML_CLIENT_ID || '';
+  const clientSecret = process.env.ML_CLIENT_SECRET || '';
+
+  if (!clientId || !clientSecret) {
+    console.warn('[ML REFRESH] CLIENT_ID/CLIENT_SECRET ausentes; AutoRefresh off.');
+    return;
+  }
+
+  let running = false;
+  const run = async (reason='timer') => {
+    if (running) return; running = true;
+    const t0 = Date.now();
+    const summary = { refreshed:0, skipped:0, errors:0, details:[] };
+
+    try {
+      // Seleciona contas que expiram antes de now()+aheadSec (ou sem expires_at)
+      const sql = `
+        SELECT user_id, nickname, refresh_token, expires_at
+          FROM public.ml_tokens
+         WHERE coalesce(refresh_token, '') <> ''
+           AND (
+             expires_at IS NULL OR expires_at < now() + INTERVAL '${aheadSec} seconds'
+           )
+      `;
+      const { rows } = await query(sql);
+
+      for (const row of rows) {
+        const userId = row.user_id;
+        const refresh_token = row.refresh_token;
+        if (!refresh_token) { summary.skipped++; continue; }
+
+        try {
+          const body = new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token
+          });
+
+          const resp = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body
+          });
+
+          const j = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(j?.error || j?.message || `HTTP ${resp.status}`);
+
+          const expires_in = Math.max(60, (j.expires_in || 600) - 300); // margem 5min
+          const expiresAt = new Date(Date.now() + expires_in*1000).toISOString();
+
+          await query(`
+            UPDATE public.ml_tokens
+               SET access_token = $1,
+                   refresh_token = COALESCE($2, refresh_token),
+                   scope        = COALESCE($3, scope),
+                   token_type   = COALESCE($4, token_type),
+                   expires_at   = $5,
+                   raw          = $6,
+                   updated_at   = now()
+             WHERE user_id = $7
+          `, [
+            j.access_token || null,
+            j.refresh_token || null,
+            j.scope || null,
+            j.token_type || null,
+            expiresAt,
+            JSON.stringify(j || {}),
+            userId
+          ]);
+
+          summary.refreshed++;
+          summary.details.push({ user_id:String(userId), ok:true });
+        } catch (e) {
+          summary.errors++;
+          summary.details.push({ user_id:String(row.user_id), ok:false, error:String(e?.message||e) });
+        }
+      }
+
+      _mlRefresh_lastRun = {
+        when: new Date().toISOString(),
+        reason,
+        ok: true,
+        tookMs: Date.now() - t0,
+        ...summary
+      };
+      if (rows.length) {
+        console.log(`[ML REFRESH] ${summary.refreshed} renovado(s), ${summary.skipped} ignorado(s), ${summary.errors} erro(s) em ${_mlRefresh_lastRun.tookMs}ms`);
+      }
+    } catch (e) {
+      _mlRefresh_lastRun = {
+        when: new Date().toISOString(),
+        reason,
+        ok: false,
+        tookMs: Date.now() - t0,
+        error: String(e?.message||e)
+      };
+      console.error('[ML REFRESH] Falha geral:', _mlRefresh_lastRun.error);
+    } finally {
+      running = false;
+    }
+  };
+
+  if (runOnStart) setTimeout(() => run('boot'), 2500);
+  const handle = setInterval(run, intervalMs);
+  process.on('SIGINT',  () => clearInterval(handle));
+  process.on('SIGTERM', () => clearInterval(handle));
+
+  app.get('/api/ml/refresh/last-run', (_req, res) => {
+    res.json({ enabled, intervalMs, aheadSec, runOnStart, lastRun:_mlRefresh_lastRun });
+  });
+
+  console.log(`[BOOT] ML AutoRefresh ON: intervalo=${intervalMs}ms, ahead=${aheadSec}s`);
 }
 
 /* ================== Unhandled ================== */
