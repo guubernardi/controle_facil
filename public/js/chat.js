@@ -2,8 +2,9 @@
  * Boot automático:
  *  - Tenta ler claims de ?claims=, ?claim=, ?claim_id= ou ?id=
  *  - Se não vier nada, busca em /api/ml/communications/notices (últimas mediações)
+ *  - Prefetch: carrega mensagens de até 10 mediações logo no boot
  *  - Seleciona a primeira claim e carrega as mensagens
- *  - Se vier ?pack=, carrega mensagens do cliente (pack)
+ *  - Tenta resolver o pack a partir da claim e carrega o chat com cliente
  */
 ;(() => {
   // ===== Config backend =====
@@ -39,7 +40,7 @@
 
   // ===== Querystring =====
   const qs = new URLSearchParams(location.search);
-  const PACK_ID = (qs.get('pack') || '').replace(/[^\w\-:.]/g,'');
+  const PACK_ID_PARAM = (qs.get('pack') || '').replace(/[^\w\-:.]/g,'');
   // aceita várias formas: claims, claim, claim_id, id
   const RAW_CLAIMS =
     (qs.get('claims')   || qs.get('claim') || qs.get('claim_id') || qs.get('id') || '')
@@ -76,8 +77,8 @@
 
   // ===== Estado =====
   const state = {
-    active: 'plataforma', // se houver claim ativa, começamos na aba de plataforma
-    packId: PACK_ID || null,
+    active: 'plataforma', // inicia na plataforma se houver claim
+    packId: PACK_ID_PARAM || null,
     cliente: [],
 
     platThreads: [],       // [{type:'claim', id, label, subtitle}]
@@ -101,6 +102,23 @@
     el.leftPanel.style.display = (state.active === 'plataforma' || wide) ? '' : 'none';
   }
 
+  // ===== Seller: garantir ML_SELLER_ID =====
+  async function ensureSellerId() {
+    if (localStorage.getItem('ML_SELLER_ID')) return true;
+    try {
+      const j = await jfetch(`${API}/stores`).catch(()=>null);
+      const stores = (j && j.stores) || j || [];
+      const pick = stores.find(s => String(s?.active) === 'true') || stores[0];
+      if (pick) {
+        localStorage.setItem('ML_SELLER_ID', String(pick.user_id || pick.id));
+        console.log('⚙️ Loja (seller) auto:', localStorage.ML_SELLER_ID);
+        return true;
+      }
+    } catch {}
+    console.warn('⚠️ Sem ML_SELLER_ID — selecione uma loja.');
+    return false;
+  }
+
   /* =====================================================================
    * INTEGRAÇÃO: Carregar mensagens reais
    * ===================================================================*/
@@ -114,6 +132,43 @@
     if (!claimId) return;
     const data = await jfetch(`${API}/claims/${encodeURIComponent(claimId)}/messages`);
     platMsgsById[claimId] = Array.isArray(data?.messages) ? data.messages : [];
+  }
+
+  async function fetchClaimDetail(claimId) {
+    // tenta alguns caminhos possíveis do backend
+    const paths = [
+      `${API}/claims/${encodeURIComponent(claimId)}`,               // GET detalhe (se exposto)
+      `${API}/claims/${encodeURIComponent(claimId)}/detail`,       // alternativo
+    ];
+    for (const p of paths) {
+      try {
+        const d = await jfetch(p);
+        if (d && (d.id || d.resource_id || d.stage || d.status)) return d;
+      } catch { /* tenta o próximo */ }
+    }
+    return null;
+  }
+
+  async function tryResolvePackFromClaim(claimId) {
+    if (state.packId) return state.packId; // já resolvido
+    try {
+      const detail = await fetchClaimDetail(claimId);
+      const orderId = detail?.resource_id || detail?.order_id || null;
+      if (!orderId) return null;
+
+      // busca ordem para extrair pack_id
+      const order = await jfetch(`${API}/orders/${encodeURIComponent(orderId)}`).catch(()=>null);
+      const packId = order?.pack_id || order?.packId || null;
+      if (packId) {
+        state.packId = String(packId);
+        try { localStorage.setItem('LAST_PACK_ID', state.packId); } catch {}
+        await fetchClienteMessages(); // já deixa carregado
+        return state.packId;
+      }
+    } catch (e) {
+      console.warn('Não foi possível resolver pack da claim:', claimId, e?.message||e);
+    }
+    return null;
   }
 
   async function discoverThreadsFromNotices(limit = 20, offset = 0) {
@@ -142,16 +197,34 @@
       state.platActiveId = state.platThreads[0]?.id || null;
       return;
     }
-    // 2) tenta descobrir pelas notices (mediações recentes)
-    const fromNotices = await discoverThreadsFromNotices(20, 0);
+
+    // 2) última claim usada (se não vier nada na URL)
+    const last = (localStorage.getItem('CHAT_LAST_CLAIM') || '').replace(/[^\d]/g,'');
+    if (last) {
+      state.platThreads = [{ type:'claim', id:last, label:`Claim #${last}`, subtitle:'' }];
+      state.platActiveId = last;
+      return;
+    }
+
+    // 3) tenta descobrir pelas notices (mediações recentes)
+    const fromNotices = await discoverThreadsFromNotices(30, 0);
     if (fromNotices.length) {
       state.platThreads = fromNotices;
       state.platActiveId = fromNotices[0].id;
       return;
     }
-    // 3) sem nada encontrado: mantém vazio; UI mostrará instruções
+
+    // 4) sem nada encontrado: mantém vazio; UI mostrará instruções
     state.platThreads = [];
     state.platActiveId = null;
+  }
+
+  // Prefetch mensagens das primeiras N claims (para “abrir pronto”)
+  async function prefetchPlatMessages(limit = 10) {
+    const ids = (state.platThreads || []).map(t => t.id).slice(0, limit);
+    for (const id of ids) {
+      try { await fetchPlataformaMessages(id); } catch (e) { console.warn('prefetch fail claim', id, e?.message||e); }
+    }
   }
 
   /* =====================================================================
@@ -173,12 +246,7 @@
         link.className = 'attachment';
         const fname = a.filename || a.file_name || a.original_filename || 'arquivo';
         link.textContent = fname;
-        // se vier URL direta:
-        if (a.url) {
-          link.href = a.url;
-          link.target = '_blank';
-          link.rel = 'noopener';
-        }
+        if (a.url) { link.href = a.url; link.target = '_blank'; link.rel = 'noopener'; }
         wrap.appendChild(link);
       });
     }
@@ -198,7 +266,7 @@
     box.innerHTML = '';
     const list = state.cliente || [];
     if (!state.packId) {
-      box.innerHTML = `<div class="empty-text-centered">Abra com <code>?pack=ID</code> para ver o chat com o cliente.</div>`;
+      box.innerHTML = `<div class="empty-text-centered">Chat do cliente: tentando resolver o pack automaticamente. Se preferir, abra com <code>?pack=ID</code>.</div>`;
       return;
     }
     if (!list.length) {
@@ -223,7 +291,7 @@
         <div class="empty-text-centered">
           Nenhuma mediação selecionada.<br>
           Dica: abra com <code>?claim=ID</code> ou <code>?claims=ID1,ID2</code>,<br>
-          ou aguarde a coluna esquerda listar mediações recentes.
+          ou aguarde a coluna esquerda listar mediações recentes automaticamente.
         </div>`;
       return;
     }
@@ -292,6 +360,15 @@
       console.error(err);
     }
 
+    // descobre e carrega chat do cliente (pack) em background
+    try {
+      await tryResolvePackFromClaim(claimId);
+      if (state.packId && (!state.cliente || state.cliente.length === 0)) {
+        await fetchClienteMessages();
+      }
+    } catch (e) { console.warn(e); }
+
+    try { localStorage.setItem('CHAT_LAST_CLAIM', String(claimId)); } catch {}
     if (!opts.skipRenderList) renderPlatThreadList();
     renderPlataforma();
   }
@@ -417,22 +494,32 @@
   (async () => {
     ensureComposerPlacement();
 
-    // descobre threads (URL -> notices)
+    // garante seller
+    await ensureSellerId();
+
+    // descobre threads (URL -> última -> notices)
     await buildPlatThreads();
+
+    // prefetch mensagens de várias claims p/ abrir já “carregado”
+    await prefetchPlatMessages(10);
 
     // se tiver claim ativa, começa na aba plataforma
     state.active = state.platActiveId ? 'plataforma' : (state.packId ? 'cliente' : 'plataforma');
 
-    // carrega mensagens iniciais
-    renderSkeletons();
-    try {
+    // tenta resolver pack a partir da claim ativa (carrega cliente em background)
+    if (!state.packId && state.platActiveId) {
+      await tryResolvePackFromClaim(state.platActiveId);
       if (state.packId) await fetchClienteMessages();
-      if (state.platActiveId) await fetchPlataformaMessages(state.platActiveId);
-    } catch (err) {
-      console.error(err);
+    } else if (state.packId) {
+      await fetchClienteMessages();
     }
 
-    // pinta lista lateral e seleciona primeira claim (se existir)
+    // carrega mensagens da claim ativa (garantia após prefetch)
+    if (state.platActiveId && !platMsgsById[state.platActiveId]) {
+      try { await fetchPlataformaMessages(state.platActiveId); } catch {}
+    }
+
+    // pinta lista lateral e seleciona título/placeholder
     renderPlatThreadList();
     if (state.platActiveId) {
       const thr = state.platThreads.find(t => t.id === state.platActiveId);
