@@ -130,7 +130,7 @@
     }
     
     if (userEmail) {
-      userEmail.textContent = user.email || "usuario@exemplo.com"
+      userEmail.textContent = user.email || ""
     }
 
     // Bind do botão de logout
