@@ -311,6 +311,150 @@ module.exports = function registerReturns(app) {
     }
   });
 
+  /* ---------- LOGS DE CUSTO ---------- */
+  app.get('/api/returns/logs', async (req, res) => {
+    try {
+      const {
+        from = '', to = '',
+        status = '', loja = '',
+        q = '',
+        page = '1', pageSize = '50',
+        orderBy = 'event_at', orderDir = 'desc'
+      } = req.query;
+
+      const baseCols = [
+        'id','id_venda','cliente_nome','loja_nome','sku',
+        'status','log_status','motivo',
+        'valor_produto','valor_frete',
+        'recebido_em','created_at','updated_at'
+      ];
+      const cols = await tableHasColumns('devolucoes', baseCols);
+
+      const col = (c, fallback='NULL') => (cols[c] ? c : fallback);
+      const L = (c) => `LOWER(COALESCE(${col(c, "''")},''))`;
+
+      const valProd = `COALESCE(${col('valor_produto','0')},0)`;
+      const valFrt  = `COALESCE(${col('valor_frete','0')},0)`;
+      const stCol   = L('status');
+      const lgCol   = L('log_status');
+      const motCol  = L('motivo');
+
+      // Regras: Rejeitado=0; Motivo do cliente=0; Recebido_CD/Em_inspecao=só frete; senão produto+frete
+      const totalExpr = `
+        CASE
+          WHEN ${stCol} LIKE 'rejeit%' THEN 0
+          WHEN ${motCol} ~ '(cliente|arrepend|desist)' THEN 0
+          WHEN ${lgCol} IN ('recebido_cd','em_inspecao') THEN ${valFrt}
+          ELSE ${valProd} + ${valFrt}
+        END
+      `;
+
+      const eventAtExpr = cols.recebido_em
+        ? `COALESCE(${col('recebido_em')}, ${col('updated_at','NULL')}, ${col('created_at','NULL')})`
+        : (cols.updated_at
+            ? (cols.created_at ? `COALESCE(${col('updated_at')}, ${col('created_at')})` : col('updated_at'))
+            : (cols.created_at ? col('created_at') : 'NOW()'));
+
+      const selectFields = [
+        `${col('id','NULL')} AS return_id`,
+        `${col('id_venda','NULL')} AS numero_pedido`,
+        `${col('cliente_nome','NULL')} AS cliente_nome`,
+        `${col('loja_nome','NULL')} AS loja_nome`,
+        `${col('status','NULL')} AS status`,
+        `${totalExpr} AS total`,
+        `${eventAtExpr} AS event_at`
+      ];
+
+      const p = [];
+      const wh = [];
+
+      const fromY = parseDateYMD(from);
+      const toY   = parseDateYMD(to);
+      if (fromY && toY) {
+        p.push(fromY, toY);
+        wh.push(`(${eventAtExpr}::date BETWEEN $${p.length-1} AND $${p.length})`);
+      } else if (fromY) {
+        p.push(fromY);
+        wh.push(`(${eventAtExpr}::date >= $${p.length})`);
+      } else if (toY) {
+        p.push(toY);
+        wh.push(`(${eventAtExpr}::date <= $${p.length})`);
+      }
+
+      if (status) {
+        const s = String(status).toLowerCase().trim();
+        const isLogish = new Set(['recebido_cd','em_inspecao','nao_recebido']).has(s);
+        if (isLogish && cols.log_status) {
+          p.push(s);
+          wh.push(`${lgCol} = $${p.length}`);
+        } else if (cols.status) {
+          p.push(`%${s}%`);
+          wh.push(`${stCol} LIKE $${p.length}`);
+        }
+      }
+
+      if (loja && cols.loja_nome) {
+        p.push(`%${String(loja).toLowerCase().trim()}%`);
+        wh.push(`${L('loja_nome')} LIKE $${p.length}`);
+      }
+
+      if (q) {
+        const needle = `%${String(q).toLowerCase().trim()}%`;
+        const orFields = [];
+        if (cols.id_venda)     { p.push(needle); orFields.push(`${L('id_venda')} LIKE $${p.length}`); }
+        if (cols.cliente_nome) { p.push(needle); orFields.push(`${L('cliente_nome')} LIKE $${p.length}`); }
+        if (cols.loja_nome)    { p.push(needle); orFields.push(`${L('loja_nome')} LIKE $${p.length}`); }
+        if (cols.sku)          { p.push(needle); orFields.push(`${L('sku')} LIKE $${p.length}`); }
+        if (cols.motivo)       { p.push(needle); orFields.push(`${L('motivo')} LIKE $${p.length}`); }
+        if (orFields.length) wh.push(`(${orFields.join(' OR ')})`);
+      }
+
+      const whereSql = wh.length ? `WHERE ${wh.join(' AND ')}` : '';
+
+      const limit  = Math.max(1, Math.min(parseInt(pageSize,10) || 50, 500));
+      const pageNo = Math.max(1, parseInt(page,10) || 1);
+      const offset = (pageNo - 1) * limit;
+
+      const orderMap = new Map([
+        ['event_at',  'event_at'],
+        ['numero_pedido', 'numero_pedido'],
+        ['cliente_nome', 'cliente_nome'],
+        ['loja_nome', 'loja_nome'],
+        ['status', 'status'],
+        ['total', 'total']
+      ]);
+      const ob = orderMap.get(String(orderBy)) || 'event_at';
+      const dir = String(orderDir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+      const sqlItems = `
+        SELECT ${selectFields.join(', ')}
+          FROM devolucoes
+          ${whereSql}
+         ORDER BY ${ob} ${dir} NULLS LAST
+         LIMIT $${p.length+1} OFFSET $${p.length+2}
+      `;
+      const sqlCount = `SELECT COUNT(*)::int AS count FROM devolucoes ${whereSql}`;
+      const sqlSum   = `SELECT COALESCE(SUM(${totalExpr}),0)::float8 AS sum_total FROM devolucoes ${whereSql}`;
+
+      const [itemsQ, countQ, sumQ] = await Promise.all([
+        query(sqlItems, [...p, limit, offset]),
+        query(sqlCount, p),
+        query(sqlSum, p),
+      ]);
+
+      res.json({
+        items: itemsQ.rows,
+        total: countQ.rows[0]?.count || 0,
+        sum_total: Number(sumQ.rows[0]?.sum_total || 0),
+        page: pageNo,
+        pageSize: limit
+      });
+    } catch (e) {
+      console.error('[returns] logs erro:', e);
+      res.status(500).json({ error: 'Falha ao carregar logs', detail: e?.message });
+    }
+  });
+
   /* ---------- CRIAR ---------- */
   app.post('/api/returns', async (req, res) => {
     try {
@@ -429,7 +573,6 @@ module.exports = function registerReturns(app) {
       const when = req.body?.when ? new Date(req.body.when) : new Date();
       const resp = (req.body?.responsavel || 'cd').trim();
 
-      // atualiza o que existir
       const set = []; const params = [];
       if (cols.recebido_cd)  { set.push(`recebido_cd=true`); }
       if (cols.recebido_resp){ set.push(`recebido_resp=$${params.push(resp)}`); }
