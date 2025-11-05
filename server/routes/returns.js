@@ -337,7 +337,7 @@ module.exports = function registerReturns(app) {
   });
 
   /* ---------- BUSCAR 1 ---------- */
-  app.get('/api/returns/:id', async (req, res) => {
+  app.get('/api/returns/:id(\\d+)', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -380,11 +380,11 @@ module.exports = function registerReturns(app) {
       res.status(500).json(errPayload(e, 'Falha ao atualizar devolução.'));
     }
   }
-  app.put('/api/returns/:id', updateReturn);
-  app.patch('/api/returns/:id', updateReturn); // front usa PATCH
+  app.put('/api/returns/:id(\\d+)', updateReturn);
+  app.patch('/api/returns/:id(\\d+)', updateReturn); // front usa PATCH
 
   /* ---------- EXCLUIR ---------- */
-  app.delete('/api/returns/:id', async (req, res) => {
+  app.delete('/api/returns/:id(\\d+)', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -398,7 +398,7 @@ module.exports = function registerReturns(app) {
   });
 
   /* ---------- TIMELINE ---------- */
-  app.get('/api/returns/:id/events', async (req, res) => {
+  app.get('/api/returns/:id(\\d+)/events', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -420,7 +420,7 @@ module.exports = function registerReturns(app) {
   });
 
   /* ---------- AÇÕES DE CD ---------- */
-  app.patch('/api/returns/:id/cd/receive', async (req, res) => {
+  app.patch('/api/returns/:id(\\d+)/cd/receive', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -449,7 +449,7 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  app.patch('/api/returns/:id/cd/unreceive', async (req, res) => {
+  app.patch('/api/returns/:id(\\d+)/cd/unreceive', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
@@ -477,7 +477,7 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  app.patch('/api/returns/:id/cd/inspect', async (req, res) => {
+  app.patch('/api/returns/:id(\\d+)/cd/inspect', async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
