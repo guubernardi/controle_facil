@@ -226,6 +226,8 @@
                   <option value="25">25</option>
                   <option value="50" selected>50</option>
                   <option value="100">100</option>
+                  <option value="200">200</option>
+                  <option value="500">500</option>
                 </select>
               </div>
             </div>
@@ -239,7 +241,9 @@
                 <path d="m21 21-4.35-4.35"></path>
               </svg>
               <input type="text" id="filtro-busca" class="campo-entrada-busca" placeholder="Pedido, cliente, SKU ou motivo…">
-              <button type="button" class="botao-limpar-busca" onclick="document.getElementById('filtro-busca').value = ''" aria-label="Limpar busca">
+              <button type="button" class="botao-limpar-busca"
+                onclick="const i=document.getElementById('filtro-busca'); i.value=''; i.dispatchEvent(new Event('input',{bubbles:true}))"
+                aria-label="Limpar busca">
                 <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z"/>
                 </svg>
@@ -295,7 +299,7 @@
         <table class="tabela-logs">
           <thead>
             <tr>
-              <th data-col="event_at" class="sortable">
+              <th data-col="event_at" class="sortable" aria-sort="descending">
                 <span class="th-content">
                   Data
                   <svg class="icone-sort" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

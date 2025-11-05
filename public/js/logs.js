@@ -1,9 +1,9 @@
 // public/js/logs.js
 /*
- * Log de custos — pesquisa por período
- * - Defaults: mês atual (from = 1º dia, to = 1º dia do mês seguinte)
+ * Log de custos — pesquisa e paginação
+ * - NÃO força período por padrão (from/to vazios => busca tudo)
  * - Lê ?from=YYYY-MM-DD&to=YYYY-MM-DD&status=&loja=&q=...
- * - Ordenação, paginação, export CSV
+ * - Ordenação, paginação, export CSV (se houver)
  */
 
 const $  = (s) => document.querySelector(s);
@@ -41,7 +41,7 @@ function getFilters() {
     log_status: '',
     responsavel: $('#filtro-responsavel')?.value || '',
     loja: $('#filtro-loja')?.value || '',
-    q: $('#filtro-busca')?.value || '',
+    q: ($('#filtro-busca')?.value || '').trim(),
     page: String(state.page),
     pageSize: String(state.pageSize),
     orderBy: state.orderBy,
@@ -107,11 +107,7 @@ function renderPager() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Defaults: mês atual
-  const hoje = new Date();
-  const fromDef = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0,10);
-  const toDef   = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 1).toISOString().slice(0,10);
-
+  // NÃO aplicar defaults de mês — manter vazio para buscar todas
   const params = new URLSearchParams(location.search);
   const qsFrom = params.get('from') || '';
   const qsTo   = params.get('to')   || '';
@@ -119,12 +115,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const qsLoja = params.get('loja') || '';
   const qsQ    = params.get('q')    || '';
 
-  // Preenche inputs com QS ou defaults
-  if ($('#filtro-data-de'))  $('#filtro-data-de').value  = qsFrom || fromDef;
-  if ($('#filtro-data-ate')) $('#filtro-data-ate').value = qsTo   || toDef;
+  // Preenche inputs com QS (ou vazio)
+  if ($('#filtro-data-de'))  $('#filtro-data-de').value  = qsFrom || '';
+  if ($('#filtro-data-ate')) $('#filtro-data-ate').value = qsTo   || '';
   if (qsSt && $('#filtro-status'))        $('#filtro-status').value = qsSt;
   if (qsLoja && $('#filtro-loja'))        $('#filtro-loja').value   = qsLoja;
   if (qsQ && $('#filtro-busca'))          $('#filtro-busca').value  = qsQ;
+
+  // Se o select de itens/página existir com valor inicial, respeite-o
+  const selPageSize = $('#filtro-itens-pagina');
+  if (selPageSize) {
+    const v = parseInt(selPageSize.value, 10);
+    if (Number.isFinite(v) && v > 0) state.pageSize = v;
+  }
 
   // Toggle filtros
   const toggleBtn = document.getElementById('toggle-filtros');
@@ -142,10 +145,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#botao-limpar')?.addEventListener('click', () => {
     ['#filtro-data-de','#filtro-data-ate','#filtro-status','#filtro-responsavel','#filtro-loja','#filtro-busca']
       .forEach(sel => { const el = $(sel); if (el) el.value = ''; });
-    // volta para defaults do mês
-    if ($('#filtro-data-de'))  $('#filtro-data-de').value  = fromDef;
-    if ($('#filtro-data-ate')) $('#filtro-data-ate').value = toDef;
-    state.page = 1; loadLogs();
+    state.page = 1; // não recoloca mês — fica vazio para puxar tudo
+    loadLogs();
   });
 
   // Ordenação
