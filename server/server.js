@@ -186,6 +186,7 @@ try {
 }
 
 /* ================== Helpers ================== */
+const { query: _query } = require('./db');
 const qOf = (req) => (req?.q || query);
 const safeParseJson = (s) => {
   if (s == null) return null;
@@ -270,6 +271,15 @@ try {
   console.log('[BOOT] Central ok');
 } catch (e) { console.warn('[BOOT] Central opcional:', e?.message || e); }
 
+/* >>>>>>>>>> MONTA /api/returns/logs ANTES DE /api/returns <<<<<<<<<< */
+try {
+  app.use('/api/returns', require('./routes/returns-log'));
+  console.log('[BOOT] Returns Log ok (montado ANTES de Returns)');
+} catch (e) {
+  console.warn('[BOOT] Returns Log opcional:', e?.message || e);
+}
+
+/* Returns principal */
 try { const r = require('./routes/returns'); if (typeof r === 'function') r(app); console.log('[BOOT] Returns ok'); }
 catch (e) { console.warn('[BOOT] Returns opcional:', e?.message || e); }
 
@@ -326,10 +336,7 @@ try {
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 
-/* === Rotas auxiliares === */
-try { app.use('/api/returns', require('./routes/returns-log')); console.log('[BOOT] Returns Log ok'); }
-catch (e) { console.warn('[BOOT] Returns Log opcional:', e?.message || e); }
-
+/* === Rotas auxiliares que não conflitam com /api/returns === */
 try { app.use('/api/ml', require('./routes/ml-reenrich')); console.log('[BOOT] ML Re-enrich ok'); }
 catch (e) { console.warn('[BOOT] ML Re-enrich opcional:', e?.message || e); }
 
