@@ -442,6 +442,7 @@
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);
 
     updateSummary(d); recalc();
+    sumMlCostsAndRender(); // inicializa total custos ML, caso já existam valores digitados
   }
 
   // === ML summary UI (igual) ===
@@ -487,10 +488,16 @@
                     sources: { claim_id: (current.raw && (current.raw.ml_claim_id || current.raw.claim_id)) || null } });
   }
 
-  // === Claim UI (igual) ===
+  // === Claim UI + Mediação/Status ML ===
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
   function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
+  function setPillState(id, label, state){
+    var el=$(id); if(!el) return;
+    var map = { neutro:'-neutro', pendente:'-pendente', aprovado:'-aprovado', rejeitado:'-rejeitado' };
+    el.className = 'pill ' + (map[state] || '-neutro');
+    el.textContent = label;
+  }
 
   function fillClaimUI(claim){
     if (!claim || typeof claim !== 'object') return;
@@ -537,6 +544,7 @@
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
     related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
 
+    // Preferência de motivo
     var prefer =
       reasonCanonFromPayload({ claim: claim }) ||
       canonFromCode(claim.reason_id);
@@ -560,6 +568,21 @@
         }).catch(function(){});
       }
     }
+
+    // ---- NOVO: Situação ML e Mediação ----
+    try {
+      var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
+      var status = (claim.status || '').toString().toLowerCase();
+      var inMediation = stage.includes('mediation') || status.includes('mediation');
+      setPillState('pill-mediacao', inMediation ? 'Em mediação' : 'Sem mediação', inMediation ? 'pendente' : 'neutro');
+
+      var statusDesc =
+        (claim.return && claim.return.status) ||
+        (claim.return && claim.return.shipping && claim.return.shipping.status) ||
+        status || '—';
+      var human = String(statusDesc).replace(/_/g,' ');
+      setTxt('ml-status-desc', human);
+    } catch(_){}
   }
 
   function tryFetchClaimDetails(claimId){
@@ -669,7 +692,7 @@
     if (nome !== null) runReceive(String(nome).trim());
   }
 
-  // ===== Inspeção =====
+  // ===== Inspeção (mantida, mas secundária na UI) =====
   function openInspectDialog(targetStatus){
     var dlg = $('dlg-inspecao'); if (!dlg) return performInspectFallback(targetStatus, '');
     var sub = $('insp-sub'), txt = $('insp-text');
@@ -996,10 +1019,89 @@
       .then(function(){ if (elLoad) elLoad.hidden=true; if (elList) elList.setAttribute('aria-busy','false'); });
   }
 
+  // ===== NOVO: Custos do ML (UI + persistência best-effort) =====
+  function sumMlCostsAndRender(){
+    var v1 = toNum(($('ml_tarifa_venda')||{}).value || 0);
+    var v2 = toNum(($('ml_envio_ida')||{}).value || 0);
+    var v3 = toNum(($('ml_tarifa_devolucao')||{}).value || 0);
+    var v4 = toNum(($('ml_outros')||{}).value || 0);
+    var total = v1 + v2 + v3 + v4;
+    var out = $('ml_total_custos');
+    if (out) out.value = moneyBRL(total);
+    return { v1:v1, v2:v2, v3:v3, v4:v4, total: total };
+  }
+  ['ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros'].forEach(function(id){
+    var el=$(id); if (!el) return;
+    el.addEventListener('input', sumMlCostsAndRender);
+  });
+
+  function saveMlCosts(){
+    var id = current.id || returnId;
+    if (!id) { toast('ID inválido.', 'error'); return; }
+    var c = sumMlCostsAndRender();
+    var body = {
+      ml_tarifa_venda: c.v1,
+      ml_envio_ida: c.v2,
+      ml_tarifa_devolucao: c.v3,
+      ml_outros: c.v4,
+      updated_by: 'frontend-ml-costs'
+    };
+    return fetch('/api/returns/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(function(r){
+      // Se o backend não tiver as colunas, ele simplesmente ignorará — tratamos como OK
+      if (!r.ok) throw new Error('Falha ao salvar custos');
+    })
+    .then(function(){ toast('Custos do ML salvos (quando suportado).', 'success'); })
+    .catch(function(){ toast('Não foi possível salvar os custos no backend. (Campos podem não existir ainda.)', 'warning'); });
+  }
+  var btnMlCosts=$('btn-ml-costs-save'); if (btnMlCosts) btnMlCosts.addEventListener('click', saveMlCosts);
+
+  // ===== NOVO: Marcação operacional =====
+  function applyMark(){
+    var id = current.id || returnId; if (!id) return;
+    var sel = $('mark-op'); var obsEl = $('mark-obs');
+    var op = sel ? sel.value : 'em_espera';
+    var obs = obsEl ? obsEl.value.trim() : '';
+
+    // Mapa para um status interno existente (seguro para o backend atual)
+    var patch = {};
+    if (op === 'concluida') patch.status = 'aprovado';
+    else if (op === 'em_espera') patch.status = 'pendente';
+    else if (op === 'troca') patch.status = 'aprovado';
+    else if (op === 'reembolso_parcial') patch.status = 'aprovado';
+
+    // Se sinalizou defeituosa, reforçamos o motivo canônico
+    if (op === 'defeituosa') patch.tipo_reclamacao = 'produto_defeituoso';
+
+    // Observação: anexamos sem sobrescrever o que já existe
+    var atual = $('reclamacao') ? $('reclamacao').value.trim() : '';
+    var append = obs ? ((atual ? (atual + '\n') : '') + '[Marcação] ' + op.replace(/_/g,' ') + (obs ? (': ' + obs) : '')) : null;
+    if (append) patch.reclamacao = append;
+
+    patch.updated_by = 'frontend-mark';
+
+    disableHead(true);
+    fetch('/api/returns/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    })
+    .then(function(r){ if(!r.ok) throw new Error('Falha ao aplicar marcação'); })
+    .then(function(){ return reloadCurrent(); })
+    .then(function(){ toast('Marcação aplicada.', 'success'); return refreshTimeline(id); })
+    .catch(function(e){ toast(e.message || 'Erro ao marcar', 'error'); })
+    .then(function(){ disableHead(false); });
+  }
+  var btnMark=$('btn-mark'); if (btnMark) btnMark.addEventListener('click', applyMark);
+
   // ===== Atalhos =====
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
-  // ===== Listeners =====
+  // ===== Listeners básicos =====
   ['valor_produto','valor_frete','status'].forEach(function(id){
     var el=$(id); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc);
   });
@@ -1020,7 +1122,7 @@
   var btnEnrich=$('btn-enrich'); if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
 
   function disableHead(disabled){
-    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd']
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd','btn-mark','btn-ml-costs-save']
       .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
   }
 

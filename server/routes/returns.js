@@ -10,7 +10,6 @@ const _fetch = (typeof fetch === 'function')
   : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 
 async function getMLToken(req) {
-  // ajuste aqui se o token estiver salvo em outro lugar no seu projeto
   if (req?.user?.ml?.access_token) return req.user.ml.access_token;
   if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
   try {
@@ -62,12 +61,14 @@ async function tableHasColumns(table, cols) {
 /* =============== campos & normalização =============== */
 const POSSIVEIS_CAMPOS = [
   'id_venda','cliente_nome','loja_nome','sku',
-  'status','log_status',
+  'status','log_status','status_operacional',
   'valor_produto','valor_frete',
+  'ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros',
   'motivo','descricao',
   'nfe_numero','nfe_chave',
   'data_compra',
-  'recebido_cd','recebido_resp','recebido_em'
+  'recebido_cd','recebido_resp','recebido_em',
+  'ml_status_desc','em_mediacao'
 ];
 
 const nrm = s => String(s ?? '')
@@ -81,14 +82,19 @@ const STATUS_MAP = new Map([
   ['rejeitado','rejeitado'],['rejeitada','rejeitado'],['negado','rejeitado'],['negada','rejeitado'],
 ]);
 
-// CHECK permitido na tabela: nao_recebido, recebido_cd, em_inspecao
+// CHECK permitido na tabela agora contempla mais fases
 const LOG_MAP = new Map([
   ['nao recebido','nao_recebido'],['nao_recebido','nao_recebido'],['nao-recebido','nao_recebido'],
-  ['recebido cd','recebido_cd'],['recebido_cd','recebido_cd'],['recebido-cd','recebido_cd'],
-  ['em inspecao','em_inspecao'],['em_inspecao','em_inspecao'],['em-inspecao','em_inspecao'],['em inspecao','em_inspecao'],
-  ['postado','nao_recebido'],['coletado','nao_recebido'],
-  ['em transito','nao_recebido'],['em_transito','nao_recebido'],['em-transito','nao_recebido'],
+  ['aguardando postagem','aguardando_postagem'],['aguardando_postagem','aguardando_postagem'],
+  ['postado','postado'],
+  ['em transito','em_transito'],['em_transito','em_transito'],['em-transito','em_transito'],
+  ['recebido cd','recebido_cd'],['recebido_cd','recebido_cd'],
+  ['em inspecao','em_inspecao'],['em_inspecao','em_inspecao'],['em-inspecao','em_inspecao'],
+  ['devolvido','devolvido'],
+  ['em mediacao','em_mediacao'],['mediacao','em_mediacao']
 ]);
+
+const ALLOWED_MARK = new Set(['concluida','em_espera','defeituosa','troca','reembolso_parcial']);
 
 const num = v => (v===''||v==null) ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
 
@@ -105,7 +111,16 @@ function sanitizeForInsert(body={}, cols) {
       if (val == null || val === '') val = null;
       else val = LOG_MAP.get(nrm(val)) ?? null;
     }
-    if (c === 'valor_produto' || c === 'valor_frete') val = num(val);
+    if (c === 'status_operacional' && val) {
+      const mk = nrm(val).replace(/\s+/g,'_');
+      val = ALLOWED_MARK.has(mk) ? mk : 'em_espera';
+    }
+    if (
+      c === 'valor_produto' || c === 'valor_frete' ||
+      c === 'ml_tarifa_venda' || c === 'ml_envio_ida' ||
+      c === 'ml_tarifa_devolucao' || c === 'ml_outros'
+    ) val = num(val);
+
     if (typeof val === 'string') { val = val.trim(); if (val === '') val = null; }
 
     out[c] = val;
@@ -122,7 +137,16 @@ function sanitizeForUpdate(body={}, cols) {
 
     if (c === 'status' && val != null && val !== '') val = STATUS_MAP.get(nrm(val)) || 'pendente';
     if (c === 'log_status') val = (val==null||val==='') ? null : (LOG_MAP.get(nrm(val)) ?? null);
-    if (c === 'valor_produto' || c === 'valor_frete') val = num(val);
+    if (c === 'status_operacional' && val) {
+      const mk = nrm(val).replace(/\s+/g,'_');
+      val = ALLOWED_MARK.has(mk) ? mk : 'em_espera';
+    }
+    if (
+      c === 'valor_produto' || c === 'valor_frete' ||
+      c === 'ml_tarifa_venda' || c === 'ml_envio_ida' ||
+      c === 'ml_tarifa_devolucao' || c === 'ml_outros'
+    ) val = num(val);
+
     if (typeof val === 'string') { val = val.trim(); if (val === '') val = null; }
 
     out[c] = val;
@@ -184,16 +208,23 @@ module.exports = function registerReturns(app) {
     try {
       const { status='', page='1', pageSize='50', orderBy='updated_at', orderDir='desc' } = req.query;
 
-      const base = ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status',
-                    'valor_produto','valor_frete','motivo','descricao','nfe_numero','nfe_chave',
-                    'data_compra','recebido_cd','recebido_resp','recebido_em','created_at','updated_at'];
+      const base = [
+        'id','id_venda','cliente_nome','loja_nome','sku',
+        'status','log_status','status_operacional',
+        'valor_produto','valor_frete',
+        'ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros',
+        'motivo','descricao','nfe_numero','nfe_chave',
+        'data_compra','recebido_cd','recebido_resp','recebido_em',
+        'ml_status_desc','em_mediacao',
+        'created_at','updated_at'
+      ];
       const cols = await tableHasColumns('devolucoes', base);
       const select = ['id', ...base.filter(c => c!=='id' && cols[c])];
 
       const p = []; const where = [];
       if (status) {
         const s = nrm(status);
-        const logish = new Set(['recebido_cd','em_inspecao','postado','em transito','em_transito']);
+        const logish = new Set(['recebido_cd','em_inspecao','postado','em transito','em_transito','aguardando_postagem','em_mediacao']);
         if (logish.has(s) && cols.log_status) { p.push(s.replace(' ','_')); where.push(`LOWER(COALESCE(log_status,'')) = $${p.length}`); }
         else if (cols.status) { p.push(`%${s}%`); where.push(`LOWER(COALESCE(status,'')) LIKE $${p.length}`); }
       }
@@ -237,9 +268,16 @@ module.exports = function registerReturns(app) {
         orderBy = 'created_at', orderDir = 'desc'
       } = req.query;
 
-      const base = ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status',
-                    'valor_produto','valor_frete','motivo','descricao','nfe_numero','nfe_chave',
-                    'data_compra','recebido_cd','recebido_resp','recebido_em','created_at','updated_at'];
+      const base = [
+        'id','id_venda','cliente_nome','loja_nome','sku',
+        'status','log_status','status_operacional',
+        'valor_produto','valor_frete',
+        'ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros',
+        'motivo','descricao','nfe_numero','nfe_chave',
+        'data_compra','recebido_cd','recebido_resp','recebido_em',
+        'ml_status_desc','em_mediacao',
+        'created_at','updated_at'
+      ];
       const cols = await tableHasColumns('devolucoes', base);
       const select = ['id', ...base.filter(c => c!=='id' && cols[c])];
 
@@ -270,6 +308,7 @@ module.exports = function registerReturns(app) {
           cols.sku ? 'sku' : null,
           cols.status ? 'status' : null,
           cols.log_status ? 'log_status' : null,
+          cols.status_operacional ? 'status_operacional' : null
         ].filter(Boolean);
         if (fields.length) {
           const ors = fields.map(f => {
@@ -308,150 +347,6 @@ module.exports = function registerReturns(app) {
     } catch (e) {
       console.error('[returns] search erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao pesquisar devoluções.'));
-    }
-  });
-
-  /* ---------- LOGS DE CUSTO ---------- */
-  app.get('/api/returns/logs', async (req, res) => {
-    try {
-      const {
-        from = '', to = '',
-        status = '', loja = '',
-        q = '',
-        page = '1', pageSize = '50',
-        orderBy = 'event_at', orderDir = 'desc'
-      } = req.query;
-
-      const baseCols = [
-        'id','id_venda','cliente_nome','loja_nome','sku',
-        'status','log_status','motivo',
-        'valor_produto','valor_frete',
-        'recebido_em','created_at','updated_at'
-      ];
-      const cols = await tableHasColumns('devolucoes', baseCols);
-
-      const col = (c, fallback='NULL') => (cols[c] ? c : fallback);
-      const L = (c) => `LOWER(COALESCE(${col(c, "''")},''))`;
-
-      const valProd = `COALESCE(${col('valor_produto','0')},0)`;
-      const valFrt  = `COALESCE(${col('valor_frete','0')},0)`;
-      const stCol   = L('status');
-      const lgCol   = L('log_status');
-      const motCol  = L('motivo');
-
-      // Regras: Rejeitado=0; Motivo do cliente=0; Recebido_CD/Em_inspecao=só frete; senão produto+frete
-      const totalExpr = `
-        CASE
-          WHEN ${stCol} LIKE 'rejeit%' THEN 0
-          WHEN ${motCol} ~ '(cliente|arrepend|desist)' THEN 0
-          WHEN ${lgCol} IN ('recebido_cd','em_inspecao') THEN ${valFrt}
-          ELSE ${valProd} + ${valFrt}
-        END
-      `;
-
-      const eventAtExpr = cols.recebido_em
-        ? `COALESCE(${col('recebido_em')}, ${col('updated_at','NULL')}, ${col('created_at','NULL')})`
-        : (cols.updated_at
-            ? (cols.created_at ? `COALESCE(${col('updated_at')}, ${col('created_at')})` : col('updated_at'))
-            : (cols.created_at ? col('created_at') : 'NOW()'));
-
-      const selectFields = [
-        `${col('id','NULL')} AS return_id`,
-        `${col('id_venda','NULL')} AS numero_pedido`,
-        `${col('cliente_nome','NULL')} AS cliente_nome`,
-        `${col('loja_nome','NULL')} AS loja_nome`,
-        `${col('status','NULL')} AS status`,
-        `${totalExpr} AS total`,
-        `${eventAtExpr} AS event_at`
-      ];
-
-      const p = [];
-      const wh = [];
-
-      const fromY = parseDateYMD(from);
-      const toY   = parseDateYMD(to);
-      if (fromY && toY) {
-        p.push(fromY, toY);
-        wh.push(`(${eventAtExpr}::date BETWEEN $${p.length-1} AND $${p.length})`);
-      } else if (fromY) {
-        p.push(fromY);
-        wh.push(`(${eventAtExpr}::date >= $${p.length})`);
-      } else if (toY) {
-        p.push(toY);
-        wh.push(`(${eventAtExpr}::date <= $${p.length})`);
-      }
-
-      if (status) {
-        const s = String(status).toLowerCase().trim();
-        const isLogish = new Set(['recebido_cd','em_inspecao','nao_recebido']).has(s);
-        if (isLogish && cols.log_status) {
-          p.push(s);
-          wh.push(`${lgCol} = $${p.length}`);
-        } else if (cols.status) {
-          p.push(`%${s}%`);
-          wh.push(`${stCol} LIKE $${p.length}`);
-        }
-      }
-
-      if (loja && cols.loja_nome) {
-        p.push(`%${String(loja).toLowerCase().trim()}%`);
-        wh.push(`${L('loja_nome')} LIKE $${p.length}`);
-      }
-
-      if (q) {
-        const needle = `%${String(q).toLowerCase().trim()}%`;
-        const orFields = [];
-        if (cols.id_venda)     { p.push(needle); orFields.push(`${L('id_venda')} LIKE $${p.length}`); }
-        if (cols.cliente_nome) { p.push(needle); orFields.push(`${L('cliente_nome')} LIKE $${p.length}`); }
-        if (cols.loja_nome)    { p.push(needle); orFields.push(`${L('loja_nome')} LIKE $${p.length}`); }
-        if (cols.sku)          { p.push(needle); orFields.push(`${L('sku')} LIKE $${p.length}`); }
-        if (cols.motivo)       { p.push(needle); orFields.push(`${L('motivo')} LIKE $${p.length}`); }
-        if (orFields.length) wh.push(`(${orFields.join(' OR ')})`);
-      }
-
-      const whereSql = wh.length ? `WHERE ${wh.join(' AND ')}` : '';
-
-      const limit  = Math.max(1, Math.min(parseInt(pageSize,10) || 50, 500));
-      const pageNo = Math.max(1, parseInt(page,10) || 1);
-      const offset = (pageNo - 1) * limit;
-
-      const orderMap = new Map([
-        ['event_at',  'event_at'],
-        ['numero_pedido', 'numero_pedido'],
-        ['cliente_nome', 'cliente_nome'],
-        ['loja_nome', 'loja_nome'],
-        ['status', 'status'],
-        ['total', 'total']
-      ]);
-      const ob = orderMap.get(String(orderBy)) || 'event_at';
-      const dir = String(orderDir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-
-      const sqlItems = `
-        SELECT ${selectFields.join(', ')}
-          FROM devolucoes
-          ${whereSql}
-         ORDER BY ${ob} ${dir} NULLS LAST
-         LIMIT $${p.length+1} OFFSET $${p.length+2}
-      `;
-      const sqlCount = `SELECT COUNT(*)::int AS count FROM devolucoes ${whereSql}`;
-      const sqlSum   = `SELECT COALESCE(SUM(${totalExpr}),0)::float8 AS sum_total FROM devolucoes ${whereSql}`;
-
-      const [itemsQ, countQ, sumQ] = await Promise.all([
-        query(sqlItems, [...p, limit, offset]),
-        query(sqlCount, p),
-        query(sqlSum, p),
-      ]);
-
-      res.json({
-        items: itemsQ.rows,
-        total: countQ.rows[0]?.count || 0,
-        sum_total: Number(sumQ.rows[0]?.sum_total || 0),
-        page: pageNo,
-        pageSize: limit
-      });
-    } catch (e) {
-      console.error('[returns] logs erro:', e);
-      res.status(500).json({ error: 'Falha ao carregar logs', detail: e?.message });
     }
   });
 
@@ -546,7 +441,7 @@ module.exports = function registerReturns(app) {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
-      if (!(await eventosTableExists())) return res.json({ items: [] }); // sem tabela → lista vazia
+      if (!(await eventosTableExists())) return res.json({ items: [] });
 
       const { rows } = await query(
         `SELECT id, return_id, type, title, message, meta, created_at
@@ -630,15 +525,9 @@ module.exports = function registerReturns(app) {
       const obs    = (req.body?.observacao || '').trim();
       const when   = req.body?.when ? new Date(req.body.when) : new Date();
 
-      let finalLog = null;
-      if (result.includes('aprov')) finalLog = 'em_inspecao';
-      if (result.includes('rejeit')) finalLog = 'em_inspecao';
-
+      let finalLog = 'em_inspecao';
       if (finalLog && cols.log_status) {
-        await query(
-          `UPDATE devolucoes SET log_status=$1, updated_at=now() WHERE id=$2`,
-          [finalLog, id]
-        );
+        await query(`UPDATE devolucoes SET log_status=$1, updated_at=now() WHERE id=$2`, [finalLog, id]);
       }
 
       await logEvento(
@@ -646,13 +535,66 @@ module.exports = function registerReturns(app) {
         'status',
         result.includes('aprov') ? 'Inspeção aprovada' : 'Inspeção reprovada',
         obs || null,
-        { cd:{ inspectedAt: when }, log_status: finalLog || undefined }
+        { cd:{ inspectedAt: when }, log_status: finalLog }
       );
 
       res.json({ ok: true });
     } catch (e) {
       console.error('[returns] cd/inspect erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao registrar inspeção.'));
+    }
+  });
+
+  /* ---------- Marcação Operacional (novo) ---------- */
+  app.patch('/api/returns/:id(\\d+)/mark', async (req, res) => {
+    try {
+      const id  = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      let mark = String(req.body?.marcacao || '').toLowerCase().trim().replace(/\s+/g,'_');
+      if (!ALLOWED_MARK.has(mark)) mark = 'em_espera';
+
+      const obs = (req.body?.observacao || '').trim() || null;
+
+      await query(
+        `UPDATE devolucoes SET status_operacional=$1, updated_at=now() WHERE id=$2`,
+        [mark, id]
+      );
+      await logEvento(id, 'operacional', 'Marcação atualizada', mark, { status_operacional: mark, obs });
+
+      res.json({ ok: true, status_operacional: mark });
+    } catch (e) {
+      console.error('[returns] mark erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao marcar devolução.'));
+    }
+  });
+
+  /* ---------- Atualizar custos do ML (novo) ---------- */
+  app.patch('/api/returns/:id(\\d+)/ml/costs', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+      const fields = ['ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros','ml_status_desc','em_mediacao'];
+      const cols = await tableHasColumns('devolucoes', fields.concat(['updated_at']));
+      const data = {};
+      for (const f of fields) if (cols[f] && f in req.body) data[f] = req.body[f];
+
+      const keys = Object.keys(data);
+      if (!keys.length) return res.json({ ok: true });
+
+      const set = []; const p = [];
+      keys.forEach((k,i)=>{ set.push(`${k}=$${i+1}`); p.push(data[k]); });
+      if (cols.updated_at) set.push('updated_at=now()');
+      p.push(id);
+
+      await query(`UPDATE devolucoes SET ${set.join(', ')} WHERE id=$${p.length}`, p);
+      await logEvento(id, 'custos', 'Custos ML atualizados', null, data);
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[returns] ml/costs erro:', e);
+      res.status(500).json(errPayload(e, 'Falha ao atualizar custos ML.'));
     }
   });
 
@@ -682,8 +624,13 @@ module.exports = function registerReturns(app) {
         sku: 'SKU-TESTE-001',
         status: 'pendente',
         log_status: 'nao_recebido',
+        status_operacional: 'em_espera',
         valor_produto: 199.90,
         valor_frete: 19.90,
+        ml_tarifa_venda: 23.48,
+        ml_envio_ida: 22.45,
+        ml_tarifa_devolucao: 44.90,
+        ml_outros: 0,
         motivo: 'defeito',
         descricao: 'Registro criado para testes automatizados'
       };
