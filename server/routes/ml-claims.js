@@ -4,9 +4,11 @@
 /**
  * Proxy de rotas oficiais do Mercado Livre (Claims):
  * - messages (GET)
+ * - details da claim (GET)
  * - open-dispute, expected-resolutions (GET/POST), partial-refund (GET/POST),
- *   refund total, allow-return, evidences (GET/POST),
- *   attachments-evidences (POST/GET/download).
+ *   refund total, allow-return
+ * - evidences (GET/POST) e attachments-evidences (POST/GET/download)
+ * - charges/return-cost (GET)
  *
  * Token:
  * - Header preferencial: x-seller-token: <ACCESS_TOKEN>
@@ -206,8 +208,24 @@ async function mlFetchRaw(req, url, opts = {}) {
 const ok = (res, data = {}) => res.json({ ok: true, ...data });
 
 /* =========================================================================
- *  0) MENSAGENS DA RECLAMAÇÃO
+ *  0) MENSAGENS E DETALHES DA RECLAMAÇÃO
  * ========================================================================= */
+
+/** Detalhes da claim (usado pelo front para enriquecer UI) */
+router.get('/claims/:id', async (req, res) => {
+  try {
+    const claimId = String(req.params.id || '').replace(/\D/g, '');
+    if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
+
+    const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}`;
+    const data = await mlFetch(req, url);
+    // Normaliza leve mantendo compat com front (data|claim)
+    return res.json({ data: data || {} });
+  } catch (e) {
+    const s = e.status || 500;
+    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
 
 /** Obter todas as mensagens da claim */
 router.get('/claims/:id/messages', async (req, res) => {
@@ -421,6 +439,38 @@ router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (re
     res.set('Content-Disposition', disp);
     const ab = await r.arrayBuffer();
     return res.send(Buffer.from(ab));
+  } catch (e) {
+    const s = e.status || 500;
+    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
+
+/* =========================================================================
+ *  5) CUSTO DE DEVOLUÇÃO (return-cost)
+ * ========================================================================= */
+
+/**
+ * GET /api/ml/claims/:id/charges/return-cost
+ * Query opcional:
+ *   ?usd=true  -> repassa calculate_amount_usd=true
+ */
+router.get('/claims/:id/charges/return-cost', async (req, res) => {
+  try {
+    const claimId = String(req.params.id || '').replace(/\D/g, '');
+    if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
+
+    const wantUsd = (req.query.usd === 'true' || req.query.calculate_amount_usd === 'true');
+    const qs = wantUsd ? '?calculate_amount_usd=true' : '';
+    const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}/charges/return-cost${qs}`;
+
+    const out = await mlFetch(req, url);
+    const data = {
+      claim_id: Number(claimId) || claimId,
+      currency_id: out?.currency_id || 'BRL',
+      amount: Number(out?.amount || 0),
+      amount_usd: (out?.amount_usd != null ? Number(out.amount_usd) : null)
+    };
+    return res.json({ data });
   } catch (e) {
     const s = e.status || 500;
     return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });

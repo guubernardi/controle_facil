@@ -1,3 +1,4 @@
+// /public/js/devolucao-editar.js — ML return-cost integrado + fixes de “dirty”, claim e custos
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -23,6 +24,7 @@
     return isNaN(n) ? 0 : n;
   }
   function moneyBRL(v){ return Number(v || 0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
+  function moneyUSD(v){ return Number(v || 0).toLocaleString('en-US',{style:'currency',currency:'USD'}); }
   function toast(msg, type){
     type = type || 'info';
     var t = $('toast'); if (!t) { alert(msg); return; }
@@ -401,6 +403,8 @@
     bindDirty($('cliente_nome'));
     bindDirty($('loja_nome'));
     bindDirty($('id_venda'));
+    bindDirty($('valor_produto'));
+    bindDirty($('valor_frete'));
     upperSKUInstant();
 
     setSafe($('id_venda'),     d.id_venda);
@@ -480,6 +484,20 @@
     var claimId = (payload && payload.sources && payload.sources.claim_id) || (function(){ var x=$('ml_claim_id'); return x ? x.value : null; })();
     var a = $('claim-open-link');
     if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
+
+    // slot dedicado p/ exibir return-cost caso exista
+    if ($('ml-return-cost')) {
+      if (retCost && retCost.amount != null) {
+        $('ml-return-cost').textContent = moneyBRL(retCost.amount);
+        $('ml-return-cost').dataset.value = String(toNum(retCost.amount));
+      } else {
+        $('ml-return-cost').textContent = '—';
+        $('ml-return-cost').dataset.value = '';
+      }
+    }
+    if ($('ml-return-cost-usd')) {
+      $('ml-return-cost-usd').textContent = (retCost && retCost.amount_usd != null) ? moneyUSD(retCost.amount_usd) : '—';
+    }
   }
   function fillMlSummaryFromCurrent(){
     fillMlSummary({ order: current.raw && (current.raw.order || current.raw.order_info) || null,
@@ -569,7 +587,7 @@
       }
     }
 
-    // ---- NOVO: Situação ML e Mediação ----
+    // ---- ML: Mediação + status humano
     try {
       var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
       var status = (claim.status || '').toString().toLowerCase();
@@ -583,6 +601,11 @@
       var human = String(statusDesc).replace(/_/g,' ');
       setTxt('ml-status-desc', human);
     } catch(_){}
+
+    // ---- NOVO: puxa custo de devolução para frete (se útil)
+    if (claim.id) {
+      fetchAndApplyReturnCost(String(claim.id), { persist: true });
+    }
   }
 
   function tryFetchClaimDetails(claimId){
@@ -591,6 +614,57 @@
       .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(j){ var c = j && (j.data || j.claim || j); if (c && typeof c==='object') fillClaimUI(c); })
       .catch(function(){ /* silencioso */ });
+  }
+
+  // ===== NOVO: Return-cost (frete de devolução do ML)
+  function showReturnCostInUi(data){
+    if (!data) return;
+    var brl = toNum(data.amount);
+    var usd = (data.amount_usd != null) ? toNum(data.amount_usd) : null;
+    var slotBrl = $('ml-return-cost');
+    var slotUsd = $('ml-return-cost-usd');
+    if (slotBrl) { slotBrl.textContent = moneyBRL(brl); slotBrl.dataset.value = String(brl); }
+    if (slotUsd) { slotUsd.textContent = (usd != null ? moneyUSD(usd) : '—'); }
+  }
+  function applyReturnCostToFreight(brlAmount, opts){
+    opts = opts || {};
+    var inputFrete = $('valor_frete');
+    var wasDirty = inputFrete && inputFrete.dataset.dirty === '1';
+    var curFrete = inputFrete ? toNum(inputFrete.value) : toNum(current.valor_frete);
+    // Regra: só aplica automático se campo não foi mexido e frete atual é 0
+    if (!wasDirty && toNum(curFrete) === 0 && toNum(brlAmount) > 0) {
+      if (inputFrete) { inputFrete.value = String(toNum(brlAmount)); }
+      current.valor_frete = toNum(brlAmount);
+      recalc();
+      if (opts.persist && (current.id || returnId)) {
+        fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ valor_frete: toNum(brlAmount), updated_by: 'frontend-ml-return-cost' })
+        }).catch(function(){});
+      }
+      toast('Frete de devolução (ML) aplicado: ' + moneyBRL(brlAmount), 'success');
+      return true;
+    }
+    return false;
+  }
+  function fetchAndApplyReturnCost(claimId, opts){
+    opts = opts || {};
+    var url = '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?usd=true';
+    return fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, body:j }; }); })
+      .then(function(res){
+        if (!res.ok) {
+          // 404 claim not found, 401 token, etc — silencioso mas mostra no debug
+          if (qs.has('debug')) console.warn('[return-cost] erro', res.body);
+          return;
+        }
+        var data = (res.body && res.body.data) || res.body || {};
+        showReturnCostInUi(data);
+        // Tenta aplicar no frete se fizer sentido
+        applyReturnCostToFreight(toNum(data.amount), { persist: opts.persist });
+      })
+      .catch(function(){});
   }
 
   // Debug opcional (?debug=1)
@@ -746,7 +820,7 @@
     .then(function(){ disableHead(false); });
   }
 
-  // ===== ENRIQUECIMENTO (ML) =====
+  // ===== ENRIQUECIMENTO (ML)
   var ENRICH_TTL_MS = 10 * 60 * 1000;
   function lojaEhML(nome){ var s=String(nome||'').toLowerCase(); return s.indexOf('mercado')>=0 || s.indexOf('meli')>=0 || s.indexOf('ml')>=0; }
   function parecePedidoML(pedido){ return /^\d{6,}$/.test(String(pedido || '')); }
@@ -1026,7 +1100,12 @@
         var claimed = (j.sources && j.sources.claim_id) || null;
         if (!j.claim && claimed) tryFetchClaimDetails(claimed);
 
-        return Promise.all([persistMeta, persistEvent, persistMoney, persistPatch]);
+        // Caso a prévia não traga return_cost, tenta endpoint dedicado agora:
+        var needReturnCost = !(j && j.return_cost && j.return_cost.amount != null);
+        var claimId = claimed || (j.claim && j.claim.id) || ( $('ml_claim_id') && $('ml_claim_id').value ) || null;
+        var rcPull = needReturnCost && claimId ? fetchAndApplyReturnCost(String(claimId), { persist: true }) : Promise.resolve();
+
+        return Promise.all([persistMeta, persistEvent, persistMoney, persistPatch, rcPull]);
       })
       .then(function(){ return reloadCurrent(); })
       .catch(function (e) {
@@ -1108,7 +1187,7 @@
       .then(function(){ if (elLoad) elLoad.hidden=true; if (elList) elList.setAttribute('aria-busy','false'); });
   }
 
-  // ===== NOVO: Custos do ML (UI + persistência best-effort) =====
+  // ===== Custos do ML (UI + persistência best-effort)
   function sumMlCostsAndRender(){
     var v1 = toNum(($('ml_tarifa_venda')||{}).value || 0);
     var v2 = toNum(($('ml_envio_ida')||{}).value || 0);
@@ -1142,7 +1221,6 @@
       body: JSON.stringify(body)
     })
     .then(function(r){
-      // Se o backend não tiver as colunas, ele simplesmente ignorará — tratamos como OK
       if (!r.ok) throw new Error('Falha ao salvar custos');
     })
     .then(function(){ toast('Custos do ML salvos (quando suportado).', 'success'); })
@@ -1150,24 +1228,21 @@
   }
   var btnMlCosts=$('btn-ml-costs-save'); if (btnMlCosts) btnMlCosts.addEventListener('click', saveMlCosts);
 
-  // ===== NOVO: Marcação operacional =====
+  // ===== Marcação operacional =====
   function applyMark(){
     var id = current.id || returnId; if (!id) return;
     var sel = $('mark-op'); var obsEl = $('mark-obs');
     var op = sel ? sel.value : 'em_espera';
     var obs = obsEl ? obsEl.value.trim() : '';
 
-    // Mapa para um status interno existente (seguro para o backend atual)
     var patch = {};
     if (op === 'concluida') patch.status = 'aprovado';
     else if (op === 'em_espera') patch.status = 'pendente';
     else if (op === 'troca') patch.status = 'aprovado';
     else if (op === 'reembolso_parcial') patch.status = 'aprovado';
 
-    // Se sinalizou defeituosa, reforçamos o motivo canônico
     if (op === 'defeituosa') patch.tipo_reclamacao = 'produto_defeituoso';
 
-    // Observação: anexamos sem sobrescrever o que já existe
     var atual = $('reclamacao') ? $('reclamacao').value.trim() : '';
     var append = obs ? ((atual ? (atual + '\n') : '') + '[Marcação] ' + op.replace(/_/g,' ') + (obs ? (': ' + obs) : '')) : null;
     if (append) patch.reclamacao = append;
@@ -1224,8 +1299,8 @@
     reloadCurrent()
       .then(function(){
         upperSKUInstant(); // garante uppercase sempre
-        // marca os campos de custo como "dirty-aware"
-        ['ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros'].forEach(function(id){ var el=$(id); if (el) bindDirty(el); });
+        // marca os campos como "dirty-aware"
+        ['ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros','valor_produto','valor_frete'].forEach(function(id){ var el=$(id); if (el) bindDirty(el); });
 
         var needMotivoConvert = !!current.tipo_reclamacao && !/_/.test(String(current.tipo_reclamacao)) && current.tipo_reclamacao !== 'nao_corresponde';
         var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda);
@@ -1246,6 +1321,8 @@
 
         var cid = ($('ml_claim_id') && $('ml_claim_id').value) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
         if (cid && !(current.raw && current.raw.claim)) tryFetchClaimDetails(cid);
+        // Puxa return-cost mesmo que a claim já esteja carregada (atualiza UI dedicada)
+        if (cid) fetchAndApplyReturnCost(String(cid), { persist: true });
 
         return current.id ? refreshTimeline(current.id) : null;
       })
