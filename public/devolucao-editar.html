@@ -11,14 +11,12 @@
   <div class="devolucao-page">
     <!-- Topbar -->
     <div class="topbar-mini">
-      <a href="index.html">
-        <button onclick="window.history.back()" class="voltar" aria-label="Voltar para Devoluções">
-          <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
-          <span>Voltar</span>
-        </button>
-      </a>
+      <button type="button" class="voltar" aria-label="Voltar para Devoluções" onclick="history.back()">
+        <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 12H5M12 19l-7-7 7-7"/>
+        </svg>
+        <span>Voltar</span>
+      </button>
     </div>
 
     <main class="page-wrap" role="main">
@@ -96,9 +94,6 @@
           </div>
 
           <div class="dialog-actions">
-            <button id="rcd-unset" type="button" class="btn btn--outline">
-              Não foi recebido
-            </button>
             <div class="dialog-actions-right">
               <button type="button" class="btn btn--ghost" id="rcd-cancel">
                 Cancelar
@@ -227,6 +222,11 @@
               <span>Frete (ML):</span>
               <strong id="ml-freight">—</strong>
             </div>
+            <div class="ml-pair">
+              <span>Return cost (ML):</span>
+              <strong id="ml-return-cost">—</strong>
+              <small id="ml-return-cost-usd" class="muted">—</small>
+            </div>
           </div>
 
           <!-- Custos do ML -->
@@ -266,7 +266,7 @@
                 <strong id="ml-status-desc">—</strong>
               </div>
               <div>
-                <span>Medição:</span>
+                <span>Mediação:</span>
                 <span id="pill-mediacao" class="pill -neutro">
                   Sem mediação
                 </span>
@@ -296,7 +296,7 @@
               </button>
             </div>
 
-            <div id="cd-info" class="cd-details">
+            <div class="cd-details" id="cd-info">
               <span id="pill-cd" class="pill -neutro">
                 Não recebido
               </span>
@@ -343,6 +343,14 @@
             <textarea id="reclamacao" name="reclamacao" rows="6" placeholder="Descreva o motivo da devolução..."></textarea>
           </div>
         </section>
+
+        <!-- Histórico (Timeline) -->
+        <section class="card" aria-labelledby="sec-hist">
+          <h2 id="sec-hist">Histórico</h2>
+          <div id="events-loading">Carregando…</div>
+          <div id="events-empty" hidden>Nenhum evento ainda</div>
+          <div id="events-list" class="timeline"></div>
+        </section>
       </div>
     </main>
 
@@ -352,4 +360,4 @@
 
   <script src="js/devolucao-editar.js"></script>
 </body>
-</html>>
+</html>

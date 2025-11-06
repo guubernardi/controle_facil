@@ -39,10 +39,27 @@ async function listDbTokens() {
          FROM ml_accounts
         WHERE access_token IS NOT NULL AND access_token <> ''`
     );
+    if (rows.length) {
+      return rows.map(r => ({
+        token: r.access_token,
+        source: r.nickname ? `db:ml_accounts.nickname(${r.nickname})` : 'db:ml_accounts',
+        nickname: r.nickname || null
+      }));
+    }
+  } catch {}
+  // fallback: ml_tokens (sem nickname)
+  try {
+    const { rows } = await query(
+      `SELECT user_id, access_token
+         FROM ml_tokens
+        WHERE access_token IS NOT NULL AND access_token <> ''
+        ORDER BY updated_at DESC NULLS LAST
+        LIMIT 5`
+    );
     return rows.map(r => ({
       token: r.access_token,
-      source: r.nickname ? `db:ml_accounts.nickname(${r.nickname})` : 'db:ml_accounts',
-      nickname: r.nickname || null
+      source: `db:ml_tokens(user_id:${r.user_id})`,
+      nickname: null
     }));
   } catch {
     return [];
@@ -73,7 +90,7 @@ async function buildTokenPool(dev) {
     }
   }
 
-  // 2) tokens de ml_accounts
+  // 2) tokens de ml_accounts (ou fallback ml_tokens)
   for (const t of await listDbTokens()) {
     if (!seen.has(t.token)) { pool.push(t); seen.add(t.token); }
   }
@@ -104,13 +121,25 @@ async function mget(token, path, { timeout = 12000 } = {}) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const r = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
-    let j = {}; try { j = await r.json(); } catch {}
+    const r = await fetch(base + path, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json'
+      },
+      signal: ctrl.signal
+    });
+    const ct = r.headers.get('content-type') || '';
+    const body = ct.includes('application/json')
+      ? await r.json().catch(() => null)
+      : await r.text().catch(() => '');
+
     if (!r.ok) {
-      const e = new Error(`${r.status} ${j?.message || j?.error || r.statusText}`);
-      e.status = r.status; e.payload = j; throw e;
+      const e = new Error(`${r.status} ${(body && (body.message || body.error)) || r.statusText}`);
+      e.status = r.status;
+      e.payload = body;
+      throw e;
     }
-    return j;
+    return body;
   } finally {
     clearTimeout(to);
   }
@@ -212,7 +241,9 @@ const getOrderItems = (o) => Array.isArray(o?.order_items) ? o.order_items : (Ar
 const sumOrderProducts = (o) => {
   let sum = 0;
   for (const it of getOrderItems(o)) {
-    const unit = toNumber(it?.unit_price ?? it?.sale_price ?? it?.price);
+    const unit = toNumber(
+      it?.unit_price ?? it?.full_unit_price ?? it?.sale_price ?? it?.price
+    );
     const qty  = toNumber(it?.quantity ?? 1);
     sum += unit * (qty || 1);
   }
@@ -228,6 +259,8 @@ function pickFreightFromOrder(order) {
     order?.shipping?.cost?.amount,
     order?.shipping?.cost,
     order?.shipping?.shipping_option?.cost,
+    order?.shipping?.shipping_option?.list_cost,
+    order?.shipping?.shipping_option?.base_cost,
   ]
     .map(n => Number(n))
     .filter(n => Number.isFinite(n) && n > 0);
@@ -278,7 +311,7 @@ module.exports = function registerMlAmounts(app) {
       meta.preferredNick = sellerNick;
 
       if (!pool.length) {
-        return res.status(400).json({ error: 'Nenhum access token disponível (verifique ml_accounts ou variáveis MELI_TOKEN_*)', meta });
+        return res.status(400).json({ error: 'Nenhum access token disponível (verifique ml_accounts/ml_tokens ou variáveis MELI_TOKEN_*)', meta });
       }
 
       // tentar descobrir claim pelo order_id
@@ -436,11 +469,11 @@ module.exports = function registerMlAmounts(app) {
       // se existir tabela de eventos, registra um log simples; senão, 204
       const hasDevEv = await tableHasColumns('devolucoes_events', ['devolucao_id','type','title','message','meta']);
       if (hasDevEv.devolucao_id) {
-        const meta = { source: 'ml-enrich', at: new Date().toISOString() };
+        const metaObj = { source: 'ml-enrich', at: new Date().toISOString() };
         await query(
           `INSERT INTO devolucoes_events (devolucao_id, type, title, message, meta)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [id, 'status', 'Enriquecimento ML', 'Amounts/claim atualizados via ML', meta]
+           VALUES ($1,$2,$3,$4,$5::jsonb)`,
+          [id, 'status', 'Enriquecimento ML', 'Amounts/claim atualizados via ML', JSON.stringify(metaObj)]
         );
         return res.status(201).json({ ok: true });
       }
