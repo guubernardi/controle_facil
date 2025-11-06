@@ -191,6 +191,102 @@ async function logEvento(returnId, type, title, message, meta) {
   } catch (_) { /* silencioso */ }
 }
 
+/* ===== Helpers: status de logística (servidor) ===== */
+function mapClaimToLog(status, substatus) {
+  const s  = String(status   || '').toLowerCase();
+  const ss = String(substatus|| '').toLowerCase();
+
+  if (/prep|prepar|embal|label|etiq|ready|pronto/.test(s) ||
+      /prep|prepar|embal|label|etiq|ready|pronto/.test(ss)) return 'preparacao';
+
+  if (/transit|transporte|enviado|ship/.test(s) ||
+      /transit|transport|enviado|ship/.test(ss)) return 'transporte';
+
+  if (/delivered|entreg|arrived|recebid/.test(s) ||
+      /delivered|entreg|arrived|recebid/.test(ss)) return 'recebido_cd';
+
+  if (/disput|chargeback|contest/.test(s) ||
+      /disput|chargeback|contest/.test(ss)) return 'disputa';
+
+  if (/mediat/.test(s) || /mediat/.test(ss)) return 'mediacao';
+
+  return null;
+}
+
+function resolveLogStatusFromRow(row, lastEventType) {
+  const raw = String(
+    row.log_status ||
+    row.ml_log_status ||
+    row.logistica_status ||
+    row.status_logistica ||
+    ''
+  ).toLowerCase();
+
+  const sub = String(
+    row.log_substatus ||
+    row.claim_substatus ||
+    row.substatus ||
+    ''
+  ).toLowerCase();
+
+  // 1) colunas diretas
+  if (/(mediat)/.test(raw)) return 'mediacao';
+  if (/(prep|prepar|embal|label|etiq|ready|pronto)/.test(raw)) return 'preparacao';
+  if (/(disput|chargeback|contest)/.test(raw)) return 'disputa';
+  if (/(transit|transporte|enviado|ship)/.test(raw)) return 'transporte';
+  if (/(delivered|entreg|arrived|recebid)/.test(raw)) return 'recebido_cd';
+
+  // 2) eventos (timeline)
+  if (lastEventType) {
+    const ev = String(lastEventType).toLowerCase();
+    if (/mediac/.test(ev)) return 'mediacao';
+    if (/pronto_envio|pronto-?envio|prepar/.test(ev)) return 'preparacao';
+    if (/em_transporte|transit/.test(ev)) return 'transporte';
+    if (/recebido_cd|recebido-?cd|entreg/.test(ev)) return 'recebido_cd';
+    if (/disputa/.test(ev)) return 'disputa';
+  }
+
+  // 3) claim_status/substatus
+  const logFromClaim = mapClaimToLog(row.claim_status, row.claim_substatus);
+  if (logFromClaim) return logFromClaim;
+
+  // 4) substatus residual
+  if (/mediat/.test(sub)) return 'mediacao';
+  if (/prep|prepar|embal|label|etiq|ready|pronto/.test(sub)) return 'preparacao';
+  if (/disput|chargeback|contest/.test(sub)) return 'disputa';
+  if (/transit|transport|enviado|ship/.test(sub)) return 'transporte';
+  if (/delivered|entreg|arrived|recebid/.test(sub)) return 'recebido_cd';
+
+  return null;
+}
+
+function inferHasMediation(row, lastEventType) {
+  if (row.mediacao === true || row.has_mediation === true || row.em_mediacao === true) return true;
+  const s = String(row.claim_status || row.status || '').toLowerCase();
+  const ss = String(row.claim_substatus || row.substatus || '').toLowerCase();
+  if (/mediat/.test(s) || /mediat/.test(ss)) return true;
+  if (lastEventType && /mediac/.test(String(lastEventType).toLowerCase())) return true;
+  return false;
+}
+
+async function loadLastEventsMap(ids) {
+  const map = new Map();
+  if (!ids?.length) return map;
+  if (!(await eventosTableExists())) return map;
+
+  const { rows } = await query(
+    `SELECT DISTINCT ON (return_id)
+            return_id, type, created_at
+       FROM devolucao_eventos
+      WHERE return_id = ANY($1)
+        AND type IN ('mediacao','disputa','pronto_envio','em_transporte','recebido_cd','status')
+      ORDER BY return_id, created_at DESC, id DESC`,
+    [ids]
+  );
+  for (const r of rows) map.set(r.return_id, r.type);
+  return map;
+}
+
 /* ============================ ROTAS ============================ */
 module.exports = function registerReturns(app) {
   /* ---------- Diagnóstico de colunas ---------- */
@@ -203,11 +299,18 @@ module.exports = function registerReturns(app) {
     }
   });
 
-  /* ---------- LISTA SIMPLES ---------- */
+  /* ---------- LISTA SIMPLES (ordenado e paginado) ---------- */
   app.get('/api/returns', async (req, res) => {
     try {
-      const { status='', page='1', pageSize='50', orderBy='updated_at', orderDir='desc' } = req.query;
+      const {
+        status = '',
+        page = '1',
+        pageSize = '15',                  // <-- default 15
+        orderBy  = 'created_at',         // <-- mais recente primeiro
+        orderDir = 'desc'
+      } = req.query;
 
+      // Campos possíveis + extras usados para inferência
       const base = [
         'id','id_venda','cliente_nome','loja_nome','sku',
         'status','log_status','status_operacional',
@@ -216,6 +319,9 @@ module.exports = function registerReturns(app) {
         'motivo','descricao','nfe_numero','nfe_chave',
         'data_compra','recebido_cd','recebido_resp','recebido_em',
         'ml_status_desc','em_mediacao',
+        // extras para inferir logística
+        'claim_status','claim_substatus','substatus',
+        'logistica_status','status_logistica',
         'created_at','updated_at'
       ];
       const cols = await tableHasColumns('devolucoes', base);
@@ -224,17 +330,21 @@ module.exports = function registerReturns(app) {
       const p = []; const where = [];
       if (status) {
         const s = nrm(status);
-        const logish = new Set(['recebido_cd','em_inspecao','postado','em transito','em_transito','aguardando_postagem','em_mediacao']);
+        const logish = new Set(['recebido_cd','em_inspecao','postado','em transito','em_transito','aguardando_postagem','em_mediacao','mediacao','preparacao','disputa','transporte']);
         if (logish.has(s) && cols.log_status) { p.push(s.replace(' ','_')); where.push(`LOWER(COALESCE(log_status,'')) = $${p.length}`); }
         else if (cols.status) { p.push(`%${s}%`); where.push(`LOWER(COALESCE(status,'')) LIKE $${p.length}`); }
       }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
+      // coluna de ordenação (fallbacks)
       const allowedOrder = new Set(select);
-      let col = allowedOrder.has(String(orderBy)) ? String(orderBy) : (cols.updated_at ? 'updated_at' : (cols.created_at ? 'created_at' : 'id'));
+      let col = allowedOrder.has(String(orderBy)) ? String(orderBy)
+              : (cols.created_at ? 'created_at'
+              : (cols.updated_at ? 'updated_at' : 'id'));
       const dir = String(orderDir).toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-      const limit  = Math.max(1, Math.min(parseInt(pageSize,10)||50, 500));
+      // paginação
+      const limit  = Math.max(1, Math.min(parseInt(pageSize,10)||15, 100));
       const pageNo = Math.max(1, parseInt(page,10)||1);
       const offset = (pageNo-1)*limit;
 
@@ -252,7 +362,35 @@ module.exports = function registerReturns(app) {
         query(sqlCount, p),
       ]);
 
-      res.json({ items: itemsQ.rows, total: countQ.rows[0]?.count || 0, page: pageNo, pageSize: limit });
+      const rows = itemsQ.rows || [];
+      const ids  = rows.map(r => r.id).filter(Boolean);
+      const lastEventsMap = await loadLastEventsMap(ids);
+
+      const items = rows.map(row => {
+        const lastType = lastEventsMap.get(row.id) || null;
+        const logStatus = resolveLogStatusFromRow(row, lastType);
+        const hasMediation = inferHasMediation(row, lastType);
+
+        // monta payload enxuto + campos calculados
+        return {
+          id: row.id,
+          id_venda: row.id_venda,
+          cliente_nome: row.cliente_nome,
+          loja_nome: row.loja_nome,
+          sku: row.sku,
+          status: row.status,
+          created_at: row.created_at ?? row.updated_at ?? null,
+          valor_produto: row.valor_produto,
+          valor_frete: row.valor_frete,
+          log_status_suggested: logStatus,
+          has_mediation: !!hasMediation
+        };
+      });
+
+      const total = countQ.rows[0]?.count || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+
+      res.json({ items, total, page: pageNo, pageSize: limit, totalPages });
     } catch (e) {
       console.error('[returns] list erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao listar devoluções.'));
@@ -264,7 +402,7 @@ module.exports = function registerReturns(app) {
     try {
       const {
         from = '', to = '', q = '',
-        page = '1', pageSize = '50',
+        page = '1', pageSize = '15',          // default 15 aqui também
         orderBy = 'created_at', orderDir = 'desc'
       } = req.query;
 
@@ -276,6 +414,9 @@ module.exports = function registerReturns(app) {
         'motivo','descricao','nfe_numero','nfe_chave',
         'data_compra','recebido_cd','recebido_resp','recebido_em',
         'ml_status_desc','em_mediacao',
+        // extras para inferir logística
+        'claim_status','claim_substatus','substatus',
+        'logistica_status','status_logistica',
         'created_at','updated_at'
       ];
       const cols = await tableHasColumns('devolucoes', base);
@@ -322,10 +463,12 @@ module.exports = function registerReturns(app) {
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
       const allowedOrder = new Set(select);
-      let col = allowedOrder.has(String(orderBy)) ? String(orderBy) : (cols.created_at ? 'created_at' : 'id');
+      let col = allowedOrder.has(String(orderBy)) ? String(orderBy)
+              : (cols.created_at ? 'created_at'
+              : (cols.updated_at ? 'updated_at' : 'id'));
       const dir = String(orderDir).toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-      const limit  = Math.max(1, Math.min(parseInt(pageSize,10)||50, 500));
+      const limit  = Math.max(1, Math.min(parseInt(pageSize,10)||15, 100));
       const pageNo = Math.max(1, parseInt(page,10)||1);
       const offset = (pageNo-1)*limit;
 
@@ -343,7 +486,33 @@ module.exports = function registerReturns(app) {
         query(sqlCount, p),
       ]);
 
-      res.json({ items: itemsQ.rows, total: countQ.rows[0]?.count || 0, page: pageNo, pageSize: limit });
+      const rows = itemsQ.rows || [];
+      const ids  = rows.map(r => r.id).filter(Boolean);
+      const lastEventsMap = await loadLastEventsMap(ids);
+
+      const items = rows.map(row => {
+        const lastType = lastEventsMap.get(row.id) || null;
+        const logStatus = resolveLogStatusFromRow(row, lastType);
+        const hasMediation = inferHasMediation(row, lastType);
+        return {
+          id: row.id,
+          id_venda: row.id_venda,
+          cliente_nome: row.cliente_nome,
+          loja_nome: row.loja_nome,
+          sku: row.sku,
+          status: row.status,
+          created_at: row.created_at ?? row.updated_at ?? null,
+          valor_produto: row.valor_produto,
+          valor_frete: row.valor_frete,
+          log_status_suggested: logStatus,
+          has_mediation: !!hasMediation
+        };
+      });
+
+      const total = countQ.rows[0]?.count || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+
+      res.json({ items, total, page: pageNo, pageSize: limit, totalPages });
     } catch (e) {
       console.error('[returns] search erro:', e);
       res.status(500).json(errPayload(e, 'Falha ao pesquisar devoluções.'));
