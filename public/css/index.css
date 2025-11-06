@@ -741,6 +741,32 @@ body {
 .badge-pendente   { background: #FFF4E5; color: #B54708; }
 .badge-info       { background: #E8F1FE; color: #1D4ED8; }
 
+/* Pílula de NOVA devolução (12h) */
+.badge-new{
+  background: #e6f4ff;
+  color: #0b5cab;
+  border: 1px solid #b6ddff;
+}
+
+/* Só pra garantir que nunca vaze do card */
+.devolucao-acoes{
+  display:flex;
+  gap:8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+@media (max-width:560px){
+  .devolucao-acoes{ justify-content:flex-start; }
+}
+
+/* Cores de fluxo (se ainda não tiver no seu CSS) */
+.badge-neutral{ background:#f1f5f9; color:#334155; border:1px solid #e2e8f0; }
+.badge-mediacao{ background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
+.badge-alerta{ background:#ffe4e6; color:#9f1239; border:1px solid #fecdd3; }
+.badge-transporte{ background:#e0f2fe; color:#075985; border:1px solid #bae6fd; }
+.badge-sucesso{ background:#dcfce7; color:#166534; border:1px solid #bbf7d0; }
+
+
 /* Mobile: empilha as pílulas embaixo do título e alinha à esquerda */
 @media (max-width: 600px){
   .devolucao-acoes{
