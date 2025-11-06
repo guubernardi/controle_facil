@@ -690,3 +690,61 @@ body {
   color: hsl(215 16% 35%); 
   border-color: hsl(215 16% 60%); 
 }
+
+/* ====== Fix pills vazando do card ====== */
+.card-devolucao { overflow: hidden; }
+
+/* Cabeçalho do card pode quebrar linha */
+.devolucao-header{
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;            /* permite quebra */
+}
+
+/* Título ocupa o que precisar, mas pode encolher */
+.devolucao-titulo-area{
+  flex: 1 1 260px;
+  min-width: 0;               /* permite ellipsis funcionar */
+}
+
+/* Área das pílulas: quebra, limita largura e alinha à direita */
+.devolucao-acoes{
+  display: flex;
+  flex: 0 1 360px;            /* pode encolher até caber */
+  min-width: 0;
+  gap: 8px;
+  margin-left: auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;            /* quebra quando faltar espaço */
+}
+
+/* Pílulas compactas e com ellipsis */
+.badge{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;          /* mais compacta */
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 600;
+  max-width: 100%;
+  white-space: nowrap;        /* mantém em 1 linha */
+  overflow: hidden;           /* corta excesso */
+  text-overflow: ellipsis;    /* reticências se precisar */
+}
+
+/* Cores (exemplos – ajuste às suas variáveis) */
+.badge-aprovado   { background: #E7F6EE; color: #117A37; }
+.badge-rejeitado  { background: #FDECEC; color: #B42318; }
+.badge-pendente   { background: #FFF4E5; color: #B54708; }
+.badge-info       { background: #E8F1FE; color: #1D4ED8; }
+
+/* Mobile: empilha as pílulas embaixo do título e alinha à esquerda */
+@media (max-width: 600px){
+  .devolucao-acoes{
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+}
