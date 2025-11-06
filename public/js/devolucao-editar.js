@@ -1,28 +1,9 @@
-// /public/js/devolucao-editar.js — ML return-cost integrado + fixes de “dirty”, claim e custos
+// /public/js/devolucao-editar.js — ML return-cost integrado + sem "Custos do ML" na UI
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
   var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
-
-  // --- Patch global: garante cookies da sessão em TODAS as requisições fetch ---
-  try {
-    var __origFetch = window.fetch ? window.fetch.bind(window) : null;
-    if (__origFetch) {
-      window.fetch = function (url, init) {
-        init = init || {};
-        // credentials sempre incluído (necessário p/ cookie de sessão cross-site)
-        if (!init.credentials) init.credentials = 'include';
-        // adiciona Accept por padrão sem sobrescrever Content-Type já definido
-        if (init.headers instanceof Headers) {
-          if (!init.headers.has('Accept')) init.headers.set('Accept', 'application/json');
-        } else {
-          init.headers = Object.assign({ 'Accept': 'application/json' }, init.headers || {});
-        }
-        return __origFetch(url, init);
-      };
-    }
-  } catch (_) {}
 
   // ---- DOM helpers (fallbacks para diferenças no HTML) ----
   function getMotivoSelect() {
@@ -465,10 +446,11 @@
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);
 
     updateSummary(d); recalc();
-    sumMlCostsAndRender(); // inicializa total custos ML, caso já existam valores digitados
+
+    // (removido) — não há mais totalização de custos do ML na UI
   }
 
-  // === ML summary UI (igual) ===
+  // === ML summary UI (informativo) ===
   function fillMlSummary(payload){
     var order = payload && (payload.order || payload.order_info);
     var amounts = payload && payload.amounts;
@@ -504,7 +486,7 @@
     var a = $('claim-open-link');
     if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
 
-    // slot dedicado p/ exibir return-cost caso exista
+    // slot p/ exibir return-cost caso exista
     if ($('ml-return-cost')) {
       if (retCost && retCost.amount != null) {
         $('ml-return-cost').textContent = moneyBRL(retCost.amount);
@@ -527,7 +509,7 @@
 
   // === Claim UI + Mediação/Status ML ===
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
-  function clearList(id){ var el=$(id); if (el).innerHTML=''; }
+  function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
   function setPillState(id, label, state){
     var el=$(id); if(!el) return;
@@ -621,7 +603,7 @@
       setTxt('ml-status-desc', human);
     } catch(_){}
 
-    // ---- NOVO: puxa custo de devolução para frete (se útil)
+    // ---- Puxa custo de devolução e tenta aplicar no frete (se útil)
     if (claim.id) {
       fetchAndApplyReturnCost(String(claim.id), { persist: true });
     }
@@ -635,7 +617,7 @@
       .catch(function(){ /* silencioso */ });
   }
 
-  // ===== NOVO: Return-cost (frete de devolução do ML)
+  // ===== Return-cost (frete de devolução do ML)
   function showReturnCostInUi(data){
     if (!data) return;
     var brl = toNum(data.amount);
@@ -671,21 +653,14 @@
     opts = opts || {};
     var url = '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?usd=true';
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      // parser robusto (aceita HTML/erro e evita exceção em 401)
-      .then(function(r){
-        return r.text().then(function(txt){
-          var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
-          return { ok: r.ok, status: r.status, body: j };
-        });
-      })
+      .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, body:j }; }); })
       .then(function(res){
         if (!res.ok) {
-          if (qs.has('debug')) console.warn('[return-cost] erro', res.status, res.body);
+          if (qs.has('debug')) console.warn('[return-cost] erro', res.body);
           return;
         }
         var data = (res.body && res.body.data) || res.body || {};
         showReturnCostInUi(data);
-        // Tenta aplicar no frete se fizer sentido
         applyReturnCostToFreight(toNum(data.amount), { persist: opts.persist });
       })
       .catch(function(){});
@@ -790,7 +765,7 @@
     if (nome !== null) runReceive(String(nome).trim());
   }
 
-  // ===== Inspeção (mantida, mas secundária na UI) =====
+  // ===== Inspeção =====
   function openInspectDialog(targetStatus){
     var dlg = $('dlg-inspecao'); if (!dlg) return performInspectFallback(targetStatus, '');
     var sub = $('insp-sub'), txt = $('insp-text');
@@ -870,78 +845,7 @@
     return acc;
   }
 
-  // ===== ML Costs: leitura, extração e aplicação =====
-  function getCostEls(){
-    return {
-      venda:  document.getElementById('ml_tarifa_venda'),
-      ida:    document.getElementById('ml_envio_ida'),
-      devol:  document.getElementById('ml_tarifa_devolucao'),
-      outros: document.getElementById('ml_outros')
-    };
-  }
-  function applyCostsToInputs(costs){
-    var els = getCostEls();
-    var changed = false;
-    function setIfClean(el, val){
-      if (!el || val == null) return;
-      if (el.dataset.dirty === '1') return; // não sobrescreve edição manual
-      var cur = toNum(el.value);
-      var nv  = toNum(val);
-      if (cur !== nv){
-        el.value = String(nv);
-        changed = true;
-      }
-    }
-    setIfClean(els.venda,  costs.sale_fee);
-    setIfClean(els.ida,    costs.shipping_out);
-    setIfClean(els.devol,  costs.return_fee);
-    setIfClean(els.outros, costs.others);
-    try { sumMlCostsAndRender(); } catch(_){}
-    return { changed: changed };
-  }
-  function extractMlCosts(j){
-    var out = { sale_fee:null, shipping_out:null, return_fee:null, others:null };
-    function pick(obj, keys){
-      if (!obj) return null;
-      for (var i=0;i<keys.length;i++){
-        var k = keys[i];
-        if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] != null && obj[k] !== ''){
-          return toNum(obj[k]);
-        }
-      }
-      return null;
-    }
-    // 1) Objetos diretos
-    var costs = j.costs || j.ml_costs || j.taxes || {};
-    out.sale_fee     = pick(costs, ['sale_fee','selling_fee','marketplace_fee','mp_fee','fee','commission']);
-    out.shipping_out = pick(costs, ['shipping_out','shipping','shipping_cost','logistics','logistic_cost']);
-    out.return_fee   = pick(costs, ['return_fee','return_shipping','reverse_shipping']);
-    // 2) Em amounts / return_cost
-    if (out.sale_fee == null)     out.sale_fee     = pick(j.amounts, ['marketplace_fee','selling_fee','fee','sale_fee']);
-    if (out.shipping_out == null) out.shipping_out = pick(j.amounts, ['shipping_cost','logistics','logistic_cost']);
-    if (out.return_fee == null)   out.return_fee   = pick(j.amounts, ['return_cost','return_amount','return_shipping']);
-    if (out.return_fee == null)   out.return_fee   = pick(j.return_cost || {}, ['amount','value']);
-    // 3) fee_details / details (array)
-    var details = j.fee_details || (j.amounts && j.amounts.details) || j.fees || [];
-    try {
-      (Array.isArray(details) ? details : []).forEach(function(f){
-        var t = String(f.type || f.name || '').toLowerCase();
-        var a = toNum(f.amount);
-        if (!a) return;
-        if (/mp|marketplace|sale|selling|fee|commission/.test(t)) out.sale_fee     = (out.sale_fee     || 0) + a;
-        else if (/return|reverse/.test(t))                        out.return_fee   = (out.return_fee   || 0) + a;
-        else if (/ship|logistic/.test(t))                         out.shipping_out = (out.shipping_out || 0) + a;
-        else                                                      out.others       = (out.others       || 0) + a;
-      });
-    } catch(_){}
-    // 4) Normaliza nulos -> zero
-    ['sale_fee','shipping_out','return_fee','others'].forEach(function(k){
-      if (out[k] == null) out[k] = 0;
-    });
-    return out;
-  }
-
-  // persistimos meta (id_venda, cliente, loja, data, sku) ANTES do reload => evita “some depois de 1s”
+  // persistimos meta (id_venda, cliente, loja, data, sku) ANTES do reload
   function persistMetaPatch(patch){
     var idp = current.id || returnId;
     if (!idp || !Object.keys(patch).length) return Promise.resolve();
@@ -1012,24 +916,6 @@
                ((freight !== null) ? ' · frete '   + moneyBRL(freight) : ''), 'success');
         } else {
           toast('Valores do ML já estavam corretos.', 'info');
-        }
-
-        // ====== custos do ML (auto) ======
-        var costs = extractMlCosts(j);
-        var applied = applyCostsToInputs(costs);
-        if (applied.changed) {
-          var costPatch = {
-            ml_tarifa_venda:      costs.sale_fee,
-            ml_envio_ida:         costs.shipping_out,
-            ml_tarifa_devolucao:  costs.return_fee,
-            ml_outros:            costs.others,
-            updated_by:           'frontend-auto-costs'
-          };
-          fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(costPatch)
-          }).catch(function(){ /* best-effort */ });
         }
 
         // ---- Dados do pedido (vazios) -> patch + persist
@@ -1211,82 +1097,6 @@
       .then(function(){ if (elLoad) elLoad.hidden=true; if (elList) elList.setAttribute('aria-busy','false'); });
   }
 
-  // ===== Custos do ML (UI + persistência best-effort)
-  function sumMlCostsAndRender(){
-    var v1 = toNum(($('ml_tarifa_venda')||{}).value || 0);
-    var v2 = toNum(($('ml_envio_ida')||{}).value || 0);
-    var v3 = toNum(($('ml_tarifa_devolucao')||{}).value || 0);
-    var v4 = toNum(($('ml_outros')||{}).value || 0);
-    var total = v1 + v2 + v3 + v4;
-    var out = $('ml_total_custos');
-    if (out) out.value = moneyBRL(total);
-    return { v1:v1, v2:v2, v3:v3, v4:v4, total: total };
-  }
-  ['ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros'].forEach(function(id){
-    var el=$(id); if (!el) return;
-    bindDirty(el);
-    el.addEventListener('input', sumMlCostsAndRender);
-  });
-
-  function saveMlCosts(){
-    var id = current.id || returnId;
-    if (!id) { toast('ID inválido.', 'error'); return; }
-    var c = sumMlCostsAndRender();
-    var body = {
-      ml_tarifa_venda: c.v1,
-      ml_envio_ida: c.v2,
-      ml_tarifa_devolucao: c.v3,
-      ml_outros: c.v4,
-      updated_by: 'frontend-ml-costs'
-    };
-    return fetch('/api/returns/' + encodeURIComponent(id), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-    .then(function(r){
-      if (!r.ok) throw new Error('Falha ao salvar custos');
-    })
-    .then(function(){ toast('Custos do ML salvos (quando suportado).', 'success'); })
-    .catch(function(){ toast('Não foi possível salvar os custos no backend. (Campos podem não existir ainda.)', 'warning'); });
-  }
-  var btnMlCosts=$('btn-ml-costs-save'); if (btnMlCosts) btnMlCosts.addEventListener('click', saveMlCosts);
-
-  // ===== Marcação operacional =====
-  function applyMark(){
-    var id = current.id || returnId; if (!id) return;
-    var sel = $('mark-op'); var obsEl = $('mark-obs');
-    var op = sel ? sel.value : 'em_espera';
-    var obs = obsEl ? obsEl.value.trim() : '';
-
-    var patch = {};
-    if (op === 'concluida') patch.status = 'aprovado';
-    else if (op === 'em_espera') patch.status = 'pendente';
-    else if (op === 'troca') patch.status = 'aprovado';
-    else if (op === 'reembolso_parcial') patch.status = 'aprovado';
-
-    if (op === 'defeituosa') patch.tipo_reclamacao = 'produto_defeituoso';
-
-    var atual = $('reclamacao') ? $('reclamacao').value.trim() : '';
-    var append = obs ? ((atual ? (atual + '\n') : '') + '[Marcação] ' + op.replace(/_/g,' ') + (obs ? (': ' + obs) : '')) : null;
-    if (append) patch.reclamacao = append;
-
-    patch.updated_by = 'frontend-mark';
-
-    disableHead(true);
-    fetch('/api/returns/' + encodeURIComponent(id), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch)
-    })
-    .then(function(r){ if(!r.ok) throw new Error('Falha ao aplicar marcação'); })
-    .then(function(){ return reloadCurrent(); })
-    .then(function(){ toast('Marcação aplicada.', 'success'); return refreshTimeline(id); })
-    .catch(function(e){ toast(e.message || 'Erro ao marcar', 'error'); })
-    .then(function(){ disableHead(false); });
-  }
-  var btnMark=$('btn-mark'); if (btnMark) btnMark.addEventListener('click', applyMark);
-
   // ===== Atalhos =====
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
@@ -1311,7 +1121,7 @@
   var btnEnrich=$('btn-enrich'); if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
 
   function disableHead(disabled){
-    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd','btn-mark','btn-ml-costs-save']
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd','btn-mark']
       .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
   }
 
@@ -1324,7 +1134,7 @@
       .then(function(){
         upperSKUInstant(); // garante uppercase sempre
         // marca os campos como "dirty-aware"
-        ['ml_tarifa_venda','ml_envio_ida','ml_tarifa_devolucao','ml_outros','valor_produto','valor_frete'].forEach(function(id){ var el=$(id); if (el) bindDirty(el); });
+        ['valor_produto','valor_frete'].forEach(function(id){ var el=$(id); if (el) bindDirty(el); });
 
         var needMotivoConvert = !!current.tipo_reclamacao && !/_/.test(String(current.tipo_reclamacao)) && current.tipo_reclamacao !== 'nao_corresponde';
         var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda);
