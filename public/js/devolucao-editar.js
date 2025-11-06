@@ -5,6 +5,25 @@
   var qs = new URLSearchParams(location.search);
   var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
 
+  // --- Patch global: garante cookies da sessão em TODAS as requisições fetch ---
+  try {
+    var __origFetch = window.fetch ? window.fetch.bind(window) : null;
+    if (__origFetch) {
+      window.fetch = function (url, init) {
+        init = init || {};
+        // credentials sempre incluído (necessário p/ cookie de sessão cross-site)
+        if (!init.credentials) init.credentials = 'include';
+        // adiciona Accept por padrão sem sobrescrever Content-Type já definido
+        if (init.headers instanceof Headers) {
+          if (!init.headers.has('Accept')) init.headers.set('Accept', 'application/json');
+        } else {
+          init.headers = Object.assign({ 'Accept': 'application/json' }, init.headers || {});
+        }
+        return __origFetch(url, init);
+      };
+    }
+  } catch (_) {}
+
   // ---- DOM helpers (fallbacks para diferenças no HTML) ----
   function getMotivoSelect() {
     return $('tipo_reclamacao')
@@ -508,7 +527,7 @@
 
   // === Claim UI + Mediação/Status ML ===
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
-  function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
+  function clearList(id){ var el=$(id); if (el).innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
   function setPillState(id, label, state){
     var el=$(id); if(!el) return;
@@ -652,11 +671,16 @@
     opts = opts || {};
     var url = '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?usd=true';
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, body:j }; }); })
+      // parser robusto (aceita HTML/erro e evita exceção em 401)
+      .then(function(r){
+        return r.text().then(function(txt){
+          var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
+          return { ok: r.ok, status: r.status, body: j };
+        });
+      })
       .then(function(res){
         if (!res.ok) {
-          // 404 claim not found, 401 token, etc — silencioso mas mostra no debug
-          if (qs.has('debug')) console.warn('[return-cost] erro', res.body);
+          if (qs.has('debug')) console.warn('[return-cost] erro', res.status, res.body);
           return;
         }
         var data = (res.body && res.body.data) || res.body || {};
