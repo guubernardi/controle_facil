@@ -453,6 +453,9 @@ router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (re
  * GET /api/ml/claims/:id/charges/return-cost
  * Query opcional:
  *   ?usd=true  -> repassa calculate_amount_usd=true
+ *
+ * Retorno (top-level), compatível com o front:
+ *   { amount: number, currency_id: string, amount_usd?: number|null }
  */
 router.get('/claims/:id/charges/return-cost', async (req, res) => {
   try {
@@ -464,13 +467,11 @@ router.get('/claims/:id/charges/return-cost', async (req, res) => {
     const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}/charges/return-cost${qs}`;
 
     const out = await mlFetch(req, url);
-    const data = {
-      claim_id: Number(claimId) || claimId,
-      currency_id: out?.currency_id || 'BRL',
+    return res.json({
       amount: Number(out?.amount || 0),
+      currency_id: out?.currency_id || 'BRL',
       amount_usd: (out?.amount_usd != null ? Number(out.amount_usd) : null)
-    };
-    return res.json({ data });
+    });
   } catch (e) {
     const s = e.status || 500;
     return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
