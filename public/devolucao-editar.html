@@ -212,7 +212,7 @@
             <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="input-readonly" readonly />
           </div>
 
-          <!-- Resumo ML -->
+          <!-- Resumo ML (somente informativo) -->
           <div class="ml-summary" aria-live="polite">
             <div class="ml-pair">
               <span>Produto (ML):</span>
@@ -226,57 +226,6 @@
               <span>Return cost (ML):</span>
               <strong id="ml-return-cost">—</strong>
               <small id="ml-return-cost-usd" class="muted">—</small>
-            </div>
-          </div>
-
-          <!-- Custos do ML -->
-          <div class="subcard">
-            <h3>Custos do ML</h3>
-            
-            <div class="row-group">
-              <div class="row">
-                <label for="ml_tarifa_venda">Tarifa de venda</label>
-                <input id="ml_tarifa_venda" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off" />
-              </div>
-              <div class="row">
-                <label for="ml_envio_ida">Envio (ida)</label>
-                <input id="ml_envio_ida" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off" />
-              </div>
-            </div>
-
-            <div class="row-group">
-              <div class="row">
-                <label for="ml_tarifa_devolucao">Tarifa de devolução</label>
-                <input id="ml_tarifa_devolucao" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off" />
-              </div>
-              <div class="row">
-                <label for="ml_outros">Outros custos</label>
-                <input id="ml_outros" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off" />
-              </div>
-            </div>
-
-            <div class="total-line row">
-              <label for="ml_total_custos">Total de custos do ML</label>
-              <input id="ml_total_custos" type="text" readonly class="input-readonly" placeholder="0,00" />
-            </div>
-
-            <div class="ml-meta">
-              <div>
-                <span>Situação no ML:</span>
-                <strong id="ml-status-desc">—</strong>
-              </div>
-              <div>
-                <span>Mediação:</span>
-                <span id="pill-mediacao" class="pill -neutro">
-                  Sem mediação
-                </span>
-              </div>
-            </div>
-
-            <div class="row">
-              <button id="btn-ml-costs-save" type="button" class="btn btn--outline btn-full">
-                Salvar custos do ML
-              </button>
             </div>
           </div>
 
