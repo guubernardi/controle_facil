@@ -11,18 +11,17 @@
   <meta property="og:description" content="Gerencie todas as devoluções com eficiência e praticidade"/>
   <meta property="og:type" content="website"/>
 
-  <!-- Adicionando CSS da sidebar antes do CSS principal -->
+  <!-- Estilos -->
   <link rel="stylesheet" href="css/navigation.css">
   <link rel="stylesheet" href="css/index.css">
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="icon" href="assets/img/favicon.png" type="image/png"/>
-  <script src="js/navigation.js"></script>
 </head>
 
 <body class="index-page" data-page="devolucoes">
-  <!-- Adicionando sidebar completa -->
+  <!-- Sidebar -->
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">
@@ -36,7 +35,6 @@
     </div>
 
     <nav class="sidebar-nav">
-      <!-- HOME -->
       <a href="home.html" class="sidebar-nav-item" data-page="home">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -45,7 +43,6 @@
         <span class="sidebar-nav-text">Home</span>
       </a>
 
-      <!-- CENTRAL -->
       <a href="central.html" class="sidebar-nav-item" data-page="central">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="7" height="7"/>
@@ -56,7 +53,6 @@
         <span class="sidebar-nav-text">Central</span>
       </a>
 
-      <!-- DEVOLUÇÕES (index.html) -->
       <a href="index.html" class="sidebar-nav-item" data-page="devolucoes">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="9 14 4 9 9 4"/>
@@ -65,7 +61,6 @@
         <span class="sidebar-nav-text">Devoluções</span>
       </a>
 
-      <!-- DASHBOARDS & RELATÓRIOS -->
       <a href="dashboard.html" class="sidebar-nav-item" data-page="dashboards">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="20" x2="18" y2="8"/>
@@ -75,7 +70,6 @@
         <span class="sidebar-nav-text">Dashboards &amp; Relatórios</span>
       </a>
 
-      <!-- LOGS -->
       <a href="logs.html" class="sidebar-nav-item" data-page="logs">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -87,7 +81,6 @@
         <span class="sidebar-nav-text">Logs</span>
       </a>
 
-      <!-- CHAT -->
       <a href="chat.html" class="sidebar-nav-item" data-page="chat">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
@@ -95,7 +88,6 @@
         <span class="sidebar-nav-text">Chat</span>
       </a>
 
-      <!-- CONFIGURAÇÕES -->
       <a href="settings/config.html" class="sidebar-nav-item" data-page="settings">
         <svg class="sidebar-nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
@@ -105,14 +97,11 @@
       </a>
     </nav>
 
-    <div class="sidebar-footer">
-      <!-- O JavaScript navigation.js vai preencher isso dinamicamente -->
-    </div>
+    <div class="sidebar-footer"></div>
   </aside>
 
-  <!-- Adicionando overlay e botão FAB mobile -->
+  <!-- Overlay e FAB mobile -->
   <div id="sidebar-overlay" class="sidebar-overlay"></div>
-
   <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Abrir menu">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M3 12h18M3 6h18M3 18h18"/>
@@ -184,8 +173,10 @@
       <section id="lista-devolucoes" class="secao-lista" aria-busy="false">
         <h2 class="sec-title">Devoluções (<span id="lista-count">0</span>)</h2>
 
+        <!-- Cards -->
         <div id="container-devolucoes" class="container-devolucoes" role="list"></div>
 
+        <!-- Mensagem vazia -->
         <div id="mensagem-vazia" class="mensagem-vazia" hidden>
           <div class="card-vazio">
             <svg class="icone-vazio" viewBox="0 0 120 120" fill="none" aria-hidden="true">
@@ -200,14 +191,49 @@
             <p id="descricao-vazia" class="descricao-vazio">Ajuste os filtros de pesquisa</p>
           </div>
         </div>
+
+        <!-- Paginação -->
+        <nav id="paginacao" class="paginacao" aria-label="Paginação"></nav>
       </section>
 
       <!-- LOADING SKELETON -->
       <section id="loading-skeleton" class="secao-lista" hidden>
         <div class="skeleton-container" aria-hidden="true">
-          <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-line skeleton-title"></div><div class="skeleton-badge"></div></div><div class="skeleton-body"><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
-          <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-line skeleton-title"></div><div class="skeleton-badge"></div></div><div class="skeleton-body"><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
-          <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-line skeleton-title"></div><div class="skeleton-badge"></div></div><div class="skeleton-body"><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
+          <div class="skeleton-card">
+            <div class="skeleton-header">
+              <div class="skeleton-line skeleton-title"></div>
+              <div class="skeleton-badge"></div>
+            </div>
+            <div class="skeleton-body">
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line short"></div>
+            </div>
+          </div>
+
+          <div class="skeleton-card">
+            <div class="skeleton-header">
+              <div class="skeleton-line skeleton-title"></div>
+              <div class="skeleton-badge"></div>
+            </div>
+            <div class="skeleton-body">
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line short"></div>
+            </div>
+          </div>
+
+          <div class="skeleton-card">
+            <div class="skeleton-header">
+              <div class="skeleton-line skeleton-title"></div>
+              <div class="skeleton-badge"></div>
+            </div>
+            <div class="skeleton-body">
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line short"></div>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -229,7 +255,7 @@
     Ative o JavaScript para usar o Controle Fácil.
   </noscript>
 
-  <!-- Adicionando script da sidebar antes do script principal -->
+  <!-- Scripts -->
   <script src="js/navigation.js"></script>
   <script src="js/index.js"></script>
 </body>

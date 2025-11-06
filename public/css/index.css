@@ -612,3 +612,81 @@ body {
     width: 100%;
   }
 }
+
+/* Paginação */
+.paginacao { margin-top: 1.25rem; display: flex; justify-content: center; }
+
+.paginacao-wrap { display: inline-flex; gap: .375rem; align-items: center; }
+
+.page-btn {
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  border-radius: .5rem;
+  padding: .5rem .75rem;
+  font-size: .875rem;
+  cursor: pointer;
+}
+
+.page-btn:hover { 
+  background: var(--muted); 
+  border-color: var(--primary); 
+}
+
+.page-btn.is-current {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.page-ellipsis { 
+  padding: 0 .25rem; 
+  color: var(--muted-foreground); 
+}
+
+/* Selo de fluxo/logística (secundário) */
+.badge-fluxo { 
+  border: 1px dashed var(--border); 
+}
+
+.badge-disputa    { 
+  background: hsl(268 83% 60% / .12); 
+  color: hsl(268 83% 45%); 
+  border-color: hsl(268 83% 75%); 
+}
+
+.badge-transporte { 
+  background: hsl(214 100% 50% / .10); 
+  color: hsl(214 100% 40%); 
+  border-color: hsl(214 100% 80%); 
+}
+
+.badge-prep       { 
+  background: hsl(45 93% 47% / .12);  
+  color: hsl(45 93% 35%);  
+  border-color: hsl(45 93% 70%); 
+}
+
+.badge-pronto     { 
+  background: hsl(200 90% 50% / .12); 
+  color: hsl(200 90% 35%); 
+  border-color: hsl(200 90% 70%); 
+}
+
+.badge-recebido   { 
+  background: hsl(142 76% 36% / .12); 
+  color: hsl(142 76% 28%); 
+  border-color: hsl(142 76% 60%); 
+}
+
+.badge-inspecao   { 
+  background: hsl(12 90% 55% / .12); 
+  color: hsl(12 90% 40%);  
+  border-color: hsl(12 90% 70%); 
+}
+
+.badge-fechado    { 
+  background: hsl(215 16% 47% / .12); 
+  color: hsl(215 16% 35%); 
+  border-color: hsl(215 16% 60%); 
+}
