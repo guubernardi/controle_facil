@@ -52,7 +52,7 @@ async function listDbTokens() {
     }
   } catch {}
 
-  // fallback ml_tokens
+  // fallback ml_tokens (caso seu projeto use esta tabela)
   try {
     const { rows } = await query(
       `SELECT user_id, access_token
@@ -70,6 +70,7 @@ async function listDbTokens() {
     return [];
   }
 }
+
 function listEnvTokens() {
   const items = [];
   for (const k of Object.keys(process.env)) {
@@ -81,6 +82,7 @@ function listEnvTokens() {
   if (process.env.ML_ACCESS_TOKEN)  items.push({ token: process.env.ML_ACCESS_TOKEN,  source: 'env:ML_ACCESS_TOKEN',  nickname: null });
   return items.filter(t => notBlank(t.token));
 }
+
 async function buildTokenPool(dev) {
   const pool = [];
   const seen = new Set();
@@ -101,6 +103,7 @@ async function buildTokenPool(dev) {
   }
   return { pool, guessedNick: nick || null };
 }
+
 function preferNick(pool, sellerNick) {
   if (!sellerNick) return pool;
   const wanted = String(sellerNick).toLowerCase().trim();
@@ -134,6 +137,7 @@ async function mget(token, path, { timeout = 12000 } = {}) {
     return body;
   } finally { clearTimeout(to); }
 }
+
 async function mgetWithAnyToken(tokens, path, meta, tag) {
   let lastErr = null;
   for (const t of tokens) {
@@ -160,7 +164,12 @@ const CODE_TO_LABEL = {
   PDD9944: 'Defeito de produção'
 };
 const labelFromCode = (code)=> CODE_TO_LABEL[String(code||'').toUpperCase()] || null;
-function normalizeKey(s=''){ try{ return String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase(); }catch{ return String(s).toLowerCase(); } }
+
+function normalizeKey(s=''){
+  try{ return String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase(); }
+  catch{ return String(s).toLowerCase(); }
+}
+
 function labelFromReasonKey(key){
   const k = String(key||'').toLowerCase();
   if (['cliente_arrependimento','buyer_remorse','changed_mind','doesnt_fit','size_issue'].includes(k)) return 'Cliente: arrependimento';
@@ -170,6 +179,7 @@ function labelFromReasonKey(key){
   if (['pedido_incorreto','wrong_item','different_from_publication','not_as_described','mixed_order','different_product','different_variant','different_color','wrong_color','color_mismatch','variant_mismatch'].includes(k)) return 'Pedido incorreto';
   return null;
 }
+
 function labelFromReasonName(name='') {
   const s = normalizeKey(name), has = (kw)=> s.includes(kw);
   if (has('arrepend') || has('tamanho') || has('size') || has('changed mind') || has('didn t like')) return 'Cliente: arrependimento';
@@ -218,6 +228,7 @@ function pickFreightFromOrder(order) {
   ].map(Number).filter(n => Number.isFinite(n) && n > 0);
   return cands.length ? cands[0] : null;
 }
+
 function computeReasonExtras(claim) {
   if (!claim) return { reason_label: null };
   const reasonId   = claim?.reason_id || claim?.reason?.id || null;
@@ -233,7 +244,7 @@ function computeReasonExtras(claim) {
 // ===== Rotas =================================================================
 module.exports = function registerMlAmounts(app) {
 
-  // ---------- FETCH AMOUNTS (principal usado pelo botão "Atualizar dados (ML)") ----------
+  // ---------- FETCH AMOUNTS (botão "Atualizar dados (ML)") ----------
   app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
     const meta = { steps: [], errors: [], tried: [], tokenFrom: null, sellerNick: null, preferredNick: null };
     try {
@@ -351,14 +362,14 @@ module.exports = function registerMlAmounts(app) {
     }
   });
 
-  // ---------- PROXY: detalhes do claim ----------
+  // ---------- PROXY: detalhes do claim (suporta ?seller_nick=) ----------
   app.get('/api/ml/claims/:id', async (req, res) => {
-    const meta = { tried: [], errors: [] };
+    const meta = { tried: [], errors: [], preferredNick: null };
     try {
       const claimId = String(req.params.id || '').trim();
       if (!claimId) return res.status(400).json({ error: 'claim_id ausente' });
 
-      // tenta achar uma devolução ligada a esse claim para inferir loja_nome/nick
+      // tenta achar devolução ligada ao claim (para inferir loja/nick)
       let dev = { loja_nome: null };
       try {
         const { rows } = await query(
@@ -369,28 +380,36 @@ module.exports = function registerMlAmounts(app) {
         if (rows.length) dev = rows[0];
       } catch {}
 
-      const { pool } = await buildTokenPool(dev);
-      if (!pool.length) return res.status(400).json({ error: 'Nenhum token disponível' });
+      const { pool: basePool, guessedNick } = await buildTokenPool(dev);
+      if (!basePool.length) return res.status(400).json({ error: 'Nenhum token disponível' });
+
+      const sellerNick = String(req.query.seller_nick || '').trim() || guessedNick || null;
+      meta.preferredNick = sellerNick || null;
+      const pool = preferNick(basePool, sellerNick);
 
       try {
         const { data } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}`, meta, 'claim');
         return res.json({ ok: true, data, meta });
       } catch (e) {
-        return res.status(e.status || 502).json({ error: e.message, meta, payload: e.payload || null });
+        const code = e.status || 502;
+        const label =
+          e.status === 401 ? 'missing_or_invalid_access_token' :
+          e.status === 403 ? 'forbidden_for_seller' :
+          'ml_error';
+        return res.status(code).json({ error: label, detail: e.message, meta, payload: e.payload || null });
       }
     } catch (e) {
       return res.status(500).json({ error: 'Falha ao consultar claim', detail: e?.message || String(e) });
     }
   });
 
-  // ---------- PROXY: return-cost do claim (com suporte a ?usd=true) ----------
+  // ---------- PROXY: return-cost (suporta ?seller_nick= & ?usd=true) ----------
   app.get('/api/ml/claims/:id/charges/return-cost', async (req, res) => {
-    const meta = { tried: [], errors: [], usd: !!req.query.usd };
+    const meta = { tried: [], errors: [], usd: !!req.query.usd, preferredNick: null };
     try {
       const claimId = String(req.params.id || '').trim();
       if (!claimId) return res.status(400).json({ error: 'claim_id ausente' });
 
-      // mesma lógica: tenta inferir token pelo nick
       let dev = { loja_nome: null };
       try {
         const { rows } = await query(
@@ -401,36 +420,49 @@ module.exports = function registerMlAmounts(app) {
         if (rows.length) dev = rows[0];
       } catch {}
 
-      const { pool } = await buildTokenPool(dev);
-      if (!pool.length) return res.status(400).json({ error: 'Nenhum token disponível' });
+      const { pool: basePool, guessedNick } = await buildTokenPool(dev);
+      if (!basePool.length) return res.status(400).json({ error: 'Nenhum token disponível' });
 
-      const { data } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`, meta, 'return-cost');
+      const sellerNick = String(req.query.seller_nick || '').trim() || guessedNick || null;
+      meta.preferredNick = sellerNick || null;
+      const pool = preferNick(basePool, sellerNick);
 
-      // opcional: converter para USD se currency != USD
-      let out = { ...data };
-      if (req.query.usd && data && typeof data === 'object') {
-        try {
-          const cur = (data.currency_id || data.currency) || 'BRL';
-          const amt = Number(data.amount);
-          if (cur && Number.isFinite(amt) && cur !== 'USD') {
-            const u = `https://api.mercadolibre.com/currency_conversions/search?from=${encodeURIComponent(cur)}&to=USD`;
-            const r = await _fetch(u, { headers: { Accept: 'application/json' } });
-            const j = await r.json().catch(() => ({}));
-            const rate = Number(j?.ratio || j?.conversion_rate || j?.rate);
-            if (Number.isFinite(rate) && rate > 0) out.amount_usd = +(amt * rate).toFixed(2);
-          } else if (cur === 'USD') {
-            out.amount_usd = amt;
-          }
-        } catch {}
+      try {
+        const { data } = await mgetWithAnyToken(pool, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`, meta, 'return-cost');
+
+        // conversão opcional para USD
+        let out = { ...data };
+        if (req.query.usd && data && typeof data === 'object') {
+          try {
+            const cur = (data.currency_id || data.currency) || 'BRL';
+            const amt = Number(data.amount);
+            if (cur && Number.isFinite(amt) && cur !== 'USD') {
+              const u = `https://api.mercadolibre.com/currency_conversions/search?from=${encodeURIComponent(cur)}&to=USD`;
+              const r = await _fetch(u, { headers: { Accept: 'application/json' } });
+              const j = await r.json().catch(() => ({}));
+              const rate = Number(j?.ratio || j?.conversion_rate || j?.rate);
+              if (Number.isFinite(rate) && rate > 0) out.amount_usd = +(amt * rate).toFixed(2);
+            } else if (cur === 'USD') {
+              out.amount_usd = amt;
+            }
+          } catch {}
+        }
+
+        return res.json({ ok: true, data: out, meta });
+      } catch (e) {
+        const code = e.status || 502;
+        const label =
+          e.status === 401 ? 'missing_or_invalid_access_token' :
+          e.status === 403 ? 'forbidden_for_seller' :
+          'ml_error';
+        return res.status(code).json({ error: label, detail: e.message, meta, payload: e.payload || null });
       }
-
-      return res.json({ ok: true, data: out, meta });
     } catch (e) {
       return res.status(500).json({ error: 'Falha ao consultar return-cost', detail: e?.message || String(e) });
     }
   });
 
-  // ---------- PROXIES de REASONS (já usados pelo front) ----------
+  // ---------- PROXIES de REASONS ----------
   async function proxyReasonById(req, res) {
     const meta = { steps: [], errors: [], tried: [] };
     try {
