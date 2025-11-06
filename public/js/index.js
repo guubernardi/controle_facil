@@ -1,24 +1,19 @@
-// Sistema de Devoluções - Feed Geral (index.html)
+// Sistema de Devoluções - Feed Geral (compatível com index.html)
 class DevolucoesFeed {
   constructor() {
-    // estado
     this.items = [];
     this.filtros = { pesquisa: "", status: "todos" };
     this.RANGE_DIAS = 30;
 
-    // paginação
-    this.pageSize = 15;
-    this.page = 1;
+    // janela de "novo" (12h)
+    this.NEW_WINDOW_MS = 12 * 60 * 60 * 1000;
 
-    // grupos de status internos
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
       rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
       finalizado: new Set([
-        "concluido", "concluida",
-        "finalizado", "finalizada",
-        "fechado", "fechada",
-        "encerrado", "encerrada",
+        "concluido","concluida","finalizado","finalizada",
+        "fechado","fechada","encerrado","encerrada",
       ]),
       pendente: new Set(["pendente", "em_analise", "em-analise", "aberto"]),
     };
@@ -32,23 +27,20 @@ class DevolucoesFeed {
     this.renderizar();
   }
 
-  // ========= Utils =========
+  // ========= Helpers =========
   safeJson(res) {
     if (!res.ok) throw new Error("HTTP " + res.status);
     if (res.status === 204) return {};
     return res.json();
   }
-
   coerceReturnsPayload(j) {
     if (Array.isArray(j)) return j;
     if (!j || typeof j !== "object") return [];
     return j.items || j.data || j.returns || j.list || [];
   }
-
   formatBRL(n) {
     return Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   }
-
   dataBr(iso) {
     if (!iso) return "—";
     try {
@@ -57,67 +49,23 @@ class DevolucoesFeed {
       return "—";
     }
   }
-
   esc(str) {
     const div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
   }
 
-  getDateMs(d) {
-    // tenta vários campos possíveis
-    const cands = [
-      d.created_at, d.createdAt, d.created,
-      d.dt, d.data, d.inserted_at, d.updated_at,
-    ].filter(Boolean);
-    for (const x of cands) {
-      const t = Date.parse(x);
-      if (!Number.isNaN(t)) return t;
-    }
-    // fallback: usa id numérico decrescente se parecer número
-    const idn = Number(d.id);
-    return Number.isFinite(idn) ? idn : 0;
+  // nova devolução (<= 12h desde created_at)
+  isNova(createdAt) {
+    if (!createdAt) return false;
+    const t = new Date(createdAt).getTime();
+    if (!Number.isFinite(t)) return false;
+    return Date.now() - t <= this.NEW_WINDOW_MS;
   }
 
   // ========= Carregamento =========
   getMockData() {
     return [
-      {
-        id: "4",
-        id_venda: "DEV-2024-004",
-        cliente_nome: "Ana Oliveira",
-        loja_nome: "Loja Matriz",
-        sku: "PROD-004",
-        status: "em_analise",
-        log_status: "em_preparacao",
-        created_at: "2024-01-15T16:45:00Z",
-        valor_produto: 599.9,
-        valor_frete: 25.0,
-      },
-      {
-        id: "3",
-        id_venda: "DEV-2024-003",
-        cliente_nome: "Pedro Costa",
-        loja_nome: "Loja Online",
-        sku: "PROD-003",
-        status: "rejeitado",
-        log_status: "fechado",
-        created_at: "2024-01-14T09:15:00Z",
-        valor_produto: 89.9,
-        valor_frete: 8.0,
-      },
-      {
-        id: "2",
-        id_venda: "DEV-2024-002",
-        cliente_nome: "Maria Santos",
-        loja_nome: "Loja Shopping",
-        sku: "PROD-002",
-        status: "aprovado",
-        log_status: "pronto_envio",
-        created_at: "2024-01-13T14:30:00Z",
-        valor_produto: 149.9,
-        valor_frete: 12.0,
-      },
       {
         id: "1",
         id_venda: "DEV-2024-001",
@@ -125,8 +73,8 @@ class DevolucoesFeed {
         loja_nome: "Loja Centro",
         sku: "PROD-001",
         status: "pendente",
-        log_status: "em_transporte",
-        created_at: "2024-01-12T10:00:00Z",
+        log_status_suggested: null,
+        created_at: "2024-01-14T10:00:00Z",
         valor_produto: 299.9,
         valor_frete: 15.0,
       },
@@ -136,14 +84,14 @@ class DevolucoesFeed {
   async carregar() {
     this.toggleSkeleton(true);
     try {
-      const url = `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`;
-      const j = await fetch(url, { headers: { Accept: "application/json" } })
+      // backend já pagina e ordena por padrão (page=1, pageSize=15, created_at DESC)
+      const j = await fetch(`/api/returns`, { headers: { Accept: "application/json" } })
         .then((r) => this.safeJson(r))
         .catch(() => null);
       const list = this.coerceReturnsPayload(j);
       this.items = Array.isArray(list) && list.length ? list : this.getMockData();
     } catch (e) {
-      console.warn("[index] Falha ao carregar devoluções. Usando mock.", e?.message);
+      console.warn("[index] Falha ao carregar. Usando mock.", e?.message);
       this.items = this.getMockData();
       this.toast("Aviso", "Não foi possível carregar da API. Exibindo dados de exemplo.", "erro");
     } finally {
@@ -170,7 +118,6 @@ class DevolucoesFeed {
     const campo = document.getElementById("campo-pesquisa");
     campo?.addEventListener("input", (e) => {
       this.filtros.pesquisa = String(e.target.value || "").trim();
-      this.page = 1; // reset página ao filtrar
       this.renderizar();
     });
 
@@ -178,7 +125,6 @@ class DevolucoesFeed {
     selectFallback?.addEventListener("change", (e) => {
       const novo = (e.target.value || "todos").toLowerCase();
       this.filtros.status = novo;
-      this.page = 1; // reset página ao filtrar
       this.renderizar();
     });
 
@@ -199,17 +145,6 @@ class DevolucoesFeed {
         this.abrirDetalhes(id);
       }
     });
-
-    // Paginação (delegação)
-    document.getElementById("paginacao")?.addEventListener("click", (e) => {
-      const a = e.target.closest("button[data-page]");
-      if (!a) return;
-      const p = Number(a.getAttribute("data-page"));
-      if (!Number.isFinite(p)) return;
-      if (p === this.page) return;
-      this.page = p;
-      this.renderizar();
-    });
   }
 
   // ========= Render =========
@@ -218,28 +153,21 @@ class DevolucoesFeed {
     const vazio = document.getElementById("mensagem-vazia");
     const descVazio = document.getElementById("descricao-vazia");
     const countEl = document.getElementById("lista-count");
-    const pag = document.getElementById("paginacao");
     if (!container) return;
 
     const q = (this.filtros.pesquisa || "").toLowerCase();
     const st = (this.filtros.status || "todos").toLowerCase();
 
-    // filtrar
     const filtrados = (this.items || []).filter((d) => {
-      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status]
+      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status_suggested]
         .map((x) => String(x || "").toLowerCase())
         .some((s) => s.includes(q));
       const statusMatch = st === "todos" || this.grupoStatus(d.status) === st;
       return textoMatch && statusMatch;
     });
 
-    // ordenar por data desc (mais recente primeiro)
-    filtrados.sort((a, b) => this.getDateMs(b) - this.getDateMs(a));
+    if (countEl) countEl.textContent = filtrados.length;
 
-    // contagem
-    if (countEl) countEl.textContent = String(filtrados.length);
-
-    // vazio
     if (!filtrados.length) {
       container.style.display = "none";
       if (vazio) {
@@ -247,78 +175,42 @@ class DevolucoesFeed {
         if (descVazio)
           descVazio.textContent = q || (st !== "todos" ? "Tente ajustar os filtros" : "Ajuste os filtros de pesquisa");
       }
-      if (pag) pag.innerHTML = "";
       return;
     }
 
-    // paginação
-    const total = filtrados.length;
-    const totalPages = Math.max(1, Math.ceil(total / this.pageSize));
-    if (this.page > totalPages) this.page = totalPages;
-    const start = (this.page - 1) * this.pageSize;
-    const end = start + this.pageSize;
-    const pageItems = filtrados.slice(start, end);
-
-    // render cards
     container.style.display = "grid";
     if (vazio) vazio.hidden = true;
     container.innerHTML = "";
-    pageItems.forEach((d, i) => {
+
+    filtrados.forEach((d, i) => {
       const card = this.card(d, i);
       card.setAttribute("role", "listitem");
       container.appendChild(card);
     });
-
-    // render paginação
-    this.renderPaginacao(totalPages);
   }
 
-  renderPaginacao(totalPages) {
-    const nav = document.getElementById("paginacao");
-    if (!nav) return;
-
-    if (totalPages <= 1) {
-      nav.innerHTML = "";
-      return;
-    }
-
-    const cur = this.page;
-    const btn = (p, label = p, disabled = false, active = false) => `
-      <button
-        class="page-btn${active ? " is-active" : ""}"
-        data-page="${p}"
-        ${disabled ? "disabled aria-disabled='true'" : ""}
-        aria-label="Página ${p}"
-      >${label}</button>`;
-
-    // range compacto
-    const windowSize = 5;
-    let start = Math.max(1, cur - Math.floor(windowSize / 2));
-    let end = start + windowSize - 1;
-    if (end > totalPages) {
-      end = totalPages;
-      start = Math.max(1, end - windowSize + 1);
-    }
-
-    let html = "";
-    html += btn(Math.max(1, cur - 1), "‹", cur === 1, false);
-    if (start > 1) {
-      html += btn(1, "1", false, cur === 1);
-      if (start > 2) html += `<span class="page-ellipsis" aria-hidden="true">…</span>`;
-    }
-    for (let p = start; p <= end; p++) {
-      html += btn(p, String(p), false, p === cur);
-    }
-    if (end < totalPages) {
-      if (end < totalPages - 1) html += `<span class="page-ellipsis" aria-hidden="true">…</span>`;
-      html += btn(totalPages, String(totalPages), false, cur === totalPages);
-    }
-    html += btn(Math.min(totalPages, cur + 1), "›", cur === totalPages, false);
-
-    nav.innerHTML = html;
+  // badge “Nova devolução”
+  badgeNova(d) {
+    return this.isNova(d.created_at)
+      ? '<div class="badge badge-new">Nova devolução</div>'
+      : "";
   }
 
-  // ========= Card =========
+  // badge de fluxo (fallback amigável se não houver status sugerido)
+  badgeFluxo(d) {
+    const s = String(d.log_status_suggested || "").toLowerCase();
+    const map = {
+      mediacao: ['badge-mediacao', 'Mediação'],
+      preparacao: ['badge-info', 'Preparação'],
+      disputa: ['badge-alerta', 'Disputa'],
+      transporte: ['badge-transporte', 'Em Transporte'],
+      recebido_cd: ['badge-sucesso', 'Recebido no CD'],
+    };
+    const m = map[s];
+    if (!m) return '<div class="badge badge-neutral">Fluxo Pendente</div>';
+    return `<div class="badge ${m[0]}">${m[1]}</div>`;
+  }
+
   card(d, index = 0) {
     const el = document.createElement("div");
     el.className = "card-devolucao slide-up";
@@ -341,6 +233,7 @@ class DevolucoesFeed {
           <p class="devolucao-subtitulo">${this.esc(d.cliente_nome || "—")}</p>
         </div>
         <div class="devolucao-acoes">
+          ${this.badgeNova(d)}
           ${this.badgeFluxo(d)}
           ${this.badgeStatus(d)}
         </div>
@@ -395,72 +288,15 @@ class DevolucoesFeed {
     return el;
   }
 
-  // ========= Badges =========
   badgeStatus(d) {
     const grp = this.grupoStatus(d.status);
     const map = {
-      pendente: '<div class="badge badge-pendente" title="Status interno">Pendente</div>',
-      aprovado: '<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
-      rejeitado: '<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
-      em_analise: '<div class="badge badge-info" title="Status interno">Em Análise</div>',
-      finalizado: '<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
+      pendente: '<div class="badge badge-pendente">Pendente</div>',
+      aprovado: '<div class="badge badge-aprovado">Aprovado</div>',
+      rejeitado: '<div class="badge badge-rejeitado">Rejeitado</div>',
+      em_analise: '<div class="badge badge-info">Em Análise</div>',
     };
-    return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status || "—")}</div>`;
-  }
-
-  badgeFluxo(d) {
-    // tenta ler de vários campos: log_status (preferido), claim_status, shipping_status
-    const s =
-      String(d.log_status ?? d.claim_status ?? d.shipping_status ?? "").toLowerCase().trim();
-
-    const flow = this.normalizeFlow(s);
-    const labels = {
-      disputa: "Em Disputa",
-      mediacao: "Mediação",
-      em_preparacao: "Em Preparação",
-      pronto_envio: "Pronto p/ Envio",
-      em_transporte: "Em Transporte",
-      recebido_cd: "Recebido no CD",
-      fechado: "Fechado",
-      pendente: "Fluxo Pendente",
-    };
-
-    const css = {
-      disputa: "badge-info",
-      mediacao: "badge-info",
-      em_preparacao: "badge-pendente",
-      pronto_envio: "badge-aprovado",
-      em_transporte: "badge-info",
-      recebido_cd: "badge-aprovado",
-      fechado: "badge-rejeitado",
-      pendente: "badge",
-    };
-
-    const key = flow || "pendente";
-    const txt = labels[key] || "Fluxo";
-    const klass = css[key] || "badge";
-
-    return `<div class="badge ${klass}" title="Fluxo da devolução">${txt}</div>`;
-  }
-
-  normalizeFlow(s) {
-    const t = s.replace(/\s+/g, "_");
-    if (!t) return "pendente";
-
-    // disputa / mediação
-    if (/(disputa|dispute)/.test(t)) return "disputa";
-    if (/(media[cç]ao|mediation)/.test(t)) return "mediacao";
-
-    // fluxo logístico
-    if (/(prepar|prep)/.test(t)) return "em_preparacao";
-    if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
-    if (/(transit|transporte|enviado|shipped)/.test(t)) return "em_transporte";
-    if (/(delivered|entreg|arrived|recebid)/.test(t)) return "recebido_cd";
-
-    // encerrado
-    if (/(fechad|closed)/.test(t)) return "fechado";
-
-    return "pendente";
+    return map[grp] || `<div class="badge">${this.esc(d.status || "—")}</div>`;
   }
 
   grupoStatus(st) {
@@ -479,12 +315,11 @@ class DevolucoesFeed {
       modal.showModal();
     } else {
       this.toast("Info", `Abrindo detalhes da devolução #${id}`, "info");
-      // location.href = `devolucao-editar.html?id=${encodeURIComponent(id)}`;
     }
   }
 
   exportar() {
-    const cols = ["id", "id_venda", "cliente_nome", "loja_nome", "sku", "status", "log_status", "valor_produto", "valor_frete", "created_at"];
+    const cols = ["id", "id_venda", "cliente_nome", "loja_nome", "sku", "status", "valor_produto", "valor_frete"];
     const linhas = [cols.join(",")].concat(
       this.items.map((d) => cols.map((c) => `"${String(d[c] ?? "").replace(/"/g, '""')}"`).join(",")),
     );
