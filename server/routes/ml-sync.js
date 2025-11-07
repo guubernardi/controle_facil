@@ -15,6 +15,28 @@ module.exports = function registerMlSync(app, opts = {}) {
   const router = express.Router();
   const externalAddReturnEvent = opts.addReturnEvent;
 
+  // ========================== introspecção ==========================
+  async function tableExists(tbl) {
+    const { rows } = await query(
+      `SELECT 1 FROM information_schema.tables
+        WHERE table_schema='public' AND table_name=$1`,
+      [tbl]
+    );
+    return rows.length > 0;
+  }
+
+  async function tableHasColumns(table, cols) {
+    const { rows } = await query(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=$1`,
+      [table]
+    );
+    const set = new Set(rows.map(r => r.column_name));
+    const out = {}; cols.forEach(c => out[c] = set.has(c));
+    return out;
+  }
+
   // tenta descobrir todas as contas do ML disponíveis
   async function resolveMlAccounts(req) {
     if (typeof opts.listMlAccounts === 'function') {
@@ -54,13 +76,32 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
-  function mapReturnStatus(ret) {
-    const s = String(ret?.status || '').toLowerCase();
-    if (['to_be_sent','shipped','to_be_received','in_transit'].includes(s)) return 'a_caminho';
-    if (['received','arrived'].includes(s)) return 'recebido_cd';
-    if (['in_review','under_review','inspection'].includes(s)) return 'em_inspecao';
-    if (['cancelled','refunded','closed','delivered'].includes(s)) return 'encerrado';
-    return 'pendente';
+  // claim/return -> fluxo logístico (coluna log_status)
+  function mapReturnToLogStatus(retStatus, claimStatus, claimSub) {
+    const rs  = String(retStatus || '').toLowerCase();
+    const cs  = String(claimStatus || '').toLowerCase();
+    const css = String(claimSub   || '').toLowerCase();
+
+    // pela devolução (ret)
+    if (['to_be_sent','shipped','to_be_received','in_transit'].includes(rs)) return 'em_transporte';
+    if (['received','arrived'].includes(rs)) return 'recebido_cd';
+    if (['in_review','under_review','inspection'].includes(rs)) return 'em_inspecao';
+    if (['cancelled','refunded','closed','delivered','finished'].includes(rs)) return 'fechado';
+
+    // pistas do claim
+    if (/prep|prepar|embaland/.test(css)) return 'em_preparacao';
+    if (/ready|etiq|label|pronto/.test(css)) return 'pronto_envio';
+    if (/transit|transporte|enviado/.test(css)) return 'em_transporte';
+    if (/delivered|entreg|arrived|recebid/.test(css)) return 'recebido_cd';
+    if (/closed|fechad/.test(cs)) return 'fechado';
+
+    return null; // sem alteração
+  }
+
+  function isMediation(claimStatus, claimSub) {
+    const s  = String(claimStatus || '').toLowerCase();
+    const ss = String(claimSub    || '').toLowerCase();
+    return /(media|mediati|mediac)/.test(s) || /(media|mediati|mediac)/.test(ss);
   }
 
   async function addReturnEvent(req, {
@@ -75,30 +116,59 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
     const q = qOf(req);
     const metaStr = meta ? JSON.stringify(meta) : null;
+
+    // escolhe tabela: devolucao_eventos (nova) ou return_events (legado)
+    let tbl = 'devolucao_eventos';
+    if (!(await tableExists('devolucao_eventos')) && await tableExists('return_events')) {
+      tbl = 'return_events';
+    }
+
+    const hasIdemp = await tableHasColumns(tbl, ['idemp_key']).then(c=>!!c.idemp_key).catch(()=>false);
+
     try {
-      await q(`
-        INSERT INTO return_events
-          (return_id, type, title, message, meta, created_by, created_at, idemp_key)
-        VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
-      `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
+      if (tbl === 'devolucao_eventos') {
+        // schema: (return_id, type, title, message, meta, created_at)
+        await q(
+          `INSERT INTO devolucao_eventos (return_id, type, title, message, meta)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [returnId, type, title, message, metaStr]
+        );
+      } else {
+        await q(
+          `INSERT INTO return_events
+             (return_id, type, title, message, meta, created_by, created_at${hasIdemp?', idemp_key':''})
+           VALUES ($1,$2,$3,$4,$5,$6, now()${hasIdemp?', $7':''})`,
+          hasIdemp
+            ? [returnId, type, title, message, metaStr, created_by, idemp_key]
+            : [returnId, type, title, message, metaStr, created_by]
+        );
+      }
     } catch (e) {
       if (String(e?.code) !== '23505') throw e; // ignora idempotência
     }
   }
 
+  // insert seguro (só usa colunas existentes)
   async function ensureReturnByOrder(req, { order_id, sku = null, loja_nome = null, created_by = 'ml-sync' }) {
     const q = qOf(req);
+
     const { rows } = await q(
       `SELECT id FROM devolucoes WHERE id_venda::text = $1 LIMIT 1`,
       [String(order_id)]
     );
-    if (rows[0]?.id) return rows[0].id;
+    if (rows[0]?.id) return { id: rows[0].id, created: false };
 
-    const ins = await q(`
-      INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id
-    `, [String(order_id), sku || null, loja_nome || 'Mercado Livre', created_by]);
+    const possibleCols = ['id_venda','sku','loja_nome','created_by','created_at','updated_at'];
+    const cols = await tableHasColumns('devolucoes', possibleCols);
+
+    const keys = ['id_venda'];
+    const vals = [String(order_id)];
+    if (cols.sku)       { keys.push('sku');       vals.push(sku || null); }
+    if (cols.loja_nome) { keys.push('loja_nome'); vals.push(loja_nome || 'Mercado Livre'); }
+    if (cols.created_by){ keys.push('created_by');vals.push(created_by); }
+
+    const ph = keys.map((_,i)=>`$${i+1}`).join(',');
+    const ins = await q(`INSERT INTO devolucoes (${keys.join(',')}) VALUES (${ph}) RETURNING id`, vals);
 
     const id = ins.rows[0].id;
 
@@ -111,7 +181,7 @@ module.exports = function registerMlSync(app, opts = {}) {
       idemp_key: `ml-sync:create:${order_id}`
     });
 
-    return id;
+    return { id, created: true };
   }
 
   // -------- Claims Search robusto (com fallback + paginação) ----------
@@ -207,10 +277,12 @@ module.exports = function registerMlSync(app, opts = {}) {
     return data;
   }
 
-  // Return (v2) vinculado ao claim
+  // Return (v2) vinculado ao claim — pode vir como objeto OU array
   async function getReturnV2ByClaim(http, claimId) {
     const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
-    return data; // { id, status, resource_id, ... }
+    if (Array.isArray(data?.data)) return data.data[0] || null;
+    if (Array.isArray(data)) return data[0] || null;
+    return data || null; // { id, status, resource_id, ... }
   }
 
   // -------- Order detail (para enriquecer devolução) ----------
@@ -251,15 +323,16 @@ module.exports = function registerMlSync(app, opts = {}) {
       if (sku) break;
     }
 
-    await q(`
-      UPDATE devolucoes
-         SET cliente_nome = COALESCE($1, cliente_nome),
-             data_compra  = COALESCE($2, data_compra),
-             loja_nome    = COALESCE($3, loja_nome),
-             sku          = COALESCE($4, sku),
-             updated_at   = now()
-       WHERE id = $5
-    `, [buyerName, dataCompraIso, 'Mercado Livre', sku, returnId]);
+    await q(
+      `UPDATE devolucoes
+          SET cliente_nome = COALESCE($1, cliente_nome),
+              data_compra  = COALESCE($2, data_compra),
+              loja_nome    = COALESCE($3, loja_nome),
+              sku          = COALESCE($4, sku),
+              updated_at   = now()
+        WHERE id = $5`,
+      [buyerName, dataCompraIso, 'Mercado Livre', sku, returnId]
+    );
 
     await addReturnEvent(req, {
       returnId,
@@ -390,9 +463,10 @@ module.exports = function registerMlSync(app, opts = {}) {
           try {
             const claimDet = await getClaimDetail(http, claimId);
 
+            // só processa se houver 'return' relacionado
             const hasReturn = Array.isArray(claimDet?.related_entities)
               ? claimDet.related_entities.includes('return') || claimDet.related_entities.includes('returns')
-              : false;
+              : true; // algumas contas não enviam o array — segue mesmo assim
 
             if (!hasReturn) continue;
 
@@ -413,39 +487,47 @@ module.exports = function registerMlSync(app, opts = {}) {
 
             if (!order_id) continue;
 
-            const status = mapReturnStatus(ret);
+            const log = mapReturnToLogStatus(ret?.status, claimDet?.status, claimDet?.substatus);
             const sku = normalizeSku(it, claimDet);
+            const emMediacao = isMediation(claimDet?.status, claimDet?.substatus);
+            const mlStatusDesc = [String(claimDet?.status||'').toLowerCase(), String(claimDet?.substatus||'').toLowerCase()].filter(Boolean).join(':') || null;
 
-            const returnId = await ensureReturnByOrder(req, {
+            const ensured = await ensureReturnByOrder(req, {
               order_id,
               sku,
               loja_nome: lojaNome,
               created_by: 'ml-sync'
             });
+            if (ensured.created) created++;
 
             if (!dry) {
-              await qOf(req)(
-                `UPDATE devolucoes
-                   SET status = COALESCE($1, status),
-                       sku    = COALESCE($2, sku),
-                       loja_nome = CASE
-                         WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
-                           THEN COALESCE($3, loja_nome)
-                         ELSE loja_nome
-                       END,
-                       updated_at = now()
-                 WHERE id = $4`,
-                [status, sku, lojaNome, returnId]
+              // atualiza apenas colunas existentes
+              const cols = await tableHasColumns('devolucoes',
+                ['log_status','sku','loja_nome','updated_at','ml_claim_id','ml_status_desc','em_mediacao']
               );
-              updated++;
+
+              const sets = []; const vals = [];
+              if (cols.log_status && log)       sets.push(`log_status=$${vals.push(log)}`);
+              if (cols.sku && sku)              sets.push(`sku=COALESCE($${vals.push(sku)}, sku)`);
+              if (cols.loja_nome)               sets.push(`loja_nome=CASE WHEN (loja_nome IS NULL OR loja_nome='' OR loja_nome='Mercado Livre') THEN $${vals.push(lojaNome)} ELSE loja_nome END`);
+              if (cols.ml_claim_id)             sets.push(`ml_claim_id=$${vals.push(String(claimId))}`);
+              if (cols.ml_status_desc && mlStatusDesc !== null) sets.push(`ml_status_desc=$${vals.push(mlStatusDesc)}`);
+              if (cols.em_mediacao)             sets.push(`em_mediacao=$${vals.push(!!emMediacao)}`);
+              if (cols.updated_at)              sets.push('updated_at=now()');
+
+              if (sets.length) {
+                vals.push(ensured.id);
+                await qOf(req)(`UPDATE devolucoes SET ${sets.join(', ')} WHERE id=$${vals.length}`, vals);
+                updated++;
+              }
             }
 
             const idemp = `ml-claim:${account.user_id}:${claimId}:${order_id}`;
             if (!dry) {
               await addReturnEvent(req, {
-                returnId,
+                returnId: ensured.id,
                 type: 'ml-claim',
-                title: `Claim ${claimId} (${status})`,
+                title: `Claim ${claimId}${log ? ` (${log})` : ''}`,
                 message: 'Sincronizado pelo import',
                 meta: {
                   account_id: account.user_id,
@@ -454,7 +536,9 @@ module.exports = function registerMlSync(app, opts = {}) {
                   order_id,
                   return_id: ret?.id || null,
                   return_status: String(ret?.status || ''),
-                  loja_nome: lojaNome
+                  loja_nome: lojaNome,
+                  ml_status_desc: mlStatusDesc,
+                  em_mediacao: emMediacao
                 },
                 idemp_key: idemp
               });
@@ -476,7 +560,7 @@ module.exports = function registerMlSync(app, opts = {}) {
 
       if (!silent) {
         console.log('[ml-sync] import', {
-          from: fromIso, to: toIso, statuses: statusList, processed, updated, events, errors
+          from: fromIso, to: toIso, statuses: statusList, processed, created, updated, events, errors
         });
       }
 
