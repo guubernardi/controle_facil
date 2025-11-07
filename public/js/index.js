@@ -168,12 +168,24 @@ class DevolucoesFeed {
   async carregar() {
     this.toggleSkeleton(true);
     try {
-      const url = `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`;
-      const j = await fetch(url, { headers: { Accept: "application/json" } })
-        .then((r) => this.safeJson(r))
-        .catch(() => null);
-      const list = this.coerceReturnsPayload(j);
+      // tenta o formato (limit/range_days) e depois o (page/pageSize)
+      const tryUrls = [
+        `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
+        `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
+        `/api/returns`
+      ];
+      let list = null, lastErr = null;
+
+      for (const url of tryUrls) {
+        try {
+          const j = await fetch(url, { headers: { Accept: "application/json" } }).then(r => this.safeJson(r));
+          const arr = this.coerceReturnsPayload(j);
+          if (Array.isArray(arr) && arr.length >= 0) { list = arr; break; }
+        } catch (e) { lastErr = e; }
+      }
+
       this.items = Array.isArray(list) && list.length ? list : this.getMockData();
+      if (!list && lastErr) throw lastErr;
     } catch (e) {
       console.warn("[index] Falha ao carregar devoluções. Usando mock.", e?.message);
       this.items = this.getMockData();
@@ -473,11 +485,11 @@ class DevolucoesFeed {
     if (!s) return "pendente";
     const t = s.replace(/\s+/g, "_");
 
-    // valores padronizados do backend
+    // valores padronizados do backend (ML sync)
     if (t.includes("em_mediacao")) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
-    if (t.includes("postado")) return "em_transporte";
-    if (t.includes("em_transito")) return "em_transporte";
+    if (t.includes("postado")) return "em_transporte";     // postado na agência → tratamos como em trânsito
+    if (t.includes("em_transito")) return "em_transporte"; // ME1 shipped/out_for_delivery
     if (t.includes("recebido_cd")) return "recebido_cd";
     if (t.includes("em_inspecao")) return "em_preparacao";
     if (t.includes("nao_recebido")) return "pendente";
@@ -487,10 +499,10 @@ class DevolucoesFeed {
     if (/(disputa|dispute)/.test(t)) return "disputa";
     if (/(media[cç]ao|mediation)/.test(t)) return "mediacao";
 
-    // fluxo logístico (sinônimos)
-    if (/(prepar|prep)/.test(t)) return "em_preparacao";
+    // fluxo logístico (sinônimos e ME1)
+    if (/(prepar|prep|ready_to_ship)/.test(t)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
-    if (/(transit|transporte|enviado|shipped)/.test(t)) return "em_transporte";
+    if (/(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(t)) return "em_transporte";
     if (/(delivered|entreg|arrived|recebid)/.test(t)) return "recebido_cd";
 
     // encerrado
