@@ -14,6 +14,11 @@ class DevolucoesFeed {
     this.NEW_WINDOW_MS = 12 * 60 * 60 * 1000;
     this.NEW_KEY_PREFIX = "rf:firstSeen:";
 
+    // auto-sync
+    this.AUTO_MS = 5 * 60 * 1000; // 5 min
+    this.autoTimer = null;
+    this.isRefreshing = false;
+
     // grupos de status internos
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
@@ -35,6 +40,7 @@ class DevolucoesFeed {
     await this.carregar();
     this.purgeOldSeen();
     this.renderizar();
+    this.startAutoSync(); // inicia o ciclo de sincronização automática
   }
 
   // ========= Utils =========
@@ -180,7 +186,7 @@ class DevolucoesFeed {
         try {
           const j = await fetch(url, { headers: { Accept: "application/json" } }).then(r => this.safeJson(r));
           const arr = this.coerceReturnsPayload(j);
-          if (Array.isArray(arr) && arr.length >= 0) { list = arr; break; }
+          if (Array.isArray(arr)) { list = arr; break; }
         } catch (e) { lastErr = e; }
       }
 
@@ -249,6 +255,79 @@ class DevolucoesFeed {
       this.page = p;
       this.renderizar();
     });
+
+    // ----- botão invisível (para cumprir o "botão que atualiza") -----
+    this.ensureHiddenRefreshButton();
+  }
+
+  ensureHiddenRefreshButton() {
+    if (document.getElementById("btn-atualizar")) return;
+    const btn = document.createElement("button");
+    btn.id = "btn-atualizar";
+    btn.type = "button";
+    btn.style.display = "none";
+    btn.setAttribute("aria-hidden", "true");
+    btn.addEventListener("click", () => this.atualizarDados(true)); // silent
+    document.body.appendChild(btn);
+  }
+
+  startAutoSync() {
+    // primeira rodada após 15s (evita brigar com o carregamento inicial)
+    setTimeout(() => this.clickHiddenRefresh(), 15000);
+    // intervalo fixo
+    this.autoTimer = setInterval(() => {
+      if (document.visibilityState === "hidden") return; // evita rodar em abas ocultas
+      this.clickHiddenRefresh();
+    }, this.AUTO_MS);
+
+    // segurança: para o timer ao sair da página
+    window.addEventListener("beforeunload", () => {
+      if (this.autoTimer) clearInterval(this.autoTimer);
+    });
+  }
+
+  clickHiddenRefresh() {
+    const btn = document.getElementById("btn-atualizar");
+    if (btn) btn.click();
+  }
+
+  // ========= Sincronização (silenciosa) =========
+  async atualizarDados(silent = true) {
+    if (this.isRefreshing) return;
+    this.isRefreshing = true;
+
+    // tira um snapshot de IDs antes da sync para contagem de "novas"
+    const prevIds = new Set((this.items || []).map(d => String(d.id)));
+
+    try {
+      // 1) claims → cria/atualiza devoluções
+      await fetch(`/api/ml/claims/import?days=90&statuses=opened,in_progress&silent=1`).catch(() => {});
+
+      // 2) envios (ME1) → atualiza fluxo/logística
+      await fetch(`/api/ml/shipping/sync?recent_days=90&silent=1`).catch(() => {});
+
+      // 3) chat/mensagens (se existir a rota; ignora 404)
+      try { await fetch(`/api/ml/messages/sync?recent_days=90&silent=1`); } catch {}
+
+      // recarrega lista
+      await this.carregar();
+      this.renderizar();
+
+      // conta itens novos (IDs que não existiam antes)
+      const nowIds = new Set((this.items || []).map(d => String(d.id)));
+      let novas = 0;
+      for (const id of nowIds) if (!prevIds.has(id)) novas++;
+
+      if (!silent) {
+        this.toast("Sincronizado", novas > 0 ? `${novas} devolução(ões) nova(s)` : "Nenhuma atualização encontrada");
+      } else if (novas > 0) {
+        this.toast("Sincronizado", `${novas} devolução(ões) nova(s)`);
+      }
+    } catch {
+      if (!silent) this.toast("Erro", "Falha ao sincronizar.", "erro");
+    } finally {
+      this.isRefreshing = false;
+    }
   }
 
   // ========= Render =========
@@ -488,7 +567,7 @@ class DevolucoesFeed {
     // valores padronizados do backend (ML sync)
     if (t.includes("em_mediacao")) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
-    if (t.includes("postado")) return "em_transporte";     // postado na agência → tratamos como em trânsito
+    if (t.includes("postado")) return "em_transporte";     // postado → em trânsito
     if (t.includes("em_transito")) return "em_transporte"; // ME1 shipped/out_for_delivery
     if (t.includes("recebido_cd")) return "recebido_cd";
     if (t.includes("em_inspecao")) return "em_preparacao";
