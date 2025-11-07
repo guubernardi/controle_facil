@@ -63,12 +63,12 @@ class DevolucoesFeed {
 
       if (!r.ok) {
         const detail = (body && (body.error || body.message)) ? (body.error || body.message) : (typeof body === "string" ? body : "");
-        console.warn(`[sync] ${url} → ${r.status}`, detail || "(sem detalhe)");
+        console.info("[sync]", url, "→", r.status, (detail || "").toString().slice(0, 160));
         return { ok: false, status: r.status, detail };
       }
       return { ok: true, status: r.status, data: body };
     } catch (e) {
-      console.warn(`[sync] ${url} → falhou`, e?.message || String(e));
+      console.info("[sync]", url, "→ falhou", e?.message || String(e));
       return { ok: false, error: e?.message || String(e) };
     }
   }
@@ -311,21 +311,23 @@ class DevolucoesFeed {
   }
 
   async atualizarDados() {
-    // 1) tentar importar claims (com debug=1 para termos detalhe se quebrar)
-    const qsClaims = `days=30&statuses=${encodeURIComponent("opened,in_progress")}&silent=1&debug=1`;
+    // 1) importar claims (sem debug=1 para evitar 400/500 verboso)
+    const qsClaims = new URLSearchParams({
+      days: String(this.RANGE_DIAS),
+      statuses: "opened,in_progress",
+      silent: "1",
+      all: "1"
+    }).toString();
     const r1 = await this.fetchQuiet(`/api/ml/claims/import?${qsClaims}`);
 
     // 2) tentar sync de shipping e mensagens se existirem — ignorar 404
-    const r2 = await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=30&silent=1`);
-    const r3 = await this.fetchQuiet(`/api/ml/messages/sync?recent_days=30&silent=1`);
+    const r2 = await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
+    const r3 = await this.fetchQuiet(`/api/ml/messages/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
 
-    // se houve 400/500 no claims e ainda não mostrei um toast, avisa uma vez
+    // se houve 400/500 no claims e ainda não mostrei um toast, avisa uma vez (mas sem travar)
     if (!r1.ok && (r1.status === 400 || r1.status === 500) && !this._lastSyncErrShown) {
       this._lastSyncErrShown = true;
-      const dica = (r1.detail || "").toString().toLowerCase().includes("status")
-        ? "Verifique os statuses aceitos pelo ML ou reduza o período (ex.: days=7)."
-        : "Verifique o token OAuth (API do ML) e o período (ex.: days=7).";
-      this.toast("Aviso", `Sync ML falhou (${r1.status}). ${dica}`, "erro");
+      this.toast("Aviso", `Sync ML não completo (${r1.status}). Vou continuar tentando automaticamente.`, "erro");
     }
 
     // 3) recarregar a lista e informar quantos novos IDs entraram
@@ -477,7 +479,7 @@ class DevolucoesFeed {
 
         <div class="campo-info">
           <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1 2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/>
+            <path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/>
           </svg>
           <span class="campo-label">Data</span>
           <span class="campo-valor">${data}</span>
@@ -560,10 +562,7 @@ class DevolucoesFeed {
     };
 
     const key = flow || "pendente";
-    const txt = labels[key] || "Fluxo";
-    const klass = css[key] || "badge";
-
-    return `<div class="badge ${klass}" title="Fluxo da devolução">${txt}</div>`;
+    return `<div class="badge ${css[key] || "badge"}" title="Fluxo da devolução">${labels[key] || "Fluxo"}</div>`;
   }
 
   normalizeFlow(s) {
