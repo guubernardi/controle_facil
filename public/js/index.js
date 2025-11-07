@@ -10,15 +10,14 @@ class DevolucoesFeed {
     this.pageSize = 15;
     this.page = 1;
 
-    // "Nova devolução" (mostra por 12h desde a 1ª vez que o front vê o ID)
+    // "Nova devolução"
     this.NEW_WINDOW_MS = 12 * 60 * 60 * 1000;
     this.NEW_KEY_PREFIX = "rf:firstSeen:";
 
-    // timer de auto-sync
-    this.SYNC_MS = 5 * 60 * 1000; // 5min
+    // auto-sync
+    this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
 
-    // grupos de status internos
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
       rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
@@ -199,32 +198,55 @@ class DevolucoesFeed {
       if (document.hidden || !navigator.onLine) return; // pausa em aba oculta/offline
       btn.click();
     };
-    setTimeout(clickHiddenRefresh, 2000);                   // tenta 1x após carregar
-    setInterval(clickHiddenRefresh, this.SYNC_MS);          // repete a cada 5 min
+    setTimeout(clickHiddenRefresh, 2000);
+    setInterval(clickHiddenRefresh, this.SYNC_MS);
     document.addEventListener("visibilitychange",()=>{ if(!document.hidden) setTimeout(clickHiddenRefresh, 500); });
     window.addEventListener("online",()=>setTimeout(clickHiddenRefresh, 500));
   }
 
-  // ========= Sync com fallback =========
+  // ========= Sync com FALLBACK robusto =========
+  async syncClaimsWithFallback() {
+    // tenta várias combinações: dias ↓ e status ↓; também status+statuses e, por fim, from/to
+    const attempts = [
+      { label:"30d opened,in_progress", days: 30, statuses: "opened,in_progress" },
+      { label:"7d in_progress",        days: 7,  statuses: "in_progress" },
+      { label:"3d opened",             days: 3,  statuses: "opened" },
+      { label:"1d in_progress",        days: 1,  statuses: "in_progress" },
+    ];
+
+    for (const a of attempts) {
+      const qs = new URLSearchParams({ days: String(a.days), silent: "1", all: "1" });
+      qs.append("statuses", a.statuses);
+      qs.append("status", a.statuses); // compat
+
+      console.info("[sync] claims/import tentativa:", a.label);
+      const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
+      if (r.ok) return true;
+
+      const msg = (r.detail || "").toString().toLowerCase();
+      // se NÃO for o erro chato de invalid_claim_id (ou não for 400), não adianta insistir
+      if (!(msg.includes("invalid_claim_id") || r.status === 400)) break;
+    }
+
+    // última cartada: usar janela from/to (algumas APIs tratam melhor)
+    const to = new Date();
+    const from = new Date(Date.now() - 24*60*60*1000); // 1 dia
+    const pad = (n)=>String(n).padStart(2,"0");
+    const toStr   = `${to.getFullYear()}-${pad(to.getMonth()+1)}-${pad(to.getDate())}`;
+    const fromStr = `${from.getFullYear()}-${pad(from.getMonth()+1)}-${pad(from.getDate())}`;
+    const qs2 = new URLSearchParams({ from: fromStr, to: toStr, silent: "1", all: "1" });
+    qs2.append("statuses", "in_progress");
+    qs2.append("status", "in_progress");
+    console.info("[sync] claims/import tentativa: from/to 1d");
+    const r2 = await this.fetchQuiet(`/api/ml/claims/import?${qs2.toString()}`);
+    return !!r2.ok;
+  }
+
   async atualizarDados() {
     const before = new Set(this.items.map(d => String(d.id)));
 
-    // 1) claims import com fallback de janela/status
-    const attempts = [
-      { days: this.RANGE_DIAS, statuses: "opened,in_progress" },
-      { days: 7, statuses: "in_progress" },
-      { days: 3, statuses: "opened" },
-    ];
-
-    let importedOk = false;
-    for (const a of attempts) {
-      const qs = new URLSearchParams({ days:String(a.days), statuses:a.statuses, silent:"1", all:"1" }).toString();
-      const r = await this.fetchQuiet(`/api/ml/claims/import?${qs}`);
-      if (r.ok) { importedOk = true; break; }
-      // se não for erro de claim inválido, não adianta insistir
-      const d = (r.detail || "").toString().toLowerCase();
-      if (!d.includes("invalid_claim_id") && r.status !== 400) break;
-    }
+    // 1) claims import com fallback
+    const importedOk = await this.syncClaimsWithFallback();
 
     // 2) endpoints opcionais — ignorar 404
     await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
@@ -235,10 +257,9 @@ class DevolucoesFeed {
     const novos = this.items.filter(d => !before.has(String(d.id))).length;
     if (novos > 0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
 
-    // avisa apenas 1x por sessão se nada entrou e houve erro de import
     if (!importedOk && !this._lastSyncErrShown) {
       this._lastSyncErrShown = true;
-      this.toast("Aviso", "Não consegui importar algumas devoluções do ML (IDs inválidos). Vou continuar tentando automaticamente em janelas menores.", "erro");
+      this.toast("Aviso", "ML devolveu alguns claims inválidos. Vou continuar tentando automaticamente com janelas menores.", "erro");
     }
 
     this.renderizar();
