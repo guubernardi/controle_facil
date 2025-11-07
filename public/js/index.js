@@ -10,26 +10,19 @@ class DevolucoesFeed {
     this.pageSize = 15;
     this.page = 1;
 
-    // "Nova devolução" (mostra por 12h desde a 1ª vez que o front vê o ID)
+    // "Nova devolução" (12h)
     this.NEW_WINDOW_MS = 12 * 60 * 60 * 1000;
     this.NEW_KEY_PREFIX = "rf:firstSeen:";
 
-    // auto-sync
-    this.AUTO_MS = 5 * 60 * 1000; // 5 min
-    this.autoTimer = null;
-    this.isRefreshing = false;
+    // capabilities (desligadas por padrão; evite 404)
+    this.caps = Object.assign({ shipping: false, messages: false }, window.__syncCaps || {});
 
-    // grupos de status internos
+    // status internos
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
       rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
-      finalizado: new Set([
-        "concluido", "concluida",
-        "finalizado", "finalizada",
-        "fechado", "fechada",
-        "encerrado", "encerrada",
-      ]),
-      pendente: new Set(["pendente", "em_analise", "em-analise", "aberto"]),
+      finalizado: new Set(["concluido","concluida","finalizado","finalizada","fechado","fechada","encerrado","encerrada"]),
+      pendente: new Set(["pendente","em_analise","em-analise","aberto"]),
     };
 
     this.inicializar();
@@ -40,28 +33,27 @@ class DevolucoesFeed {
     await this.carregar();
     this.purgeOldSeen();
     this.renderizar();
-    this.startAutoSync(); // inicia o ciclo de sincronização automática
+    this.setupAutoRefresh(); // botão invisível + interval
   }
 
-  // ========= Utils =========
+  // ========== helpers ==========
+  async fetchQuiet(url, opts = {}) {
+    try {
+      const res = await fetch(url, { headers: { Accept: "application/json" }, ...opts });
+      if (!res.ok) return { ok: false, status: res.status, text: await res.text().catch(() => "") };
+      if (res.status === 204) return { ok: true, data: null };
+      const ct = res.headers.get("content-type") || "";
+      const data = /json/i.test(ct) ? await res.json().catch(() => null) : await res.text().catch(() => "");
+      return { ok: true, data };
+    } catch (e) {
+      return { ok: false, status: 0, error: e?.message || String(e) };
+    }
+  }
+
   safeJson(res) {
     if (!res.ok) throw new Error("HTTP " + res.status);
     if (res.status === 204) return {};
     return res.json();
-  }
-
-  async fetchQuiet(url, opts = {}) {
-    try {
-      const r = await fetch(url, { cache: "no-store", ...opts });
-      if (!r.ok) return null; // silencia 4xx/5xx
-      const ct = r.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        return await r.json();
-      }
-      return true; // ok sem JSON
-    } catch {
-      return null;
-    }
   }
 
   coerceReturnsPayload(j) {
@@ -78,28 +70,15 @@ class DevolucoesFeed {
     if (!iso) return "—";
     try {
       return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
-    } catch {
-      return "—";
-    }
+    } catch { return "—"; }
   }
 
-  esc(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
+  esc(str) { const d = document.createElement("div"); d.textContent = str; return d.innerHTML; }
 
   getDateMs(d) {
-    const cands = [
-      d.created_at, d.createdAt, d.created,
-      d.dt, d.data, d.inserted_at, d.updated_at,
-    ].filter(Boolean);
-    for (const x of cands) {
-      const t = Date.parse(x);
-      if (!Number.isNaN(t)) return t;
-    }
-    const idn = Number(d.id);
-    return Number.isFinite(idn) ? idn : 0;
+    const cands = [d.created_at,d.createdAt,d.created,d.dt,d.data,d.inserted_at,d.updated_at].filter(Boolean);
+    for (const x of cands) { const t = Date.parse(x); if (!Number.isNaN(t)) return t; }
+    const idn = Number(d.id); return Number.isFinite(idn) ? idn : 0;
   }
 
   // ======== "Nova devolução" (TTL) ========
@@ -109,7 +88,7 @@ class DevolucoesFeed {
       const val = localStorage.getItem(key);
       if (val) return Number(val) || 0;
       const now = Date.now();
-      localStorage.setItem(key, String(now)); // marca 1ª visualização
+      localStorage.setItem(key, String(now));
       return now;
     } catch { return 0; }
   }
@@ -134,54 +113,10 @@ class DevolucoesFeed {
   // ========= Carregamento =========
   getMockData() {
     return [
-      {
-        id: "4",
-        id_venda: "DEV-2024-004",
-        cliente_nome: "Ana Oliveira",
-        loja_nome: "Loja Matriz",
-        sku: "PROD-004",
-        status: "em_analise",
-        log_status: "em_preparacao",
-        created_at: "2024-01-15T16:45:00Z",
-        valor_produto: 599.9,
-        valor_frete: 25.0,
-      },
-      {
-        id: "3",
-        id_venda: "DEV-2024-003",
-        cliente_nome: "Pedro Costa",
-        loja_nome: "Loja Online",
-        sku: "PROD-003",
-        status: "rejeitado",
-        log_status: "fechado",
-        created_at: "2024-01-14T09:15:00Z",
-        valor_produto: 89.9,
-        valor_frete: 8.0,
-      },
-      {
-        id: "2",
-        id_venda: "DEV-2024-002",
-        cliente_nome: "Maria Santos",
-        loja_nome: "Loja Shopping",
-        sku: "PROD-002",
-        status: "aprovado",
-        log_status: "pronto_envio",
-        created_at: "2024-01-13T14:30:00Z",
-        valor_produto: 149.9,
-        valor_frete: 12.0,
-      },
-      {
-        id: "1",
-        id_venda: "DEV-2024-001",
-        cliente_nome: "João Silva",
-        loja_nome: "Loja Centro",
-        sku: "PROD-001",
-        status: "pendente",
-        log_status: "em_transporte",
-        created_at: "2024-01-12T10:00:00Z",
-        valor_produto: 299.9,
-        valor_frete: 15.0,
-      },
+      { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
+      { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado",   log_status:"fechado",       created_at:"2024-01-14T09:15:00Z", valor_produto:89.9,  valor_frete:8.0  },
+      { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado",   log_status:"pronto_envio",  created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
+      { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva",   loja_nome:"Loja Centro",   sku:"PROD-001", status:"pendente",   log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 }
     ];
   }
 
@@ -194,7 +129,6 @@ class DevolucoesFeed {
         `/api/returns`
       ];
       let list = null, lastErr = null;
-
       for (const url of tryUrls) {
         try {
           const j = await fetch(url, { headers: { Accept: "application/json" } }).then(r => this.safeJson(r));
@@ -202,8 +136,7 @@ class DevolucoesFeed {
           if (Array.isArray(arr)) { list = arr; break; }
         } catch (e) { lastErr = e; }
       }
-
-      this.items = Array.isArray(list) && list.length ? list : this.getMockData();
+      this.items = Array.isArray(list) && list.length >= 0 ? list : this.getMockData();
       if (!list && lastErr) throw lastErr;
     } catch (e) {
       console.warn("[index] Falha ao carregar devoluções. Usando mock.", e?.message);
@@ -221,10 +154,7 @@ class DevolucoesFeed {
     const vazio = document.getElementById("mensagem-vazia");
     if (sk) sk.hidden = !show;
     if (listWrap) listWrap.setAttribute("aria-busy", show ? "true" : "false");
-    if (list) {
-      if (show) list.innerHTML = "";
-      list.style.display = show ? "none" : "grid";
-    }
+    if (list) { if (show) list.innerHTML = ""; list.style.display = show ? "none" : "grid"; }
     if (vazio && !show) vazio.hidden = true;
   }
 
@@ -233,16 +163,13 @@ class DevolucoesFeed {
     const campo = document.getElementById("campo-pesquisa");
     campo?.addEventListener("input", (e) => {
       this.filtros.pesquisa = String(e.target.value || "").trim();
-      this.page = 1;
-      this.renderizar();
+      this.page = 1; this.renderizar();
     });
 
     const selectFallback = document.getElementById("filtro-status");
     selectFallback?.addEventListener("change", (e) => {
       const novo = (e.target.value || "todos").toLowerCase();
-      this.filtros.status = novo;
-      this.page = 1;
-      this.renderizar();
+      this.filtros.status = novo; this.page = 1; this.renderizar();
     });
 
     document.getElementById("botao-exportar")?.addEventListener("click", () => this.exportar());
@@ -252,61 +179,37 @@ class DevolucoesFeed {
     });
 
     document.getElementById("container-devolucoes")?.addEventListener("click", (e) => {
-      const card = e.target.closest?.("[data-return-id]");
-      if (!card) return;
+      const card = e.target.closest?.("[data-return-id]"); if (!card) return;
       const id = card.getAttribute("data-return-id");
-      if (e.target.closest?.('[data-action="open"]') || e.target.closest?.(".botao-detalhes")) {
-        this.abrirDetalhes(id);
-      }
+      if (e.target.closest?.('[data-action="open"]') || e.target.closest?.(".botao-detalhes")) this.abrirDetalhes(id);
     });
 
     document.getElementById("paginacao")?.addEventListener("click", (e) => {
-      const a = e.target.closest("button[data-page]");
-      if (!a) return;
-      const p = Number(a.getAttribute("data-page"));
-      if (!Number.isFinite(p) || p === this.page) return;
-      this.page = p;
-      this.renderizar();
+      const a = e.target.closest("button[data-page]"); if (!a) return;
+      const p = Number(a.getAttribute("data-page")); if (!Number.isFinite(p) || p === this.page) return;
+      this.page = p; this.renderizar();
     });
-
-    // botão invisível para acionar a sync (conforme pedido)
-    this.ensureHiddenRefreshButton();
   }
 
-  ensureHiddenRefreshButton() {
-    if (document.getElementById("btn-atualizar")) return;
+  // ========= Auto-refresh invisível =========
+  setupAutoRefresh() {
     const btn = document.createElement("button");
-    btn.id = "btn-atualizar";
+    btn.id = "rf-hidden-refresh";
     btn.type = "button";
-    btn.style.display = "none";
-    btn.setAttribute("aria-hidden", "true");
-    btn.addEventListener("click", () => this.atualizarDados(true)); // silent
+    btn.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;";
+    btn.setAttribute("aria-hidden","true");
+    btn.addEventListener("click", () => this.atualizarDados(true));
     document.body.appendChild(btn);
-  }
+    this._hiddenRefreshBtn = btn;
 
-  startAutoSync() {
-    // primeira rodada após 12s (evita brigar com o carregamento inicial)
-    setTimeout(() => this.clickHiddenRefresh(), 12000);
+    // dispara em 2s, depois a cada 5 minutos
+    setTimeout(() => btn.click(), 2000);
+    this._refreshTimer = setInterval(() => btn.click(), 5 * 60 * 1000);
 
-    // intervalo fixo
-    this.autoTimer = setInterval(() => {
-      if (document.visibilityState === "hidden") return; // não roda em aba oculta
-      this.clickHiddenRefresh();
-    }, this.AUTO_MS);
-
-    // refresh quando a aba volta a ficar visível
+    // quando a aba volta ao foco
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") this.clickHiddenRefresh();
+      if (document.visibilityState === "visible") btn.click();
     });
-
-    window.addEventListener("beforeunload", () => {
-      if (this.autoTimer) clearInterval(this.autoTimer);
-    });
-  }
-
-  clickHiddenRefresh() {
-    const btn = document.getElementById("btn-atualizar");
-    if (btn) btn.click();
   }
 
   // ========= Sincronização (silenciosa) =========
@@ -317,38 +220,36 @@ class DevolucoesFeed {
     const prevIds = new Set((this.items || []).map(d => String(d.id)));
 
     try {
-      // 0) ping — se não estiver autenticado no ML, aborta silenciosamente
+      // Checa OAuth
       const ping = await this.fetchQuiet(`/api/ml/ping`);
-      if (!ping) {
+      if (!ping.ok) {
         this.isRefreshing = false;
         if (!silent) this.toast("Aviso", "Conta do ML não autenticada.", "erro");
         return;
       }
 
-      // 1) claims → cria/atualiza devoluções (usa 'status' p/ compat.)
-      await this.fetchQuiet(`/api/ml/claims/import?days=90&status=opened,in_progress&silent=1`);
+      // Import de claims — **statuses** (plural)
+      await this.fetchQuiet(`/api/ml/claims/import?days=90&statuses=opened,in_progress&silent=1`);
 
-      // 2) envios (ME1) → atualiza fluxo/logística (se a rota existir)
-      await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=90&silent=1`);
+      // Essas duas só se o backend declarar suporte
+      if (this.caps.shipping) {
+        const rShip = await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=90&silent=1`);
+        if (!rShip.ok && rShip.status === 404) this.caps.shipping = false;
+      }
+      if (this.caps.messages) {
+        const rMsg = await this.fetchQuiet(`/api/ml/messages/sync?recent_days=90&silent=1`);
+        if (!rMsg.ok && rMsg.status === 404) this.caps.messages = false;
+      }
 
-      // 3) chat/mensagens (se existir)
-      await this.fetchQuiet(`/api/ml/messages/sync?recent_days=90&silent=1`);
-
-      // recarrega lista
+      // Recarrega e calcula novas
       await this.carregar();
       this.renderizar();
 
-      // conta itens novos (IDs que não existiam antes)
       const nowIds = new Set((this.items || []).map(d => String(d.id)));
-      let novas = 0;
-      for (const id of nowIds) if (!prevIds.has(id)) novas++;
-
-      if (!silent) {
-        this.toast("Sincronizado", novas > 0 ? `${novas} devolução(ões) nova(s)` : "Nenhuma atualização encontrada");
-      } else if (novas > 0) {
-        this.toast("Sincronizado", `${novas} devolução(ões) nova(s)`);
-      }
-    } catch {
+      let novas = 0; for (const id of nowIds) if (!prevIds.has(id)) novas++;
+      if (!silent) this.toast("Sincronizado", novas > 0 ? `${novas} devolução(ões) nova(s)` : "Nenhuma atualização encontrada");
+      else if (novas > 0) this.toast("Sincronizado", `${novas} devolução(ões) nova(s)`);
+    } catch (_e) {
       if (!silent) this.toast("Erro", "Falha ao sincronizar.", "erro");
     } finally {
       this.isRefreshing = false;
@@ -367,32 +268,26 @@ class DevolucoesFeed {
     const q = (this.filtros.pesquisa || "").toLowerCase();
     const st = (this.filtros.status || "todos").toLowerCase();
 
-    // filtrar
     const filtrados = (this.items || []).filter((d) => {
-      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status]
-        .map((x) => String(x || "").toLowerCase())
-        .some((s) => s.includes(q));
+      const textoMatch = [d.cliente_nome,d.id_venda,d.sku,d.loja_nome,d.status,d.log_status]
+        .map((x) => String(x || "").toLowerCase()).some((s) => s.includes(q));
       const statusMatch = st === "todos" || this.grupoStatus(d.status) === st;
       return textoMatch && statusMatch;
     });
 
-    // ordenar por data desc (mais recente primeiro)
     filtrados.sort((a, b) => this.getDateMs(b) - this.getDateMs(a));
-
     if (countEl) countEl.textContent = String(filtrados.length);
 
     if (!filtrados.length) {
       container.style.display = "none";
       if (vazio) {
         vazio.hidden = false;
-        if (descVazio)
-          descVazio.textContent = q || (st !== "todos" ? "Tente ajustar os filtros" : "Ajuste os filtros de pesquisa");
+        if (descVazio) descVazio.textContent = q || (st !== "todos" ? "Tente ajustar os filtros" : "Ajuste os filtros de pesquisa");
       }
       if (pag) pag.innerHTML = "";
       return;
     }
 
-    // paginação
     const total = filtrados.length;
     const totalPages = Math.max(1, Math.ceil(total / this.pageSize));
     if (this.page > totalPages) this.page = totalPages;
@@ -400,7 +295,6 @@ class DevolucoesFeed {
     const end = start + this.pageSize;
     const pageItems = filtrados.slice(start, end);
 
-    // render cards
     container.style.display = "grid";
     if (vazio) vazio.hidden = true;
     container.innerHTML = "";
@@ -410,35 +304,23 @@ class DevolucoesFeed {
       container.appendChild(card);
     });
 
-    // render paginação
     this.renderPaginacao(totalPages);
   }
 
   renderPaginacao(totalPages) {
     const nav = document.getElementById("paginacao");
     if (!nav) return;
-
-    if (totalPages <= 1) {
-      nav.innerHTML = "";
-      return;
-    }
+    if (totalPages <= 1) { nav.innerHTML = ""; return; }
 
     const cur = this.page;
     const btn = (p, label = p, disabled = false, active = false) => `
-      <button
-        class="page-btn${active ? " is-active" : ""}"
-        data-page="${p}"
-        ${disabled ? "disabled aria-disabled='true'" : ""}
-        aria-label="Página ${p}"
-      >${label}</button>`;
+      <button class="page-btn${active ? " is-active" : ""}" data-page="${p}"
+        ${disabled ? "disabled aria-disabled='true'" : ""} aria-label="Página ${p}">${label}</button>`;
 
     const windowSize = 5;
     let start = Math.max(1, cur - Math.floor(windowSize / 2));
     let end = start + windowSize - 1;
-    if (end > totalPages) {
-      end = totalPages;
-      start = Math.max(1, end - windowSize + 1);
-    }
+    if (end > totalPages) { end = totalPages; start = Math.max(1, end - windowSize + 1); }
 
     let html = "";
     html += btn(Math.max(1, cur - 1), "‹", cur === 1, false);
@@ -452,7 +334,6 @@ class DevolucoesFeed {
       html += btn(totalPages, String(totalPages), false, cur === totalPages);
     }
     html += btn(Math.min(totalPages, cur + 1), "›", cur === totalPages, false);
-
     nav.innerHTML = html;
   }
 
@@ -535,9 +416,7 @@ class DevolucoesFeed {
   }
 
   // ========= Badges =========
-  badgeNova(d) {
-    return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : "";
-  }
+  badgeNova(d) { return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
 
   badgeStatus(d) {
     const grp = this.grupoStatus(d.status);
@@ -554,41 +433,21 @@ class DevolucoesFeed {
   badgeFluxo(d) {
     const s = String(d.log_status ?? d.claim_status ?? d.shipping_status ?? "").toLowerCase().trim();
     const flow = this.normalizeFlow(s);
-
     const labels = {
-      disputa: "Em Disputa",
-      mediacao: "Mediação",
-      em_preparacao: "Em Preparação",
-      pronto_envio: "Pronto p/ Envio",
-      em_transporte: "Em Transporte",
-      recebido_cd: "Recebido no CD",
-      fechado: "Fechado",
-      pendente: "Fluxo Pendente",
+      disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação", pronto_envio:"Pronto p/ Envio",
+      em_transporte:"Em Transporte", recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente",
     };
-
     const css = {
-      disputa: "badge-info",
-      mediacao: "badge-info",
-      em_preparacao: "badge-pendente",
-      pronto_envio: "badge-aprovado",
-      em_transporte: "badge-info",
-      recebido_cd: "badge-aprovado",
-      fechado: "badge-rejeitado",
-      pendente: "badge",
+      disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente", pronto_envio:"badge-aprovado",
+      em_transporte:"badge-info", recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge",
     };
-
     const key = flow || "pendente";
-    const txt = labels[key] || "Fluxo";
-    const klass = css[key] || "badge";
-
-    return `<div class="badge ${klass}" title="Fluxo da devolução">${txt}</div>`;
+    return `<div class="badge ${css[key] || "badge"}" title="Fluxo da devolução">${labels[key] || "Fluxo"}</div>`;
   }
 
   normalizeFlow(s) {
     if (!s) return "pendente";
     const t = s.replace(/\s+/g, "_");
-
-    // valores padronizados do backend (ML sync)
     if (t.includes("em_mediacao")) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
     if (t.includes("postado")) return "em_transporte";
@@ -597,28 +456,19 @@ class DevolucoesFeed {
     if (t.includes("em_inspecao")) return "em_preparacao";
     if (t.includes("nao_recebido")) return "pendente";
     if (t.includes("devolvido") || t.includes("fechado")) return "fechado";
-
-    // disputa / mediação
     if (/(disputa|dispute)/.test(t)) return "disputa";
     if (/(media[cç]ao|mediation)/.test(t)) return "mediacao";
-
-    // fluxo logístico (sinônimos e ME1)
     if (/(prepar|prep|ready_to_ship)/.test(t)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
     if (/(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(t)) return "em_transporte";
     if (/(delivered|entreg|arrived|recebid)/.test(t)) return "recebido_cd";
-
-    // encerrado
     if (/(fechad|closed)/.test(t)) return "fechado";
-
     return "pendente";
   }
 
   grupoStatus(st) {
     const s = String(st || "").toLowerCase();
-    for (const [grupo, set] of Object.entries(this.STATUS_GRUPOS)) {
-      if (set.has(s)) return grupo;
-    }
+    for (const [grupo, set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return grupo;
     if (s === "em_analise" || s === "em-analise") return "em_analise";
     return "pendente";
   }
@@ -626,24 +476,18 @@ class DevolucoesFeed {
   // ========= Ações =========
   abrirDetalhes(id) {
     const modal = document.getElementById("modal-detalhe");
-    if (modal && modal.showModal) {
-      modal.showModal();
-    } else {
-      this.toast("Info", `Abrindo detalhes da devolução #${id}`, "info");
-    }
+    if (modal && modal.showModal) modal.showModal();
+    else this.toast("Info", `Abrindo detalhes da devolução #${id}`, "info");
   }
 
   exportar() {
-    const cols = ["id", "id_venda", "cliente_nome", "loja_nome", "sku", "status", "log_status", "valor_produto", "valor_frete", "created_at"];
+    const cols = ["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","valor_produto","valor_frete","created_at"];
     const linhas = [cols.join(",")].concat(
-      this.items.map((d) => cols.map((c) => `"${String(d[c] ?? "").replace(/"/g, '""')}"`).join(",")),
+      this.items.map((d) => cols.map((c) => `"${String(d[c] ?? "").replace(/"/g,'""')}"`).join(",")),
     );
     const blob = new Blob([linhas.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "devolucoes.csv";
-    a.click();
+    const a = document.createElement("a"); a.href = url; a.download = "devolucoes.csv"; a.click();
     URL.revokeObjectURL(url);
     this.toast("Sucesso", "Relatório exportado.", "sucesso");
   }
@@ -653,16 +497,12 @@ class DevolucoesFeed {
     const tituloEl = document.getElementById("toast-titulo");
     const descEl = document.getElementById("toast-descricao");
     if (!toast || !tituloEl || !descEl) return;
-    tituloEl.textContent = titulo;
-    descEl.textContent = descricao;
-    toast.classList.add("show");
-    setTimeout(() => toast.classList.remove("show"), 3000);
+    tituloEl.textContent = titulo; descEl.textContent = descricao;
+    toast.classList.add("show"); setTimeout(() => toast.classList.remove("show"), 3000);
   }
 }
 
 // Boot
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => new DevolucoesFeed());
-} else {
-  new DevolucoesFeed();
-}
+} else { new DevolucoesFeed(); }
