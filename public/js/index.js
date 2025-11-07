@@ -50,6 +50,20 @@ class DevolucoesFeed {
     return res.json();
   }
 
+  async fetchQuiet(url, opts = {}) {
+    try {
+      const r = await fetch(url, { cache: "no-store", ...opts });
+      if (!r.ok) return null; // silencia 4xx/5xx
+      const ct = r.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        return await r.json();
+      }
+      return true; // ok sem JSON
+    } catch {
+      return null;
+    }
+  }
+
   coerceReturnsPayload(j) {
     if (Array.isArray(j)) return j;
     if (!j || typeof j !== "object") return [];
@@ -174,7 +188,6 @@ class DevolucoesFeed {
   async carregar() {
     this.toggleSkeleton(true);
     try {
-      // tenta o formato (limit/range_days) e depois o (page/pageSize)
       const tryUrls = [
         `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
         `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
@@ -256,7 +269,7 @@ class DevolucoesFeed {
       this.renderizar();
     });
 
-    // ----- botão invisível (para cumprir o "botão que atualiza") -----
+    // botão invisível para acionar a sync (conforme pedido)
     this.ensureHiddenRefreshButton();
   }
 
@@ -272,15 +285,20 @@ class DevolucoesFeed {
   }
 
   startAutoSync() {
-    // primeira rodada após 15s (evita brigar com o carregamento inicial)
-    setTimeout(() => this.clickHiddenRefresh(), 15000);
+    // primeira rodada após 12s (evita brigar com o carregamento inicial)
+    setTimeout(() => this.clickHiddenRefresh(), 12000);
+
     // intervalo fixo
     this.autoTimer = setInterval(() => {
-      if (document.visibilityState === "hidden") return; // evita rodar em abas ocultas
+      if (document.visibilityState === "hidden") return; // não roda em aba oculta
       this.clickHiddenRefresh();
     }, this.AUTO_MS);
 
-    // segurança: para o timer ao sair da página
+    // refresh quando a aba volta a ficar visível
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") this.clickHiddenRefresh();
+    });
+
     window.addEventListener("beforeunload", () => {
       if (this.autoTimer) clearInterval(this.autoTimer);
     });
@@ -296,18 +314,25 @@ class DevolucoesFeed {
     if (this.isRefreshing) return;
     this.isRefreshing = true;
 
-    // tira um snapshot de IDs antes da sync para contagem de "novas"
     const prevIds = new Set((this.items || []).map(d => String(d.id)));
 
     try {
-      // 1) claims → cria/atualiza devoluções
-      await fetch(`/api/ml/claims/import?days=90&statuses=opened,in_progress&silent=1`).catch(() => {});
+      // 0) ping — se não estiver autenticado no ML, aborta silenciosamente
+      const ping = await this.fetchQuiet(`/api/ml/ping`);
+      if (!ping) {
+        this.isRefreshing = false;
+        if (!silent) this.toast("Aviso", "Conta do ML não autenticada.", "erro");
+        return;
+      }
 
-      // 2) envios (ME1) → atualiza fluxo/logística
-      await fetch(`/api/ml/shipping/sync?recent_days=90&silent=1`).catch(() => {});
+      // 1) claims → cria/atualiza devoluções (usa 'status' p/ compat.)
+      await this.fetchQuiet(`/api/ml/claims/import?days=90&status=opened,in_progress&silent=1`);
 
-      // 3) chat/mensagens (se existir a rota; ignora 404)
-      try { await fetch(`/api/ml/messages/sync?recent_days=90&silent=1`); } catch {}
+      // 2) envios (ME1) → atualiza fluxo/logística (se a rota existir)
+      await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=90&silent=1`);
+
+      // 3) chat/mensagens (se existir)
+      await this.fetchQuiet(`/api/ml/messages/sync?recent_days=90&silent=1`);
 
       // recarrega lista
       await this.carregar();
@@ -527,7 +552,6 @@ class DevolucoesFeed {
   }
 
   badgeFluxo(d) {
-    // tenta ler de vários campos: log_status (preferido), claim_status, shipping_status
     const s = String(d.log_status ?? d.claim_status ?? d.shipping_status ?? "").toLowerCase().trim();
     const flow = this.normalizeFlow(s);
 
@@ -567,8 +591,8 @@ class DevolucoesFeed {
     // valores padronizados do backend (ML sync)
     if (t.includes("em_mediacao")) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
-    if (t.includes("postado")) return "em_transporte";     // postado → em trânsito
-    if (t.includes("em_transito")) return "em_transporte"; // ME1 shipped/out_for_delivery
+    if (t.includes("postado")) return "em_transporte";
+    if (t.includes("em_transito")) return "em_transporte";
     if (t.includes("recebido_cd")) return "recebido_cd";
     if (t.includes("em_inspecao")) return "em_preparacao";
     if (t.includes("nao_recebido")) return "pendente";
