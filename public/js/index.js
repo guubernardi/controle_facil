@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral de Devoluções (robusto p/ ML)
+// /public/js/index.js — Feed Geral de Devoluções (c/ circuito p/ claims 400 e "Nova" fix)
 class DevolucoesFeed {
   constructor() {
     // ===== Estado =====
@@ -11,31 +11,27 @@ class DevolucoesFeed {
     this.page = 1;
 
     // ===== "Nova devolução" =====
-    // Janela visual (desde a 1ª vez que VOCÊ viu no navegador)
-    this.NEW_WINDOW_MS = 36 * 60 * 60 * 1000; // 36h
-    // Corte duro por idade real da devolução (mesmo que 1ª visualização seja agora)
-    this.MAX_NEW_AGE_MS = 72 * 60 * 60 * 1000; // 72h
+    this.NEW_WINDOW_MS = 36 * 60 * 60 * 1000;   // 36h desde a 1ª visualização
+    this.MAX_NEW_AGE_MS = 72 * 60 * 60 * 1000;  // 72h de idade real no máximo
     this.NEW_KEY_PREFIX = "rf:firstSeen:";
 
     // ===== Auto-sync =====
     this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
 
-    // ===== Agrupadores de status internos =====
+    // ===== Circuit breaker p/ claims import (400) =====
+    this.CLAIMS_BLOCK_MS = 6 * 60 * 60 * 1000;  // 6h
+    this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
+
+    // ===== Agrupadores de status =====
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
       rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
       finalizado: new Set([
-        "concluido",
-        "concluida",
-        "finalizado",
-        "finalizada",
-        "fechado",
-        "fechada",
-        "encerrado",
-        "encerrada",
+        "concluido","concluida","finalizado","finalizada",
+        "fechado","fechada","encerrado","encerrada",
       ]),
-      pendente: new Set(["pendente", "em_analise", "em-analise", "aberto"]),
+      pendente: new Set(["pendente","em_analise","em-analise","aberto"]),
     };
 
     this.inicializar();
@@ -61,36 +57,18 @@ class DevolucoesFeed {
       const r = await fetch(url, { headers: { Accept: "application/json" } });
       const ct = r.headers.get("content-type") || "";
       let body = null;
-      if (ct.includes("application/json")) {
-        try {
-          body = await r.json();
-        } catch (_) {}
-      } else {
-        try {
-          body = await r.text();
-        } catch (_) {}
-      }
+      if (ct.includes("application/json")) { try { body = await r.json(); } catch(_){} }
+      else { try { body = await r.text(); } catch(_){} }
 
       if (!r.ok) {
-        const detail =
-          body && (body.error || body.message)
-            ? body.error || body.message
-            : typeof body === "string"
-            ? body
-            : "";
-        console.info(
-          "[sync]",
-          url,
-          "→",
-          r.status,
-          (detail || "").toString().slice(0, 160)
-        );
-        return { ok: false, status: r.status, detail };
+        const detail = body && (body.error || body.message) ? (body.error || body.message) : (typeof body === "string" ? body : "");
+        console.info("[sync]", url, "→", r.status, (detail || "").toString().slice(0,160));
+        return { ok:false, status:r.status, detail };
       }
-      return { ok: true, status: r.status, data: body };
+      return { ok:true, status:r.status, data:body };
     } catch (e) {
       console.info("[sync]", url, "→ falhou", e?.message || String(e));
-      return { ok: false, error: e?.message || String(e) };
+      return { ok:false, error:e?.message || String(e) };
     }
   }
 
@@ -101,61 +79,37 @@ class DevolucoesFeed {
   }
 
   formatBRL(n) {
-    return Number(n || 0).toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-    });
+    return Number(n || 0).toLocaleString("pt-BR",{ style:"currency", currency:"BRL" });
   }
 
   dataBr(iso) {
     if (!iso) return "—";
-    try {
-      return new Date(iso).toLocaleDateString("pt-BR", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      });
-    } catch {
-      return "—";
-    }
+    try { return new Date(iso).toLocaleDateString("pt-BR",{ day:"2-digit", month:"short", year:"numeric" }); }
+    catch { return "—"; }
   }
 
-  esc(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
+  esc(str) { const div = document.createElement("div"); div.textContent = str; return div.innerHTML; }
 
+  // ===== datas confiáveis apenas (nunca usar "id" como timestamp!) =====
   getDateMs(d) {
-    const cands = [
-      d.created_at,
-      d.createdAt,
-      d.created,
-      d.dt,
-      d.data,
-      d.inserted_at,
-      d.updated_at,
-    ].filter(Boolean);
-    for (const x of cands) {
-      const t = Date.parse(x);
+    const candNames = [
+      "created_at","createdAt","created","inserted_at","updated_at",
+      "data_compra","order_date","date_created","paid_at",
+      "ml_created_at","ml_updated_at","dt","data"
+    ];
+    for (const k of candNames) {
+      const v = d && d[k];
+      if (!v) continue;
+      const t = Date.parse(v);
       if (!Number.isNaN(t)) return t;
     }
-    const idn = Number(d.id);
-    return Number.isFinite(idn) ? idn : 0;
+    return 0; // desconhecida
   }
 
   // ======== "Nova devolução" (TTL) ========
   stableKey(d) {
-    // fixa no que NÃO muda entre reimportações
-    return (
-      d?.id_venda ||
-      d?.ml_claim_id ||
-      d?.order_id ||
-      d?.resource_id ||
-      d?.id
-    );
+    return d?.id_venda || d?.ml_claim_id || d?.order_id || d?.resource_id || d?.id;
   }
-
   firstSeenTs(key) {
     try {
       const k = this.NEW_KEY_PREFIX + key;
@@ -164,23 +118,19 @@ class DevolucoesFeed {
       const now = Date.now();
       localStorage.setItem(k, String(now));
       return now;
-    } catch {
-      return 0;
-    }
+    } catch { return 0; }
   }
-
   isNova(d) {
     const key = this.stableKey(d);
     if (!key) return false;
 
-    // hard stop por idade real
+    // corte duro por idade real (se conhecida)
     const created = this.getDateMs(d);
     if (created && Date.now() - created > this.MAX_NEW_AGE_MS) return false;
 
-    // janela por "primeira vez que vi"
+    // janela de primeira visualização
     return Date.now() - this.firstSeenTs(key) <= this.NEW_WINDOW_MS;
   }
-
   purgeOldSeen() {
     try {
       const now = Date.now();
@@ -194,56 +144,12 @@ class DevolucoesFeed {
   }
 
   // ========= Carregamento =========
-  getMockData() {
+  getMockData(){
     return [
-      {
-        id: "4",
-        id_venda: "DEV-2024-004",
-        cliente_nome: "Ana Oliveira",
-        loja_nome: "Loja Matriz",
-        sku: "PROD-004",
-        status: "em_analise",
-        log_status: "em_preparacao",
-        created_at: "2024-01-15T16:45:00Z",
-        valor_produto: 599.9,
-        valor_frete: 25.0,
-      },
-      {
-        id: "3",
-        id_venda: "DEV-2024-003",
-        cliente_nome: "Pedro Costa",
-        loja_nome: "Loja Online",
-        sku: "PROD-003",
-        status: "rejeitado",
-        log_status: "fechado",
-        created_at: "2024-01-14T09:15:00Z",
-        valor_produto: 89.9,
-        valor_frete: 8.0,
-      },
-      {
-        id: "2",
-        id_venda: "DEV-2024-002",
-        cliente_nome: "Maria Santos",
-        loja_nome: "Loja Shopping",
-        sku: "PROD-002",
-        status: "aprovado",
-        log_status: "pronto_envio",
-        created_at: "2024-01-13T14:30:00Z",
-        valor_produto: 149.9,
-        valor_frete: 12.0,
-      },
-      {
-        id: "1",
-        id_venda: "DEV-2024-001",
-        cliente_nome: "João Silva",
-        loja_nome: "Loja Centro",
-        sku: "PROD-001",
-        status: "pendente",
-        log_status: "em_transporte",
-        created_at: "2024-01-12T10:00:00Z",
-        valor_produto: 299.9,
-        valor_frete: 15.0,
-      },
+      { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
+      { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
+      { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado", log_status:"pronto_envio", created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
+      { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 },
     ];
   }
 
@@ -253,100 +159,58 @@ class DevolucoesFeed {
       const tryUrls = [
         `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
         `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
-        `/api/returns`,
+        `/api/returns`
       ];
-      let list = null,
-        lastErr = null;
+      let list=null, lastErr=null;
       for (const url of tryUrls) {
         try {
-          const j = await fetch(url, {
-            headers: { Accept: "application/json" },
-          }).then((r) => this.safeJson(r));
+          const j = await fetch(url,{ headers:{ Accept:"application/json" }}).then(r=>this.safeJson(r));
           const arr = this.coerceReturnsPayload(j);
-          if (Array.isArray(arr)) {
-            list = arr;
-            break;
-          }
-        } catch (e) {
-          lastErr = e;
-        }
+          if (Array.isArray(arr)) { list = arr; break; }
+        } catch(e){ lastErr = e; }
       }
       this.items = Array.isArray(list) && list.length ? list : this.getMockData();
       if (!list && lastErr) throw lastErr;
-    } catch (e) {
+    } catch(e) {
       console.warn("[index] Falha ao carregar devoluções. Usando mock.", e?.message);
       this.items = this.getMockData();
-      this.toast(
-        "Aviso",
-        "Não foi possível carregar da API. Exibindo dados de exemplo.",
-        "erro"
-      );
-    } finally {
-      this.toggleSkeleton(false);
-    }
+      this.toast("Aviso","Não foi possível carregar da API. Exibindo dados de exemplo.","erro");
+    } finally { this.toggleSkeleton(false); }
   }
 
-  toggleSkeleton(show) {
+  toggleSkeleton(show){
     const sk = document.getElementById("loading-skeleton");
     const listWrap = document.getElementById("lista-devolucoes");
     const list = document.getElementById("container-devolucoes");
     const vazio = document.getElementById("mensagem-vazia");
     if (sk) sk.hidden = !show;
     if (listWrap) listWrap.setAttribute("aria-busy", show ? "true" : "false");
-    if (list) {
-      if (show) list.innerHTML = "";
-      list.style.display = show ? "none" : "grid";
-    }
+    if (list){ if (show) list.innerHTML=""; list.style.display = show ? "none" : "grid"; }
     if (vazio && !show) vazio.hidden = true;
   }
 
   // ========= UI =========
   configurarUI() {
     const campo = document.getElementById("campo-pesquisa");
-    campo?.addEventListener("input", (e) => {
-      this.filtros.pesquisa = String(e.target.value || "").trim();
-      this.page = 1;
-      this.renderizar();
-    });
+    campo?.addEventListener("input", (e)=>{ this.filtros.pesquisa = String(e.target.value||"").trim(); this.page=1; this.renderizar(); });
 
     const selectFallback = document.getElementById("filtro-status");
-    selectFallback?.addEventListener("change", (e) => {
-      this.filtros.status = (e.target.value || "todos").toLowerCase();
-      this.page = 1;
-      this.renderizar();
+    selectFallback?.addEventListener("change",(e)=>{ this.filtros.status = (e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
+
+    document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
+
+    document.getElementById("btn-nova-devolucao")?.addEventListener("click",()=>{ this.toast("Info","Funcionalidade em desenvolvimento","info"); });
+
+    document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
+      const card = e.target.closest?.("[data-return-id]"); if(!card) return;
+      const id = card.getAttribute("data-return-id");
+      if (e.target.closest?.('[data-action="open"]') || e.target.closest?.(".botao-detalhes")) this.abrirDetalhes(id);
     });
 
-    document
-      .getElementById("botao-exportar")
-      ?.addEventListener("click", () => this.exportar());
-
-    document
-      .getElementById("btn-nova-devolucao")
-      ?.addEventListener("click", () =>
-        this.toast("Info", "Funcionalidade em desenvolvimento", "info")
-      );
-
-    document.getElementById("container-devolucoes")?.addEventListener(
-      "click",
-      (e) => {
-        const card = e.target.closest?.("[data-return-id]");
-        if (!card) return;
-        const id = card.getAttribute("data-return-id");
-        if (
-          e.target.closest?.('[data-action="open"]') ||
-          e.target.closest?.(".botao-detalhes")
-        )
-          this.abrirDetalhes(id);
-      }
-    );
-
-    document.getElementById("paginacao")?.addEventListener("click", (e) => {
-      const a = e.target.closest("button[data-page]");
-      if (!a) return;
-      const p = Number(a.getAttribute("data-page"));
-      if (!Number.isFinite(p) || p === this.page) return;
-      this.page = p;
-      this.renderizar();
+    document.getElementById("paginacao")?.addEventListener("click",(e)=>{
+      const a = e.target.closest("button[data-page]"); if(!a) return;
+      const p = Number(a.getAttribute("data-page")); if(!Number.isFinite(p) || p===this.page) return;
+      this.page=p; this.renderizar();
     });
 
     // botão invisível para o auto-sync
@@ -354,8 +218,8 @@ class DevolucoesFeed {
     hiddenBtn.id = "auto-refresh-hidden";
     hiddenBtn.type = "button";
     hiddenBtn.style.display = "none";
-    hiddenBtn.setAttribute("aria-hidden", "true");
-    hiddenBtn.addEventListener("click", () => this.atualizarDados());
+    hiddenBtn.setAttribute("aria-hidden","true");
+    hiddenBtn.addEventListener("click",()=>this.atualizarDados());
     document.body.appendChild(hiddenBtn);
   }
 
@@ -369,115 +233,62 @@ class DevolucoesFeed {
     };
     setTimeout(clickHiddenRefresh, 2000);
     setInterval(clickHiddenRefresh, this.SYNC_MS);
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) setTimeout(clickHiddenRefresh, 500);
-    });
-    window.addEventListener("online", () =>
-      setTimeout(clickHiddenRefresh, 500)
-    );
+    document.addEventListener("visibilitychange",()=>{ if(!document.hidden) setTimeout(clickHiddenRefresh, 500); });
+    window.addEventListener("online",()=>setTimeout(clickHiddenRefresh, 500));
   }
 
-  // ========= Sync com FALLBACK robusto =========
-  async syncClaimsWithFallback() {
-    // Tenta com "statuses" (lista) e, se falhar, tenta "status" unitário.
-    const attempts = [
-      { label: "30d opened,in_progress", days: 30, statuses: ["opened", "in_progress"] },
-      { label: "7d in_progress", days: 7, statuses: ["in_progress"] },
-      { label: "3d opened", days: 3, statuses: ["opened"] },
-      { label: "1d in_progress", days: 1, statuses: ["in_progress"] },
-    ];
+  // ========= Circuit breaker helpers =========
+  claimsImportAllowed() {
+    try {
+      const until = Number(localStorage.getItem(this.CLAIMS_BLOCK_KEY) || 0);
+      return Date.now() > until;
+    } catch { return true; }
+  }
+  blockClaimsImport() {
+    try {
+      localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now() + this.CLAIMS_BLOCK_MS));
+    } catch {}
+  }
 
-    const tryImport = async (days, statusesArr) => {
-      // 1) preferir "statuses" (comma)
-      const qs1 = new URLSearchParams({
-        silent: "1",
-        all: "1",
-        days: String(days),
-        statuses: statusesArr.join(","),
-      });
-      let r = await this.fetchQuiet(`/api/ml/claims/import?${qs1.toString()}`);
+  // ========= Sync com fallback enxuto (e com circuito) =========
+  async syncClaimsWithFallback() {
+    if (!this.claimsImportAllowed()) return false;
+
+    const daysOpts = [3, 7, 30];
+
+    for (const d of daysOpts) {
+      console.info("[sync] claims/import tentativa:", `${d}d in_progress`);
+      const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), status:"in_progress" });
+      const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
       if (r.ok) return true;
 
-      // 2) unitário com "status" (sem vírgula)
-      for (const st of statusesArr) {
-        const qs2 = new URLSearchParams({
-          silent: "1",
-          all: "1",
-          days: String(days),
-          status: st,
-        });
-        r = await this.fetchQuiet(`/api/ml/claims/import?${qs2.toString()}`);
-        if (r.ok) return true;
+      // Se respondeu 400 logo de cara (invalid_claim_id), ativa o circuito e para de insistir
+      if (r.status === 400 || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id")) {
+        this.blockClaimsImport();
+        if (!this._lastSyncErrShown) {
+          this._lastSyncErrShown = true;
+          this.toast("Aviso", "Importação de claims do ML recusada (400). Vou pausar por 6h e seguir sincronizando envios e mensagens.", "erro");
+        }
+        return false;
       }
-      return false;
-    };
-
-    for (const a of attempts) {
-      console.info("[sync] claims/import tentativa:", a.label);
-      const ok = await tryImport(a.days, a.statuses);
-      if (ok) return true;
-
-      // Se NÃO for "invalid_claim_id" explícito, não adianta insistir muito.
-      const last = await this.fetchQuiet(
-        `/api/ml/claims/import?silent=1&all=1&days=${a.days}&statuses=${encodeURIComponent(
-          a.statuses.join(",")
-        )}`
-      );
-      const msg = (last.detail || "").toString().toLowerCase();
-      if (!msg.includes("invalid_claim_id") && last.status !== 400) break;
     }
-
-    // Última cartada: from/to (1 dia) com "in_progress"
-    const to = new Date();
-    const from = new Date(Date.now() - 24 * 60 * 60 * 1000); // 1 dia
-    const pad = (n) => String(n).padStart(2, "0");
-    const toStr = `${to.getFullYear()}-${pad(to.getMonth() + 1)}-${pad(
-      to.getDate()
-    )}`;
-    const fromStr = `${from.getFullYear()}-${pad(from.getMonth() + 1)}-${pad(
-      from.getDate()
-    )}`;
-
-    console.info("[sync] claims/import tentativa: from/to 1d");
-    const qs2 = new URLSearchParams({
-      from: fromStr,
-      to: toStr,
-      silent: "1",
-      all: "1",
-      statuses: "in_progress",
-    });
-    const r2 = await this.fetchQuiet(`/api/ml/claims/import?${qs2.toString()}`);
-    return !!r2.ok;
+    return false;
   }
 
   async atualizarDados() {
-    const before = new Set(this.items.map((d) => String(d.id)));
+    const before = new Set(this.items.map(d => String(d.id)));
 
-    // 1) claims import com fallback
-    const importedOk = await this.syncClaimsWithFallback();
+    // 1) claims import com circuito
+    await this.syncClaimsWithFallback();
 
-    // 2) endpoints opcionais — ignorar 404/400 silenciosamente
-    await this.fetchQuiet(
-      `/api/ml/shipping/sync?recent_days=${this.RANGE_DIAS}&silent=1`
-    );
-    await this.fetchQuiet(
-      `/api/ml/messages/sync?recent_days=${this.RANGE_DIAS}&silent=1`
-    );
+    // 2) endpoints opcionais — ignorar erros, seguem ajudando a atualizar fluxo "a caminho"
+    await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
+    await this.fetchQuiet(`/api/ml/messages/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
 
-    // 3) recarrega lista e informa se entrou algo novo
+    // 3) recarrega lista e reporta novidades
     await this.carregar();
-    const novos = this.items.filter((d) => !before.has(String(d.id))).length;
-    if (novos > 0)
-      this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
-
-    if (!importedOk && !this._lastSyncErrShown) {
-      this._lastSyncErrShown = true;
-      this.toast(
-        "Aviso",
-        "O ML retornou alguns claims inválidos nessa janela. Vou continuar tentando com janelas menores e seguir sincronizando envios/mensagens.",
-        "erro"
-      );
-    }
+    const novos = this.items.filter(d => !before.has(String(d.id))).length;
+    if (novos > 0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
 
     this.renderizar();
   }
@@ -495,23 +306,21 @@ class DevolucoesFeed {
     const st = (this.filtros.status || "todos").toLowerCase();
 
     const filtrados = (this.items || []).filter((d) => {
-      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status]
-        .map((x) => String(x || "").toLowerCase())
-        .some((s) => s.includes(q));
+      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status, d.shipping_status, d.ml_shipping_status]
+        .map((x)=>String(x||"").toLowerCase())
+        .some((s)=>s.includes(q));
       const statusMatch = st === "todos" || this.grupoStatus(d.status) === st;
       return textoMatch && statusMatch;
     });
 
-    filtrados.sort((a, b) => this.getDateMs(b) - this.getDateMs(a));
+    filtrados.sort((a,b)=>this.getDateMs(b)-this.getDateMs(a));
     if (countEl) countEl.textContent = String(filtrados.length);
 
     if (!filtrados.length) {
       container.style.display = "none";
       if (vazio) {
         vazio.hidden = false;
-        if (descVazio)
-          descVazio.textContent =
-            q || (st !== "todos" ? "Tente ajustar os filtros" : "Ajuste os filtros de pesquisa");
+        if (descVazio) descVazio.textContent = q || (st!=="todos" ? "Tente ajustar os filtros" : "Ajuste os filtros de pesquisa");
       }
       if (pag) pag.innerHTML = "";
       return;
@@ -528,11 +337,7 @@ class DevolucoesFeed {
     container.style.display = "grid";
     if (vazio) vazio.hidden = true;
     container.innerHTML = "";
-    pageItems.forEach((d, i) => {
-      const card = this.card(d, i);
-      card.setAttribute("role", "listitem");
-      container.appendChild(card);
-    });
+    pageItems.forEach((d,i)=>{ const card=this.card(d,i); card.setAttribute("role","listitem"); container.appendChild(card); });
 
     this.renderPaginacao(totalPages);
   }
@@ -540,49 +345,40 @@ class DevolucoesFeed {
   renderPaginacao(totalPages) {
     const nav = document.getElementById("paginacao");
     if (!nav) return;
-    if (totalPages <= 1) {
-      nav.innerHTML = "";
-      return;
-    }
+    if (totalPages <= 1) { nav.innerHTML = ""; return; }
 
     const cur = this.page;
-    const btn = (p, label = p, disabled = false, active = false) => `
-      <button class="page-btn${active ? " is-active" : ""}" data-page="${p}" ${
-      disabled ? "disabled aria-disabled='true'" : ""
-    } aria-label="Página ${p}">${label}</button>`;
+    const btn = (p,label=p,disabled=false,active=false)=>`
+      <button class="page-btn${active ? " is-active" : ""}" data-page="${p}" ${disabled ? "disabled aria-disabled='true'" : ""} aria-label="Página ${p}">${label}</button>`;
 
     const windowSize = 5;
-    let start = Math.max(1, cur - Math.floor(windowSize / 2));
+    let start = Math.max(1, cur - Math.floor(windowSize/2));
     let end = start + windowSize - 1;
-    if (end > totalPages) {
-      end = totalPages;
-      start = Math.max(1, end - windowSize + 1);
-    }
+    if (end > totalPages) { end = totalPages; start = Math.max(1, end - windowSize + 1); }
 
     let html = "";
-    html += btn(Math.max(1, cur - 1), "‹", cur === 1, false);
+    html += btn(Math.max(1, cur-1), "‹", cur===1, false);
     if (start > 1) {
-      html += btn(1, "1", false, cur === 1);
+      html += btn(1,"1",false,cur===1);
       if (start > 2) html += `<span class="page-ellipsis" aria-hidden="true">…</span>`;
     }
-    for (let p = start; p <= end; p++) html += btn(p, String(p), false, p === cur);
+    for (let p=start; p<=end; p++) html += btn(p,String(p),false,p===cur);
     if (end < totalPages) {
-      if (end < totalPages - 1)
-        html += `<span class="page-ellipsis" aria-hidden="true">…</span>`;
-      html += btn(totalPages, String(totalPages), false, cur === totalPages);
+      if (end < totalPages-1) html += `<span class="page-ellipsis" aria-hidden="true">…</span>`;
+      html += btn(totalPages,String(totalPages),false,cur===totalPages);
     }
-    html += btn(Math.min(totalPages, cur + 1), "›", cur === totalPages, false);
+    html += btn(Math.min(totalPages, cur+1), "›", cur===totalPages, false);
     nav.innerHTML = html;
   }
 
   // ========= Card =========
-  card(d, index = 0) {
+  card(d, index=0) {
     const el = document.createElement("div");
     el.className = "card-devolucao slide-up";
     el.style.animationDelay = `${index * 0.08}s`;
     el.setAttribute("data-return-id", String(d.id));
 
-    const data = this.dataBr(d.created_at);
+    const data = this.dataBr(d.created_at || d.data_compra || d.order_date);
     const valorProduto = Number(d.valor_produto || 0);
     const valorFrete = Number(d.valor_frete || 0);
 
@@ -626,9 +422,7 @@ class DevolucoesFeed {
             <path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/>
           </svg>
           <span class="campo-label">Produto</span>
-          <span class="campo-valor valor-destaque">${this.formatBRL(
-            valorProduto
-          )}</span>
+          <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
 
         <div class="campo-info">
@@ -636,16 +430,12 @@ class DevolucoesFeed {
             <path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0 0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0 0 1 .329.938V10.5a1.5 1.5 0 0 1-1.5 1.5H14a2 2 0 1 1-4 0H5a2 2 0 1 1-3.998-.085A1.5 1.5 0 0 1 0 10.5v-7z"/>
           </svg>
           <span class="campo-label">Frete</span>
-          <span class="campo-valor valor-destaque">${this.formatBRL(
-            valorFrete
-          )}</span>
+          <span class="campo-valor valor-destaque">${this.formatBRL(valorFrete)}</span>
         </div>
       </div>
 
       <div class="devolucao-footer">
-        <a href="../devolucao-editar.html?id=${encodeURIComponent(
-          d.id
-        )}" class="link-sem-estilo" target="_blank" rel="noopener">
+        <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
           <button class="botao botao-outline botao-detalhes" data-action="open">
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
               <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/>
@@ -660,182 +450,93 @@ class DevolucoesFeed {
   }
 
   // ========= Badges =========
-  badgeNova(d) {
-    return this.isNova(d)
-      ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>'
-      : "";
-  }
+  badgeNova(d){ return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
 
-  badgeStatus(d) {
+  badgeStatus(d){
     const grp = this.grupoStatus(d.status);
     const map = {
-      pendente:
-        '<div class="badge badge-pendente" title="Status interno">Pendente</div>',
-      aprovado:
-        '<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
-      rejeitado:
-        '<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
-      em_analise:
-        '<div class="badge badge-info" title="Status interno">Em Análise</div>',
-      finalizado:
-        '<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
+      pendente:'<div class="badge badge-pendente" title="Status interno">Pendente</div>',
+      aprovado:'<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
+      rejeitado:'<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
+      em_analise:'<div class="badge badge-info" title="Status interno">Em Análise</div>',
+      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
     };
-    return (
-      map[grp] ||
-      `<div class="badge" title="Status interno">${this.esc(
-        d.status || "—"
-      )}</div>`
-    );
+    return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status || "—")}</div>`;
   }
 
-  badgeFluxo(d) {
+  badgeFluxo(d){
     const s = this.extractFlowString(d);
     const flow = this.normalizeFlow(s);
-    const labels = {
-      disputa: "Em Disputa",
-      mediacao: "Mediação",
-      em_preparacao: "Em Preparação",
-      pronto_envio: "Pronto p/ Envio",
-      em_transporte: "A caminho",
-      recebido_cd: "Recebido no CD",
-      fechado: "Fechado",
-      pendente: "Fluxo Pendente",
-    };
-    const css = {
-      disputa: "badge-info",
-      mediacao: "badge-info",
-      em_preparacao: "badge-pendente",
-      pronto_envio: "badge-aprovado",
-      em_transporte: "badge-info",
-      recebido_cd: "badge-aprovado",
-      fechado: "badge-rejeitado",
-      pendente: "badge",
-    };
+    const labels = { disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação", pronto_envio:"Pronto p/ Envio", em_transporte:"A caminho", recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente" };
+    const css = { disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente", pronto_envio:"badge-aprovado", em_transporte:"badge-info", recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge" };
     const key = flow || "pendente";
-    return `<div class="badge ${
-      css[key] || "badge"
-    }" title="Fluxo da devolução">${labels[key] || "Fluxo"}</div>`;
+    return `<div class="badge ${css[key] || "badge"}" title="Fluxo da devolução">${labels[key] || "Fluxo"}</div>`;
   }
 
   // pega “o que tiver” de fluxo/entrega/claim/shipping
-  extractFlowString(d) {
-    const pick = (o, keys) => {
-      for (const k of keys) {
-        if (o && o[k] != null) return String(o[k]);
-      }
-      return "";
-    };
-    // superfície
+  extractFlowString(d){
+    const pick = (o, keys) => { for (const k of keys) { if (o && o[k] != null) return String(o[k]); } return ""; };
     let s =
       pick(d, [
-        "log_status",
-        "status_log",
-        "flow",
-        "flow_status",
-        "ml_flow",
-        "shipping_status",
-        "ship_status",
-        "ml_shipping_status",
-        "return_shipping_status",
-        "current_shipping_status",
-        "tracking_status",
+        "log_status","status_log","flow","flow_status","ml_flow",
+        "shipping_status","ship_status","ml_shipping_status",
+        "return_shipping_status","current_shipping_status","tracking_status",
+        "claim_status","claim_stage"
       ]) || "";
-
-    // alguns backends aninham
-    if (!s && d.shipping) s = pick(d.shipping, ["status", "substatus"]);
-    if (!s && d.return) s = pick(d.return, ["status"]);
-    if (!s && d.claim) s = pick(d.claim, ["stage", "status"]);
+    if (!s && d.shipping) s = pick(d.shipping, ["status","substatus"]);
+    if (!s && d.return)   s = pick(d.return, ["status"]);
+    if (!s && d.claim)    s = pick(d.claim,  ["stage","status"]);
     return String(s || "").toLowerCase().trim();
   }
 
-  normalizeFlow(s) {
+  normalizeFlow(s){
     if (!s) return "pendente";
-    const t = s.replace(/\s+/g, "_");
-
-    // sinais diretos
-    if (t.includes("em_mediacao") || /(media[cç]ao|mediation)/.test(t))
-      return "mediacao";
+    const t = s.replace(/\s+/g,"_");
+    if (t.includes("em_mediacao") || /(media[cç]ao|mediation)/.test(t)) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
     if (t.includes("postado")) return "em_transporte";
     if (t.includes("em_transito")) return "em_transporte";
-    if (t.includes("a_caminho") || /(on_the_way|in_transit)/.test(t))
-      return "em_transporte";
-    if (t.includes("recebido_cd") || /(delivered|recebid|arrived)/.test(t))
-      return "recebido_cd";
+    if (t.includes("a_caminho") || /(on_the_way|in_transit)/.test(t)) return "em_transporte";
+    if (t.includes("recebido_cd") || /(delivered|recebid|arrived)/.test(t)) return "recebido_cd";
     if (t.includes("em_inspecao")) return "em_preparacao";
     if (t.includes("nao_recebido")) return "pendente";
-    if (t.includes("devolvido") || t.includes("fechado") || /(closed)/.test(t))
-      return "fechado";
-
-    // genéricos
+    if (t.includes("devolvido") || t.includes("fechado") || /(closed)/.test(t)) return "fechado";
     if (/(prepar|prep|ready_to_ship)/.test(t)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
-    if (
-      /(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(
-        t
-      )
-    )
-      return "em_transporte";
-
+    if (/(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(t)) return "em_transporte";
     return "pendente";
   }
 
-  grupoStatus(st) {
-    const s = String(st || "").toLowerCase();
-    for (const [grupo, set] of Object.entries(this.STATUS_GRUPOS))
-      if (set.has(s)) return grupo;
-    if (s === "em_analise" || s === "em-analise") return "em_analise";
+  grupoStatus(st){
+    const s = String(st||"").toLowerCase();
+    for (const [grupo,set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return grupo;
+    if (s==="em_analise" || s==="em-analise") return "em_analise";
     return "pendente";
   }
 
   // ========= Ações =========
-  abrirDetalhes(id) {
+  abrirDetalhes(id){
     const modal = document.getElementById("modal-detalhe");
     if (modal && modal.showModal) modal.showModal();
-    else this.toast("Info", `Abrindo detalhes da devolução #${id}`, "info");
+    else this.toast("Info",`Abrindo detalhes da devolução #${id}`,"info");
   }
 
-  exportar() {
-    const cols = [
-      "id",
-      "id_venda",
-      "cliente_nome",
-      "loja_nome",
-      "sku",
-      "status",
-      "log_status",
-      "valor_produto",
-      "valor_frete",
-      "created_at",
-    ];
-    const linhas = [cols.join(",")].concat(
-      this.items.map((d) =>
-        cols
-          .map((c) => `"${String(d[c] ?? "").replace(/"/g, '""')}"`)
-          .join(",")
-      )
-    );
-    const blob = new Blob([linhas.join("\n")], {
-      type: "text/csv;charset=utf-8",
-    });
+  exportar(){
+    const cols = ["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","valor_produto","valor_frete","created_at"];
+    const linhas = [cols.join(",")].concat(this.items.map(d => cols.map(c => `"${String(d[c] ?? "").replace(/"/g,'""')}"`).join(",")));
+    const blob = new Blob([linhas.join("\n")],{ type:"text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "devolucoes.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-    this.toast("Sucesso", "Relatório exportado.", "sucesso");
+    const a = document.createElement("a"); a.href=url; a.download="devolucoes.csv"; a.click(); URL.revokeObjectURL(url);
+    this.toast("Sucesso","Relatório exportado.","sucesso");
   }
 
-  toast(titulo, descricao, _tipo = "info") {
+  toast(titulo, descricao, _tipo="info"){
     const toast = document.getElementById("toast");
     const tituloEl = document.getElementById("toast-titulo");
     const descEl = document.getElementById("toast-descricao");
     if (!toast || !tituloEl || !descEl) return;
-    tituloEl.textContent = titulo;
-    descEl.textContent = descricao;
-    toast.classList.add("show");
-    setTimeout(() => toast.classList.remove("show"), 3000);
+    tituloEl.textContent = titulo; descEl.textContent = descricao;
+    toast.classList.add("show"); setTimeout(()=>toast.classList.remove("show"), 3000);
   }
 }
 
