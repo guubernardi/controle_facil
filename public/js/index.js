@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral com resolução de fluxo por card (sem endpoints 404)
+// /public/js/index.js — Feed Geral com resolução de fluxo por card (corrigido p/ ml-shipping)
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -25,6 +25,12 @@ class DevolucoesFeed {
     this.FLOW_TTL_MS = 30 * 60 * 1000;
     this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
 
+    // seller headers p/ /api/ml/*
+    this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
+                   || localStorage.getItem('rf:sellerId') || '';
+    this.sellerNick = document.querySelector('meta[name="ml-seller-nick"]')?.content?.trim()
+                   || localStorage.getItem('rf:sellerNick') || '';
+
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado","autorizado","autorizada"]),
       rejeitado: new Set(["rejeitado","rejeitada","negado","negada"]),
@@ -45,9 +51,15 @@ class DevolucoesFeed {
 
   // ===== rede/util =====
   safeJson(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.status===204?{}:res.json(); }
+
   async fetchQuiet(url){
     try{
-      const r = await fetch(url,{ headers:{Accept:"application/json"} });
+      const headers = { Accept:"application/json" };
+      if (url.startsWith('/api/ml')) {
+        if (this.sellerId)   headers['x-seller-id']   = this.sellerId;
+        if (this.sellerNick) headers['x-seller-nick'] = this.sellerNick;
+      }
+      const r = await fetch(url,{ headers });
       const ct = r.headers.get("content-type")||""; let body=null;
       if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
       if(!r.ok){
@@ -61,6 +73,7 @@ class DevolucoesFeed {
       return { ok:false, error:e?.message||String(e) };
     }
   }
+
   coerceReturnsPayload(j){ if(Array.isArray(j)) return j; if(!j||typeof j!=="object") return []; return j.items||j.data||j.returns||j.list||[]; }
   formatBRL(n){ return Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}); }
   dataBr(iso){ if(!iso) return "—"; try{ return new Date(iso).toLocaleDateString("pt-BR",{day:"2-digit",month:"short",year:"numeric"});}catch{ return "—"; } }
@@ -188,8 +201,8 @@ class DevolucoesFeed {
   async atualizarDados(){
     const before=new Set(this.items.map(d=>String(d.id)));
     await this.syncClaimsWithFallback(); // pode ser no-op
-    await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
-    await this.fetchQuiet(`/api/ml/messages/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
+    await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
+    await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
     await this.carregar();
     const novos=this.items.filter(d=>!before.has(String(d.id))).length;
     if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -219,9 +232,16 @@ class DevolucoesFeed {
     if (!s && d.claim)    s = pick(d.claim, ["stage","status"]);
     return String(s||"").toLowerCase().trim();
   }
+
   normalizeFlow(s){
     if(!s) return "pendente";
-    const t = s.replace(/\s+/g,"_");
+    const t = String(s).toLowerCase().replace(/\s+/g,"_");
+
+    // mapear nomes vindos do backend
+    if (t.includes("preparacao")) return "em_preparacao";
+    if (t === "transporte")       return "em_transporte";
+    if (t.includes("recebido_cd")) return "recebido_cd";
+
     if (t.includes("em_mediacao") || /(media[cç]ao|mediation)/.test(t)) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
     if (t.includes("postado")) return "em_transporte";
@@ -250,47 +270,18 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
   }
 
-  // ———— ÚNICO lugar que “descobre” o status de envio sem endpoints fantasmas ————
-  async fetchShippingFlow(orderId, returnId, claimId){
-    // 1) enrich do retorno (geralmente já traz return.shipping/status/substatus)
-    if (returnId){
-      const r = await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(returnId)}/enrich`);
-      if (r.ok){
-        const j = r.data?.data ?? r.data ?? {};
-        const ship = j.return?.shipping || j.shipping || {};
-        const s = String(ship.status || ship.substatus || j.shipping_status || "").toLowerCase();
-        if (s) return s;
-      }
-    }
-    // 2) claim (fallback)
-    if (claimId){
-      const rc = await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
-      if (rc.ok){
-        const c = rc.data?.data ?? rc.data?.claim ?? rc.data ?? {};
-        const ship = c.return?.shipping || {};
-        const s = String(ship.status || ship.substatus || c.stage || c.status || "").toLowerCase();
-        if (s) return s;
-      }
-    }
-    // 3) força um sync por order_id e tenta ler o retorno novamente
-    if (orderId){
-      await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
-      if (returnId){
-        const r2 = await this.fetchQuiet(`/api/returns/${encodeURIComponent(returnId)}`);
-        if (r2.ok){
-          const d = r2.data?.data ?? r2.data ?? {};
-          const s = String(d.shipping_status || d.ml_shipping_status || d.log_status || "").toLowerCase();
-          if (s) return s;
-        }
-      }
-    }
-    return "";
+  // pega status logístico diretamente do resumo do backend
+  async fetchShippingFlow(orderId){
+    if (!orderId) return "";
+    const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
+    if (!r.ok) return "";
+    const s = r.data || {};
+    return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
   async resolveAndPatchFlow(d){
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
-    const claimId = d?.ml_claim_id || d?.claim_id;
     if (!id || !orderId) return;
 
     // cache: se já sei, aplico
@@ -304,8 +295,7 @@ class DevolucoesFeed {
       return;
     }
 
-    // sem endpoints 404: apenas enrich -> claim -> sync+GET /returns/:id
-    let found = await this.fetchShippingFlow(orderId, id, claimId);
+    const found = await this.fetchShippingFlow(orderId);
     if (!found) return;
 
     this.setCachedFlow(orderId, found);

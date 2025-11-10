@@ -4,27 +4,37 @@
 const express = require('express');
 const { query } = require('../db');
 
-const router = express.Router();
+const router  = express.Router();
 const ML_BASE = 'https://api.mercadolibre.com';
 
-// ---------------- Token resolving (reuso do padrão das outras rotas) ----------------
+/* ============================== Token resolving ============================== */
+
 async function loadTokenRowFromDb(sellerId, q = query) {
   const sql = `
     SELECT user_id, access_token, expires_at
       FROM public.ml_tokens
-     WHERE user_id = $1
+     WHERE user_id = $1 AND coalesce(access_token,'') <> ''
      ORDER BY updated_at DESC
      LIMIT 1`;
   const { rows } = await q(sql, [sellerId]);
   return rows[0] || null;
 }
 
+/**
+ * Ordem de resolução:
+ * 1) Header x-seller-token
+ * 2) x-seller-id / ?seller_id / session.ml.user_id -> public.ml_tokens
+ * 3) x-seller-nick / ?seller_nick -> ENV MELI_TOKEN_<NICK> ou public.ml_accounts.nickname
+ * 4) Último token válido em public.ml_tokens
+ * 5) Sessão (fallback)
+ * 6) ENVs MELI_OWNER_TOKEN ou ML_ACCESS_TOKEN
+ */
 async function resolveSellerAccessToken(req) {
-  // 1) Header direto
+  // 1) direto (forçado)
   const direct = req.get('x-seller-token');
   if (direct) return direct;
 
-  // 2) Seller id: header, query ou sessão
+  // 2) seller_id
   const sellerId = String(
     req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || ''
   ).replace(/\D/g, '');
@@ -33,11 +43,40 @@ async function resolveSellerAccessToken(req) {
     if (row?.access_token) return row.access_token;
   }
 
-  // 3) Sessão
+  // 3) seller nickname
+  const nick = (req.get('x-seller-nick') || req.query.seller_nick || '').trim();
+  if (nick) {
+    const envKey = 'MELI_TOKEN_' + nick.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+    if (process.env[envKey]) return process.env[envKey];
+    try {
+      const { rows } = await query(`
+        SELECT access_token
+          FROM public.ml_accounts
+         WHERE nickname = $1 AND coalesce(access_token,'') <> ''
+         ORDER BY updated_at DESC NULLS LAST
+         LIMIT 1
+      `, [nick]);
+      if (rows[0]?.access_token) return rows[0].access_token;
+    } catch {}
+  }
+
+  // 4) último token global no DB
+  try {
+    const { rows } = await query(`
+      SELECT access_token
+        FROM public.ml_tokens
+       WHERE coalesce(access_token,'') <> ''
+       ORDER BY updated_at DESC
+       LIMIT 1
+    `);
+    if (rows[0]?.access_token) return rows[0].access_token;
+  } catch {}
+
+  // 5) sessão (se você guarda o token lá)
   if (req.session?.ml?.access_token) return req.session.ml.access_token;
 
-  // 4) Fallback owner (ENV)
-  return process.env.MELI_OWNER_TOKEN || '';
+  // 6) ENVs
+  return process.env.MELI_OWNER_TOKEN || process.env.ML_ACCESS_TOKEN || '';
 }
 
 async function mget(req, path) {
@@ -48,7 +87,9 @@ async function mget(req, path) {
     throw e;
   }
   const url = ML_BASE + path;
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+  });
   const txt = await r.text();
   let j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch {}
   if (!r.ok) {
@@ -59,22 +100,28 @@ async function mget(req, path) {
   return j;
 }
 
-// ---------------- Helpers locais ----------------
+/* ============================== Helpers ============================== */
+
 function mapShipmentToLog(status = '', substatus = '') {
   const s  = String(status).toLowerCase();
   const ss = String(substatus).toLowerCase();
 
-  if (/(ready_to_ship|handling|to_be_agreed|ready|prepar)/.test(s) || /(ready|prep|etiq|label)/.test(ss))
-    return 'preparacao';
+  // preparação
+  if (
+    /(ready_to_ship|handling|to_be_agreed|ready|prepar|label|printing|pending)/.test(s) ||
+    /(ready|prep|etiq|label|print)/.test(ss)
+  ) return 'preparacao';
 
-  if (/(shipped|in_transit)/.test(s) || /(transit|transporte)/.test(ss))
+  // em trânsito
+  if (/(shipped|in_transit)/.test(s) || /(transit|transporte|route)/.test(ss))
     return 'transporte';
 
-  if (/delivered/.test(s) || /(delivered|entreg)/.test(ss))
+  // entregue / recebido
+  if (/delivered/.test(s) || /(delivered|entreg|received)/.test(ss))
     return 'recebido_cd';
 
-  if (/not_delivered/.test(s))
-    return 'transporte'; // pode refinar depois (ex.: 'disputa')
+  // não entregue ainda conta como trânsito para nosso funil atual
+  if (/not_delivered/.test(s)) return 'transporte';
 
   return null;
 }
@@ -99,7 +146,6 @@ async function updateReturnLogStatusIfAny(orderId, suggestedLog) {
     `UPDATE devolucoes
         SET log_status = $1,
             ${has.updated_at ? 'updated_at = now(),' : ''}
-            -- no-op to keep SQL valid if no updated_at:
             id_venda = id_venda
       WHERE id_venda = $2`,
     [suggestedLog, String(orderId)]
@@ -107,30 +153,35 @@ async function updateReturnLogStatusIfAny(orderId, suggestedLog) {
   return { updated: !!rowCount, rowCount };
 }
 
-// ---------------- Rotas ----------------
+/* ============================== Rotas ============================== */
 
-// Stub só para matar o 404 do front por enquanto
+/** Stub: mata 404 do front até implementarmos sync de mensagens */
 router.get('/messages/sync', (req, res) => {
   const days = parseInt(req.query.days || req.query._days || '0', 10) || null;
-  return res.json({ ok: true, stub: true, days, note: 'messages/sync ainda não implementado; endpoint de placeholder.' });
+  return res.json({
+    ok: true,
+    stub: true,
+    days,
+    note: 'messages/sync ainda não implementado; placeholder.'
+  });
 });
 
 /**
  * GET /api/ml/shipping/by-order/:orderId
- * Retorna shipments detalhados do pedido
+ * Detalha shipments de um pedido
  */
 router.get('/shipping/by-order/:orderId', async (req, res) => {
   try {
     const orderId = String(req.params.orderId || '').replace(/\D/g, '');
     if (!orderId) return res.status(400).json({ error: 'order_id inválido' });
 
-    // 1) tenta rota oficial by order
+    // tenta via /orders/{id}/shipments
     let shipments = null;
     try {
       const j = await mget(req, `/orders/${encodeURIComponent(orderId)}/shipments`);
       shipments = Array.isArray(j) ? j : (Array.isArray(j?.shipments) ? j.shipments : null);
-    } catch (e) {
-      // 2) fallback via search
+    } catch {
+      // fallback /shipments/search?order_id=...
       const j = await mget(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
       shipments = Array.isArray(j?.results) ? j.results : null;
     }
@@ -139,7 +190,6 @@ router.get('/shipping/by-order/:orderId', async (req, res) => {
       return res.json({ order_id: orderId, shipments: [] });
     }
 
-    // Detalha cada shipment
     const details = [];
     for (const s of shipments) {
       const id = s?.id || s?.shipment_id || s;
@@ -161,7 +211,7 @@ router.get('/shipping/by-order/:orderId', async (req, res) => {
 
 /**
  * GET /api/ml/shipping/status?order_id=...
- * Retorna um resumo simples do status logístico
+ * Resumo simples do status logístico
  */
 router.get('/shipping/status', async (req, res) => {
   try {
@@ -177,10 +227,9 @@ router.get('/shipping/status', async (req, res) => {
       if (!id) continue;
       const d = await mget(req, `/shipments/${encodeURIComponent(id)}`).catch(() => null);
       if (!d) continue;
-      // pega o mais recente como "principal"
-      if (!main || new Date(d?.last_updated || d?.date_created || 0) > new Date(main?.last_updated || main?.date_created || 0)) {
-        main = d;
-      }
+      const dWhen = new Date(d?.last_updated || d?.date_created || 0).getTime();
+      const mWhen = new Date(main?.last_updated || main?.date_created || 0).getTime();
+      if (!main || dWhen > mWhen) main = d;
     }
 
     if (!main) return res.json({ order_id: orderId, status: null });
@@ -203,49 +252,49 @@ router.get('/shipping/status', async (req, res) => {
 /**
  * GET /api/ml/shipping/sync
  * - ?order_id=...  (principal)
- * - ?days=...      (bulk stub: responde 200 e ignora por enquanto)
+ * - ?days=... ou ?_days=... (bulk STUB: 200 ok)
+ * - nenhum param => no-op 200 para não poluir o console
  */
 router.get('/shipping/sync', async (req, res) => {
   try {
     const orderId = String(req.query.order_id || '').replace(/\D/g, '');
-    const days    = parseInt(req.query.days || req.query._days || '0', 10) || null;
+    const days = parseInt(req.query.days || req.query._days || '0', 10) || null;
 
-    // bulk (por enquanto: stub 200 para não quebrar o front)
+    // bulk stub (não quebra o front)
     if (!orderId && days) {
-      return res.json({ ok: true, note: 'bulk sync por days ainda não implementado. Use order_id por enquanto.', days });
+      return res.json({ ok: true, mode: 'bulk-stub', days, note: 'bulk ainda não implementado' });
     }
 
-    if (!orderId) return res.status(400).json({ error: 'order_id é obrigatório' });
+    // no-op silencioso para chamadas vazias
+    if (!orderId && !days) {
+      return res.json({ ok: true, mode: 'noop', note: 'passe ?order_id=... ou ?days=...' });
+    }
 
-    // shipments por pedido
+    // ------- fluxo por pedido -------
     let shipments = null;
     try {
       const j = await mget(req, `/orders/${encodeURIComponent(orderId)}/shipments`);
       shipments = Array.isArray(j) ? j : (Array.isArray(j?.shipments) ? j.shipments : null);
-    } catch (e) {
+    } catch {
       const j = await mget(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
       shipments = Array.isArray(j?.results) ? j.results : null;
     }
 
     const details = [];
     let bestLog = null;
-
     if (shipments && shipments.length) {
+      const rank = { preparacao: 1, transporte: 2, recebido_cd: 3 };
       for (const s of shipments) {
         const id = s?.id || s?.shipment_id || s;
         if (!id) continue;
         const d = await mget(req, `/shipments/${encodeURIComponent(id)}`).catch(() => null);
-        if (d) {
-          details.push(d);
-          const sug = mapShipmentToLog(d.status, d.substatus);
-          // escolhe o "mais avançado"
-          const rank = { preparacao: 1, transporte: 2, recebido_cd: 3 };
-          if (sug && (!bestLog || (rank[sug] || 0) > (rank[bestLog] || 0))) bestLog = sug;
-        }
+        if (!d) continue;
+        details.push(d);
+        const sug = mapShipmentToLog(d.status, d.substatus);
+        if (sug && (!bestLog || (rank[sug] || 0) > (rank[bestLog] || 0))) bestLog = sug;
       }
     }
 
-    // atualiza devolução (se existir) com o log sugerido
     const upd = await updateReturnLogStatusIfAny(orderId, bestLog);
 
     return res.json({
