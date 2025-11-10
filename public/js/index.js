@@ -59,7 +59,7 @@ class DevolucoesFeed {
         if (this.sellerId)   headers['x-seller-id']   = this.sellerId;
         if (this.sellerNick) headers['x-seller-nick'] = this.sellerNick;
       }
-      const r = await fetch(url,{ headers });
+      const r = await fetch(url,{ headers, credentials:"include" });
       const ct = r.headers.get("content-type")||""; let body=null;
       if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
       if(!r.ok){
@@ -115,7 +115,7 @@ class DevolucoesFeed {
       let list=null, last=null;
       for(const url of urls){
         try{
-          const j = await fetch(url,{headers:{Accept:"application/json"}}).then(r=>this.safeJson(r));
+          const j = await fetch(url,{headers:{Accept:"application/json"}, credentials:"include"}).then(r=>this.safeJson(r));
           const arr = this.coerceReturnsPayload(j);
           if (Array.isArray(arr)) { list=arr; break; }
         }catch(e){ last=e; }
@@ -213,8 +213,23 @@ class DevolucoesFeed {
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
     await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // tenta enriquecer esse retorno
-    if (orderId) await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
-    if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`); // puxa claim (para termos stage/status)
+
+    // força leitura de status logístico por order_id
+    let sug = null;
+    if (orderId) {
+      const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
+      if (r.ok) {
+        sug = r.data?.suggested_log_status || null;
+      }
+    }
+    if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
+
+    // update otimista no card
+    if (sug) {
+      const it = this.items.find(x => String(x.id) === String(id));
+      if (it) it.log_status = sug;
+    }
+
     await this.carregar(); this.renderizar();
     this.toast("Sucesso","Devolução atualizada com o Mercado Livre.","sucesso");
   }
@@ -314,6 +329,7 @@ class DevolucoesFeed {
     await fetch(`/api/returns/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type":"application/json" },
+      credentials: "include",
       body: JSON.stringify({ log_status: canon, updated_by: "frontend-flow-resolver" })
     }).catch(()=>{});
   }
