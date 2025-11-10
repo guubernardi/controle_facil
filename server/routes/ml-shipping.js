@@ -5,257 +5,259 @@ const express = require('express');
 const { query } = require('../db');
 
 const router = express.Router();
+const ML_BASE = 'https://api.mercadolibre.com';
 
-// =================== Config ML ===================
-const ML_API = 'https://api.mercadolibre.com';
-const ML_TOKEN_URL = process.env.ML_TOKEN_URL || `${ML_API}/oauth/token`;
-const AHEAD_SEC = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600; // refresh 10min antes
-
-// =================== Helpers de token (mesmo padrão do ml-claims.js) ===================
+// ---------------- Token resolving (reuso do padrão das outras rotas) ----------------
 async function loadTokenRowFromDb(sellerId, q = query) {
-  const { rows } = await q(
-    `SELECT user_id, nickname, access_token, refresh_token, expires_at
-       FROM public.ml_tokens
-      WHERE user_id = $1
-      ORDER BY updated_at DESC
-      LIMIT 1`,
-    [sellerId]
-  );
+  const sql = `
+    SELECT user_id, access_token, expires_at
+      FROM public.ml_tokens
+     WHERE user_id = $1
+     ORDER BY updated_at DESC
+     LIMIT 1`;
+  const { rows } = await q(sql, [sellerId]);
   return rows[0] || null;
 }
-function isExpiringSoon(expiresAtIso, aheadSec = AHEAD_SEC) {
-  if (!expiresAtIso) return true;
-  const exp = new Date(expiresAtIso).getTime();
-  if (!Number.isFinite(exp)) return true;
-  return (exp - Date.now()) <= aheadSec * 1000;
-}
-async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
-  if (!refreshToken) return null;
 
-  const form = new URLSearchParams({
-    grant_type: 'refresh_token',
-    client_id:     process.env.ML_CLIENT_ID || '',
-    client_secret: process.env.ML_CLIENT_SECRET || '',
-    refresh_token: refreshToken
-  });
-
-  const r = await fetch(ML_TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: form.toString()
-  });
-
-  const ct = r.headers.get('content-type') || '';
-  const body = ct.includes('application/json') ? await r.json().catch(() => null)
-                                               : await r.text().catch(() => '');
-
-  if (!r.ok) {
-    const msg = (body && (body.message || body.error)) || r.statusText || 'refresh_failed';
-    const err = new Error(msg);
-    err.status = r.status;
-    err.body = body;
-    throw err;
-  }
-
-  const { access_token, refresh_token, token_type, scope, expires_in } = body || {};
-  const expiresAt = new Date(Date.now() + (Math.max(60, Number(expires_in) || 600)) * 1000).toISOString();
-
-  await q(`
-    INSERT INTO public.ml_tokens
-      (user_id, access_token, refresh_token, token_type, scope, expires_at, raw, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7, now())
-    ON CONFLICT (user_id) DO UPDATE SET
-      access_token = EXCLUDED.access_token,
-      refresh_token= EXCLUDED.refresh_token,
-      token_type   = EXCLUDED.token_type,
-      scope        = EXCLUDED.scope,
-      expires_at   = EXCLUDED.expires_at,
-      raw          = EXCLUDED.raw,
-      updated_at   = now()
-  `, [sellerId, access_token || null, refresh_token || null, token_type || null, scope || null, expiresAt, JSON.stringify(body || {})]);
-
-  return { access_token, refresh_token, expires_at: expiresAt };
-}
 async function resolveSellerAccessToken(req) {
+  // 1) Header direto
   const direct = req.get('x-seller-token');
   if (direct) return direct;
 
+  // 2) Seller id: header, query ou sessão
   const sellerId = String(
     req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || ''
   ).replace(/\D/g, '');
-
   if (sellerId) {
-    const row = await loadTokenRowFromDb(sellerId, req.q || query);
-    if (row?.access_token) {
-      if (!isExpiringSoon(row.expires_at)) return row.access_token;
-      try {
-        const refreshed = await refreshAccessToken({
-          sellerId,
-          refreshToken: row.refresh_token,
-          q: req.q || query
-        });
-        if (refreshed?.access_token) return refreshed.access_token;
-      } catch (e) {
-        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) return row.access_token;
-        throw e;
-      }
-    }
+    const row = await loadTokenRowFromDb(sellerId);
+    if (row?.access_token) return row.access_token;
   }
+
+  // 3) Sessão
   if (req.session?.ml?.access_token) return req.session.ml.access_token;
+
+  // 4) Fallback owner (ENV)
   return process.env.MELI_OWNER_TOKEN || '';
 }
-async function mlFetch(req, path, opts = {}) {
+
+async function mget(req, path) {
   const token = await resolveSellerAccessToken(req);
-  if (!token) { const e = new Error('missing_access_token'); e.status = 401; throw e; }
-  const url = path.startsWith('http') ? path : `${ML_API}${path}`;
-  const r = await fetch(url, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      ...(opts.headers || {})
-    }
-  });
-  const ct = r.headers.get('content-type') || '';
-  const body = ct.includes('application/json') ? await r.json().catch(() => null)
-                                               : await r.text().catch(() => '');
+  if (!token) {
+    const e = new Error('missing_access_token');
+    e.status = 401;
+    throw e;
+  }
+  const url = ML_BASE + path;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+  const txt = await r.text();
+  let j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch {}
   if (!r.ok) {
-    const err = new Error((body && (body.message || body.error)) || r.statusText);
-    err.status = r.status; err.body = body;
+    const err = new Error(j?.message || j?.error || r.statusText);
+    err.status = r.status; err.body = j;
     throw err;
   }
-  return body;
+  return j;
 }
 
-// =================== Shipping helpers ===================
-function canonFlow(status, substatus) {
-  const t = `${String(status||'').toLowerCase()}_${String(substatus||'').toLowerCase()}`;
-  if (/(mediat)/.test(t)) return 'em_mediacao';
-  if (/(prep|prepar|embal|label|etiq|ready|pronto)/.test(t)) return 'aguardando_postagem';
-  if (/(transit|transito|transporte|enviado|out_for_delivery|returning|shipped)/.test(t)) return 'em_transito';
-  if (/(delivered|entreg|arrived|recebid)/.test(t)) return 'recebido_cd';
-  if (/(closed|fechado|finaliz|returned)/.test(t)) return 'devolvido';
-  return 'pendente';
+// ---------------- Helpers locais ----------------
+function mapShipmentToLog(status = '', substatus = '') {
+  const s  = String(status).toLowerCase();
+  const ss = String(substatus).toLowerCase();
+
+  if (/(ready_to_ship|handling|to_be_agreed|ready|prepar)/.test(s) || /(ready|prep|etiq|label)/.test(ss))
+    return 'preparacao';
+
+  if (/(shipped|in_transit)/.test(s) || /(transit|transporte)/.test(ss))
+    return 'transporte';
+
+  if (/delivered/.test(s) || /(delivered|entreg)/.test(ss))
+    return 'recebido_cd';
+
+  if (/not_delivered/.test(s))
+    return 'transporte'; // pode refinar depois (ex.: 'disputa')
+
+  return null;
 }
 
-async function getShipmentByOrder(req, orderId) {
-  // 1) /orders/{id} → shipping.id
-  try {
-    const order = await mlFetch(req, `/orders/${encodeURIComponent(orderId)}`);
-    const shipId = order?.shipping?.id || order?.shipping_id || null;
-    if (shipId) {
-      const sh = await mlFetch(req, `/shipments/${encodeURIComponent(shipId)}`);
-      return { shipment: sh, order, shipId };
-    }
-  } catch (_) { /* cai no fallback */ }
-
-  // 2) fallback /shipments/search?order_id=...
-  try {
-    const sr = await mlFetch(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
-    const results = Array.isArray(sr?.results) ? sr.results : (Array.isArray(sr) ? sr : []);
-    const first = results[0] || null;
-    if (first?.id) {
-      const sh = await mlFetch(req, `/shipments/${encodeURIComponent(first.id)}`);
-      return { shipment: sh, order: null, shipId: first.id };
-    }
-  } catch (_) {}
-
-  return { shipment: null, order: null, shipId: null };
+async function tableHasColumns(table, cols) {
+  const { rows } = await query(
+    `SELECT column_name FROM information_schema.columns
+       WHERE table_schema='public' AND table_name=$1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {}; for (const c of cols) out[c] = set.has(c);
+  return out;
 }
 
-function pickStatusFields(sh) {
-  const status    = sh?.status || sh?.substatus || sh?.shipping_status || null;
-  const substatus = sh?.substatus || sh?.sub_status || null;
-  return { status, substatus };
+async function updateReturnLogStatusIfAny(orderId, suggestedLog) {
+  if (!orderId || !suggestedLog) return { updated: false };
+  const has = await tableHasColumns('devolucoes', ['id_venda','log_status','updated_at']);
+  if (!has.id_venda || !has.log_status) return { updated: false };
+
+  const { rowCount } = await query(
+    `UPDATE devolucoes
+        SET log_status = $1,
+            ${has.updated_at ? 'updated_at = now(),' : ''}
+            -- no-op to keep SQL valid if no updated_at:
+            id_venda = id_venda
+      WHERE id_venda = $2`,
+    [suggestedLog, String(orderId)]
+  );
+  return { updated: !!rowCount, rowCount };
 }
 
-// =================== ROTAS ===================
+// ---------------- Rotas ----------------
 
-// 1) /api/ml/shipping/status?order_id=...
-router.get('/shipping/status', async (req, res) => {
-  try {
-    const orderId = String(req.query.order_id || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'missing_order_id' });
-
-    const { shipment, order, shipId } = await getShipmentByOrder(req, orderId);
-    if (!shipment) return res.status(404).json({ error: 'shipment_not_found', order_id: orderId });
-
-    const { status, substatus } = pickStatusFields(shipment);
-    return res.json({
-      order_id: orderId,
-      shipping_id: shipId || shipment?.id || null,
-      status: String(status || '').toLowerCase(),
-      substatus: String(substatus || '').toLowerCase(),
-      flow: canonFlow(status, substatus),
-      raw: shipment
-    });
-  } catch (e) {
-    const s = e.status || 500;
-    res.status(s).json({ error: e.message, detail: e.body || null });
-  }
+// Stub só para matar o 404 do front por enquanto
+router.get('/messages/sync', (req, res) => {
+  const days = parseInt(req.query.days || req.query._days || '0', 10) || null;
+  return res.json({ ok: true, stub: true, days, note: 'messages/sync ainda não implementado; endpoint de placeholder.' });
 });
 
-// 2) /api/ml/shipping/state?order_id=...  (igual ao /status, só nome semântico)
-router.get('/shipping/state', async (req, res) => {
-  try {
-    const orderId = String(req.query.order_id || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'missing_order_id' });
-    const { shipment, shipId } = await getShipmentByOrder(req, orderId);
-    if (!shipment) return res.status(404).json({ error: 'shipment_not_found', order_id: orderId });
-
-    const { status, substatus } = pickStatusFields(shipment);
-    res.json({
-      order_id: orderId,
-      shipping_id: shipId || shipment?.id || null,
-      status: String(status || '').toLowerCase(),
-      substatus: String(substatus || '').toLowerCase(),
-      flow: canonFlow(status, substatus),
-      data: shipment
-    });
-  } catch (e) {
-    const s = e.status || 500;
-    res.status(s).json({ error: e.message, detail: e.body || null });
-  }
-});
-
-// 3) /api/ml/shipping/by-order/:orderId  (atalho REST)
+/**
+ * GET /api/ml/shipping/by-order/:orderId
+ * Retorna shipments detalhados do pedido
+ */
 router.get('/shipping/by-order/:orderId', async (req, res) => {
   try {
-    const orderId = String(req.params.orderId || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'missing_order_id' });
-    const { shipment, order, shipId } = await getShipmentByOrder(req, orderId);
-    if (!shipment) return res.status(404).json({ error: 'shipment_not_found', order_id: orderId });
-    res.json({ order_id: orderId, shipping_id: shipId || shipment?.id || null, order: order || null, shipment });
+    const orderId = String(req.params.orderId || '').replace(/\D/g, '');
+    if (!orderId) return res.status(400).json({ error: 'order_id inválido' });
+
+    // 1) tenta rota oficial by order
+    let shipments = null;
+    try {
+      const j = await mget(req, `/orders/${encodeURIComponent(orderId)}/shipments`);
+      shipments = Array.isArray(j) ? j : (Array.isArray(j?.shipments) ? j.shipments : null);
+    } catch (e) {
+      // 2) fallback via search
+      const j = await mget(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
+      shipments = Array.isArray(j?.results) ? j.results : null;
+    }
+
+    if (!shipments || !shipments.length) {
+      return res.json({ order_id: orderId, shipments: [] });
+    }
+
+    // Detalha cada shipment
+    const details = [];
+    for (const s of shipments) {
+      const id = s?.id || s?.shipment_id || s;
+      if (!id) continue;
+      try {
+        const d = await mget(req, `/shipments/${encodeURIComponent(id)}`);
+        details.push(d);
+      } catch {
+        details.push({ id, error: 'fetch_failed' });
+      }
+    }
+
+    return res.json({ order_id: orderId, shipments: details });
   } catch (e) {
     const s = e.status || 500;
-    res.status(s).json({ error: e.message, detail: e.body || null });
+    return res.status(s).json({ error: e.message, detail: e.body || null });
   }
 });
 
-// 4) /api/ml/orders/:orderId/shipping  (o front tentou essa URL)
-router.get('/orders/:orderId/shipping', async (req, res) => {
+/**
+ * GET /api/ml/shipping/status?order_id=...
+ * Retorna um resumo simples do status logístico
+ */
+router.get('/shipping/status', async (req, res) => {
   try {
-    const orderId = String(req.params.orderId || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'missing_order_id' });
-    const { shipment, order, shipId } = await getShipmentByOrder(req, orderId);
-    if (!shipment) return res.status(404).json({ error: 'shipment_not_found', order_id: orderId });
-    res.json({ order_id: orderId, shipping_id: shipId || shipment?.id || null, order: order || null, shipment });
+    const orderId = String(req.query.order_id || '').replace(/\D/g, '');
+    if (!orderId) return res.status(400).json({ error: 'order_id é obrigatório' });
+
+    const j = await mget(req, `/orders/${encodeURIComponent(orderId)}/shipments`).catch(() => null);
+    const list = Array.isArray(j) ? j : (Array.isArray(j?.shipments) ? j.shipments : []);
+    let main = null;
+
+    for (const s of list) {
+      const id = s?.id || s?.shipment_id || s;
+      if (!id) continue;
+      const d = await mget(req, `/shipments/${encodeURIComponent(id)}`).catch(() => null);
+      if (!d) continue;
+      // pega o mais recente como "principal"
+      if (!main || new Date(d?.last_updated || d?.date_created || 0) > new Date(main?.last_updated || main?.date_created || 0)) {
+        main = d;
+      }
+    }
+
+    if (!main) return res.json({ order_id: orderId, status: null });
+
+    const suggested = mapShipmentToLog(main.status, main.substatus);
+    return res.json({
+      order_id: orderId,
+      shipment_id: main.id || null,
+      ml_status: main.status || null,
+      ml_substatus: main.substatus || null,
+      suggested_log_status: suggested || null,
+      last_updated: main.last_updated || null
+    });
   } catch (e) {
     const s = e.status || 500;
-    res.status(s).json({ error: e.message, detail: e.body || null });
+    return res.status(s).json({ error: e.message, detail: e.body || null });
   }
 });
 
-// 5) /api/ml/shipments?order_id=...  (proxy do search)
-router.get('/shipments', async (req, res) => {
+/**
+ * GET /api/ml/shipping/sync
+ * - ?order_id=...  (principal)
+ * - ?days=...      (bulk stub: responde 200 e ignora por enquanto)
+ */
+router.get('/shipping/sync', async (req, res) => {
   try {
-    const orderId = String(req.query.order_id || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'missing_order_id' });
-    const data = await mlFetch(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
-    res.json(data || {});
+    const orderId = String(req.query.order_id || '').replace(/\D/g, '');
+    const days    = parseInt(req.query.days || req.query._days || '0', 10) || null;
+
+    // bulk (por enquanto: stub 200 para não quebrar o front)
+    if (!orderId && days) {
+      return res.json({ ok: true, note: 'bulk sync por days ainda não implementado. Use order_id por enquanto.', days });
+    }
+
+    if (!orderId) return res.status(400).json({ error: 'order_id é obrigatório' });
+
+    // shipments por pedido
+    let shipments = null;
+    try {
+      const j = await mget(req, `/orders/${encodeURIComponent(orderId)}/shipments`);
+      shipments = Array.isArray(j) ? j : (Array.isArray(j?.shipments) ? j.shipments : null);
+    } catch (e) {
+      const j = await mget(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
+      shipments = Array.isArray(j?.results) ? j.results : null;
+    }
+
+    const details = [];
+    let bestLog = null;
+
+    if (shipments && shipments.length) {
+      for (const s of shipments) {
+        const id = s?.id || s?.shipment_id || s;
+        if (!id) continue;
+        const d = await mget(req, `/shipments/${encodeURIComponent(id)}`).catch(() => null);
+        if (d) {
+          details.push(d);
+          const sug = mapShipmentToLog(d.status, d.substatus);
+          // escolhe o "mais avançado"
+          const rank = { preparacao: 1, transporte: 2, recebido_cd: 3 };
+          if (sug && (!bestLog || (rank[sug] || 0) > (rank[bestLog] || 0))) bestLog = sug;
+        }
+      }
+    }
+
+    // atualiza devolução (se existir) com o log sugerido
+    const upd = await updateReturnLogStatusIfAny(orderId, bestLog);
+
+    return res.json({
+      ok: true,
+      order_id: orderId,
+      suggested_log_status: bestLog || null,
+      db_update: upd,
+      shipments: details
+    });
   } catch (e) {
     const s = e.status || 500;
-    res.status(s).json({ error: e.message, detail: e.body || null });
+    return res.status(s).json({ error: e.message, detail: e.body || null });
   }
 });
 
