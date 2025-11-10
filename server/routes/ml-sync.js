@@ -23,7 +23,7 @@ module.exports = function registerMlSync(app, opts = {}) {
 
   /* ----------------------------- helpers ----------------------------- */
 
-  // >>> NOVO: normaliza IDs de claim (só dígitos; descarta inválidos)
+  // Normaliza IDs de claim (só dígitos; descarta inválidos)
   function normalizeClaimId(v) {
     if (v == null) return null;
     const m = String(v).match(/\d+/g);
@@ -54,13 +54,49 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
+  // --------- NOVO: mapeamento correto de status logístico do retorno ---------
   function mapReturnStatus(ret) {
     const s = String(ret?.status || '').toLowerCase();
-    if (['to_be_sent','shipped','to_be_received','in_transit'].includes(s)) return 'em_transito';
-    if (['received','arrived'].includes(s)) return 'recebido_cd';
-    if (['in_review','under_review','inspection'].includes(s)) return 'em_inspecao';
-    if (['cancelled','refunded','closed','delivered'].includes(s)) return 'encerrado';
+
+    // etiqueta gerada / aguardando postagem / pronto pra enviar → "preparou devolução"
+    if (['to_be_sent', 'ready_to_ship', 'label_generated', 'label-generated'].includes(s)) {
+      return 'pronto_envio';
+    }
+
+    // em trânsito / a caminho do CD
+    if (['shipped', 'in_transit', 'to_be_received', 'on_the_way'].includes(s)) {
+      return 'em_transito';
+    }
+
+    // chegou no CD
+    if (['received', 'arrived'].includes(s)) return 'recebido_cd';
+
+    // triagem/inspeção
+    if (['in_review', 'under_review', 'inspection'].includes(s)) return 'em_inspecao';
+
+    // encerrado/entregue/cancelado/reembolsado
+    if (['cancelled', 'refunded', 'closed', 'delivered', 'finished'].includes(s)) return 'encerrado';
+
     return 'pendente';
+  }
+
+  // --------- NOVO: mapeamento do fluxo do claim para log_status ----------
+  function mapClaimFlow(claim) {
+    const t = String(claim?.type || '').toLowerCase();      // "mediations" ou "claim"
+    const st = String(claim?.status || '').toLowerCase();   // opened | in_progress | closed
+    const stage = String(claim?.stage || '').toLowerCase(); // claim | dispute | mediation
+
+    if (t === 'mediations') {
+      if (st === 'closed') return 'fechado';
+      if (stage.includes('dispute')) return 'disputa';
+      return 'mediacao';
+    }
+
+    if (st === 'opened')      return 'abriu_devolucao';
+    if (st === 'in_progress') return 'em_analise';
+    if (st === 'closed')      return 'fechado';
+
+    return null;
   }
 
   async function addReturnEvent(req, {
@@ -178,7 +214,7 @@ module.exports = function registerMlSync(app, opts = {}) {
           if (!arr.length) break;
 
           for (const it of arr) {
-            // >>> NOVO: já sanitiza o claim id aqui
+            // Sanitiza o claim id já na busca
             const raw = it?.id ?? it?.claim_id ?? it;
             const cid = normalizeClaimId(raw);
             if (!cid) continue;
@@ -208,6 +244,13 @@ module.exports = function registerMlSync(app, opts = {}) {
   async function getReturnV2ByClaim(http, claimId) {
     const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
     return data;
+  }
+
+  // --------- NOVO: detalhes de trocas (changes/replace) ----------
+  async function getChangesByClaim(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v1/claims/${claimId}/changes`);
+    const arr = Array.isArray(data?.data) ? data.data : [];
+    return arr[0] || null;
   }
 
   async function getOrderDetail(http, orderId) {
@@ -382,7 +425,7 @@ module.exports = function registerMlSync(app, opts = {}) {
 
         for (const [claimId, it] of claimMap.entries()) {
           try {
-            // >>> NOVO: proteção contra "invalid_claim_id"
+            // Proteção contra "invalid_claim_id"
             if (!normalizeClaimId(claimId)) {
               errors++; errors_detail.push({ account: account.user_id, kind: 'claim', item: claimId, error: 'invalid_claim_id (normalized empty)' });
               continue;
@@ -404,6 +447,15 @@ module.exports = function registerMlSync(app, opts = {}) {
               : false;
             if (!hasReturn) continue;
 
+            // Detecção de trocas (changes/replace) — quando houver a tag 'change'
+            let troca = null;
+            try {
+              const hasChangeTag = Array.isArray(claimDet?.related_entities) && claimDet.related_entities.includes('change');
+              if (hasChangeTag) {
+                troca = await getChangesByClaim(http, claimId);
+              }
+            } catch (_) { /* ignora erros de changes */ }
+
             let ret;
             try {
               ret = await getReturnV2ByClaim(http, claimId);
@@ -421,7 +473,8 @@ module.exports = function registerMlSync(app, opts = {}) {
 
             if (!order_id) continue;
 
-            const status = mapReturnStatus(ret);
+            const statusDev = mapReturnStatus(ret);
+            const statusLog = mapClaimFlow(claimDet);
             const sku = normalizeSku(it, claimDet);
 
             const returnId = await ensureReturnByOrder(req, {
@@ -434,35 +487,46 @@ module.exports = function registerMlSync(app, opts = {}) {
             if (!dry) {
               await qOf(req)(
                 `UPDATE devolucoes
-                   SET status = COALESCE($1, status),
-                       sku    = COALESCE($2, sku),
-                       loja_nome = CASE
+                   SET status     = COALESCE($1, status),
+                       log_status = COALESCE($2, log_status),
+                       sku        = COALESCE($3, sku),
+                       loja_nome  = CASE
                          WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
-                           THEN COALESCE($3, loja_nome)
+                           THEN COALESCE($4, loja_nome)
                          ELSE loja_nome END,
                        updated_at = now()
-                 WHERE id = $4`,
-                [status, sku, lojaNome, returnId]
+                 WHERE id = $5`,
+                [statusDev, statusLog, sku, lojaNome, returnId]
               );
               updated++;
             }
 
             const idemp = `ml-claim:${account.user_id}:${claimId}:${order_id}`;
             if (!dry) {
+              const metaEv = {
+                account_id: account.user_id,
+                nickname: account.nickname,
+                claim_id: claimId,
+                order_id,
+                return_id: ret?.id || null,
+                return_status: String(ret?.status || ''),
+                loja_nome: lojaNome
+              };
+              if (troca) {
+                metaEv.change = {
+                  status: troca.status,
+                  type: troca.type,
+                  new_orders_ids: Array.isArray(troca.new_orders_ids) ? troca.new_orders_ids : [],
+                  new_shipments: Array.isArray(troca.new_orders_shipments) ? troca.new_orders_shipments.map(s => s.id) : []
+                };
+              }
+
               await addReturnEvent(req, {
                 returnId,
                 type: 'ml-claim',
-                title: `Claim ${claimId} (${status})`,
-                message: 'Sincronizado pelo import',
-                meta: {
-                  account_id: account.user_id,
-                  nickname: account.nickname,
-                  claim_id: claimId,
-                  order_id,
-                  return_id: ret?.id || null,
-                  return_status: String(ret?.status || ''),
-                  loja_nome: lojaNome
-                },
+                title: `Claim ${claimId} (${statusDev}${statusLog ? ` · ${statusLog}` : ''})`,
+                message: troca ? 'Sincronizado (troca detectada)' : 'Sincronizado pelo import',
+                meta: metaEv,
                 idemp_key: idemp
               });
               events++;
@@ -487,7 +551,7 @@ module.exports = function registerMlSync(app, opts = {}) {
         });
       }
 
-      // >>> IMPORTANTE: SEMPRE 200 (mesmo com erros parciais)
+      // Sempre responde 200 (mesmo com erros parciais)
       return res.json({
         ok: true,
         from: fromIso,

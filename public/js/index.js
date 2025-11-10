@@ -22,7 +22,7 @@ class DevolucoesFeed {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
       rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
       finalizado: new Set(["concluido","concluida","finalizado","finalizada","fechado","fechada","encerrado","encerrada"]),
-      pendente: new Set(["pendente","em_analise","em-analise","aberto"]),
+      pendente: new Set(["pendente","em_analise","em-analise","aberto"])
     };
 
     this.inicializar();
@@ -98,7 +98,11 @@ class DevolucoesFeed {
       return now;
     } catch { return 0; }
   }
-  isNova(d){ const id = d?.id ?? d?.id_venda ?? null; if(!id) return false; return (Date.now() - this.firstSeenTs(id)) <= this.NEW_WINDOW_MS; }
+  isNova(d){
+    const id = (d && (d.id ?? d.id_venda)) ? String(d.id ?? d.id_venda) : null;
+    if(!id) return false;
+    return (Date.now() - this.firstSeenTs(id)) <= this.NEW_WINDOW_MS;
+  }
   purgeOldSeen(){
     try{
       const now = Date.now();
@@ -116,7 +120,7 @@ class DevolucoesFeed {
       { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
       { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
       { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado", log_status:"pronto_envio", created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
-      { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 },
+      { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 }
     ];
   }
 
@@ -133,7 +137,7 @@ class DevolucoesFeed {
         try {
           const j = await fetch(url,{ headers:{ Accept:"application/json" }}).then(r=>this.safeJson(r));
           const arr = this.coerceReturnsPayload(j);
-          if (Array.isArray(arr) && arr.length >= 0) { list = arr; break; }
+          if (Array.isArray(arr)) { list = arr; break; }
         } catch(e){ lastErr = e; }
       }
       this.items = Array.isArray(list) && list.length ? list : this.getMockData();
@@ -159,14 +163,22 @@ class DevolucoesFeed {
   // ========= UI =========
   configurarUI() {
     const campo = document.getElementById("campo-pesquisa");
-    campo?.addEventListener("input", (e)=>{ this.filtros.pesquisa = String(e.target.value||"").trim(); this.page=1; this.renderizar(); });
+    campo?.addEventListener("input", (e)=>{
+      this.filtros.pesquisa = String(e.target.value||"").trim();
+      this.page=1; this.renderizar();
+    });
 
     const selectFallback = document.getElementById("filtro-status");
-    selectFallback?.addEventListener("change",(e)=>{ this.filtros.status = (e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
+    selectFallback?.addEventListener("change",(e)=>{
+      this.filtros.status = (e.target.value||"todos").toLowerCase();
+      this.page=1; this.renderizar();
+    });
 
     document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
 
-    document.getElementById("btn-nova-devolucao")?.addEventListener("click",()=>{ this.toast("Info","Funcionalidade em desenvolvimento","info"); });
+    document.getElementById("btn-nova-devolucao")?.addEventListener("click",()=>{
+      this.toast("Info","Funcionalidade em desenvolvimento","info");
+    });
 
     document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
       const card = e.target.closest?.("[data-return-id]"); if(!card) return;
@@ -204,39 +216,55 @@ class DevolucoesFeed {
     window.addEventListener("online",()=>setTimeout(clickHiddenRefresh, 500));
   }
 
-  // ========= Sync com FALLBACK robusto =========
+  // ========= Sync com FALLBACK robusto (sem duplicar status/statuses) =========
+  buildImportUrl({ days, statuses, key = "statuses" }) {
+    const qs = new URLSearchParams({
+      silent: "1",
+      all: "1"
+    });
+    if (Number.isFinite(days)) qs.append("days", String(days));
+    if (statuses) qs.append(key, statuses);
+    return `/api/ml/claims/import?${qs.toString()}`;
+  }
+
+  async tryImport({ days, statuses }) {
+    // 1) tenta com "statuses"
+    let url = this.buildImportUrl({ days, statuses, key:"statuses" });
+    let r = await this.fetchQuiet(url);
+    if (r.ok) return { ok:true };
+
+    // 2) se falhar, tenta com "status" (compat)
+    url = this.buildImportUrl({ days, statuses, key:"status" });
+    r = await this.fetchQuiet(url);
+    return r;
+  }
+
   async syncClaimsWithFallback() {
-    // tenta várias combinações: dias ↓ e status ↓; também status+statuses e, por fim, from/to
     const attempts = [
       { label:"30d opened,in_progress", days: 30, statuses: "opened,in_progress" },
       { label:"7d in_progress",        days: 7,  statuses: "in_progress" },
       { label:"3d opened",             days: 3,  statuses: "opened" },
-      { label:"1d in_progress",        days: 1,  statuses: "in_progress" },
+      { label:"1d in_progress",        days: 1,  statuses: "in_progress" }
     ];
 
     for (const a of attempts) {
-      const qs = new URLSearchParams({ days: String(a.days), silent: "1", all: "1" });
-      qs.append("statuses", a.statuses);
-      qs.append("status", a.statuses); // compat
-
       console.info("[sync] claims/import tentativa:", a.label);
-      const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
+      const r = await this.tryImport(a);
       if (r.ok) return true;
 
       const msg = (r.detail || "").toString().toLowerCase();
-      // se NÃO for o erro chato de invalid_claim_id (ou não for 400), não adianta insistir
+      // prossegue apenas se for o erro chato de IDs inválidos/400; senão, para.
       if (!(msg.includes("invalid_claim_id") || r.status === 400)) break;
     }
 
-    // última cartada: usar janela from/to (algumas APIs tratam melhor)
+    // Janela from/to — 24h
     const to = new Date();
-    const from = new Date(Date.now() - 24*60*60*1000); // 1 dia
+    const from = new Date(Date.now() - 24*60*60*1000);
     const pad = (n)=>String(n).padStart(2,"0");
     const toStr   = `${to.getFullYear()}-${pad(to.getMonth()+1)}-${pad(to.getDate())}`;
     const fromStr = `${from.getFullYear()}-${pad(from.getMonth()+1)}-${pad(from.getDate())}`;
     const qs2 = new URLSearchParams({ from: fromStr, to: toStr, silent: "1", all: "1" });
     qs2.append("statuses", "in_progress");
-    qs2.append("status", "in_progress");
     console.info("[sync] claims/import tentativa: from/to 1d");
     const r2 = await this.fetchQuiet(`/api/ml/claims/import?${qs2.toString()}`);
     return !!r2.ok;
@@ -259,7 +287,7 @@ class DevolucoesFeed {
 
     if (!importedOk && !this._lastSyncErrShown) {
       this._lastSyncErrShown = true;
-      this.toast("Aviso", "ML devolveu alguns claims inválidos. Vou continuar tentando automaticamente com janelas menores.", "erro");
+      this.toast("Aviso", "Alguns claims do ML vieram inválidos. Vou continuar tentando com janelas menores automaticamente.", "erro");
     }
 
     this.renderizar();
@@ -278,7 +306,10 @@ class DevolucoesFeed {
     const st = (this.filtros.status || "todos").toLowerCase();
 
     const filtrados = (this.items || []).filter((d) => {
-      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status]
+      const textoMatch = [
+        d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status,
+        d.log_status, d.claim_status, d.shipping_status
+      ]
         .map((x)=>String(x||"").toLowerCase())
         .some((s)=>s.includes(q));
       const statusMatch = st === "todos" || this.grupoStatus(d.status) === st;
@@ -407,7 +438,7 @@ class DevolucoesFeed {
       </div>
 
       <div class="devolucao-footer">
-        <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
+        <a href="./devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener" aria-label="Ver detalhes da devolução">
           <button class="botao botao-outline botao-detalhes" data-action="open">
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
               <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/>
@@ -431,7 +462,7 @@ class DevolucoesFeed {
       aprovado:'<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
       rejeitado:'<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
       em_analise:'<div class="badge badge-info" title="Status interno">Em Análise</div>',
-      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
+      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>'
     };
     return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status || "—")}</div>`;
   }
@@ -439,8 +470,16 @@ class DevolucoesFeed {
   badgeFluxo(d){
     const s = String(d.log_status ?? d.claim_status ?? d.shipping_status ?? "").toLowerCase().trim();
     const flow = this.normalizeFlow(s);
-    const labels = { disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação", pronto_envio:"Pronto p/ Envio", em_transporte:"Em Transporte", recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente" };
-    const css = { disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente", pronto_envio:"badge-aprovado", em_transporte:"badge-info", recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge" };
+    const labels = {
+      disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação",
+      pronto_envio:"Pronto p/ Envio", em_transporte:"Em Transporte",
+      recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente"
+    };
+    const css = {
+      disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente",
+      pronto_envio:"badge-aprovado", em_transporte:"badge-info",
+      recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge"
+    };
     const key = flow || "pendente";
     return `<div class="badge ${css[key] || "badge"}" title="Fluxo da devolução">${labels[key] || "Fluxo"}</div>`;
   }
@@ -476,8 +515,12 @@ class DevolucoesFeed {
   // ========= Ações =========
   abrirDetalhes(id){
     const modal = document.getElementById("modal-detalhe");
-    if (modal && modal.showModal) modal.showModal();
-    else this.toast("Info",`Abrindo detalhes da devolução #${id}`,"info");
+    if (modal && modal.showModal) {
+      modal.showModal();
+    } else {
+      // fallback: navega para a tela de edição
+      window.open(`./devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
+    }
   }
 
   exportar(){
