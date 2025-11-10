@@ -3,311 +3,290 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistema de Devoluções - Mercado Livre</title>
   <meta name="description" content="Sistema de gerenciamento de devoluções - Edição e controle de processos de devolução do Mercado Livre">
-  <title>Controle Fácil - Devolução</title>
   <link rel="stylesheet" href="css/devolucao.css">
 </head>
 <body>
-  <div class="devolucao-page">
-    <!-- Topbar -->
-    <div class="topbar-mini">
-      <a href="index.html" class="topbar-back">
-        <button type="button" class="voltar" aria-label="Voltar para Devoluções" onclick="history.back()">
-          <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
-          <span>Voltar</span>
-        </button>
-      </a>
-    </div>
-
-    <main class="page-wrap" role="main">
-      <!-- Header -->
-      <header class="page-head">
-        <div>
-          <h1 class="title">
-            Devolução 
-            <span id="dv-id" class="kbd" aria-live="polite"></span>
-          </h1>
-          <p class="hint">
-            <strong>Regras:</strong> Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete
-            <span id="auto-hint"></span>
-          </p>
-        </div>
-
-        <div class="actions" role="group" aria-label="Ações da devolução">
-          <button id="btn-enrich" class="btn btn--ghost btn--lg" type="button" title="Atualizar dados a partir do ML">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+  <div class="min-h-screen">
+    <!-- Header -->
+    <header class="header">
+      <div class="container">
+        <div class="header-top">
+          <button class="btn btn-ghost" onclick="window.history.back()">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
             </svg>
-            <span>Atualizar dados (ML)</span>
+            Voltar
           </button>
-
-          <span class="actions-split"></span>
-
-          <!-- Marcação operacional -->
-          <div class="mark-wrap">
-            <label for="mark-op" class="sr-only">Marcar devolução como</label>
-            <select id="mark-op" class="select-lg" title="Marcar devolução como">
-              <option value="concluida">Concluída</option>
-              <option value="em_espera" selected>Em espera</option>
-              <option value="defeituosa">Defeituosa</option>
-              <option value="troca">Troca</option>
-              <option value="reembolso_parcial">Reembolso parcial</option>
-            </select>
-            
-            <input id="mark-obs" type="text" class="input-lg" placeholder="Observação (opcional)" />
-            
-            <button id="btn-mark" class="btn btn--success btn--lg" type="button" title="Aplicar marcação">
-              <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"/>
+          <div class="header-actions">
+            <button class="btn btn-outline" onclick="handleEnrich()">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
               </svg>
-              <span>Aplicar</span>
+              Atualizar dados (ML)
+            </button>
+            <button class="btn btn-success" onclick="handleSave()">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+              </svg>
+              Salvar
             </button>
           </div>
+        </div>
 
-          <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-              <polyline points="17 21 17 13 7 13 7 21"/>
-              <polyline points="7 3 7 8 15 8"/>
+        <div class="header-title">
+          <h1>Devolução <span class="return-id" id="returnIdHeader">#672932</span></h1>
+        </div>
+
+        <p class="rules-text">
+          <strong>Regras:</strong> Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete
+        </p>
+
+        <!-- Action Bar -->
+        <div class="action-bar">
+          <select class="select" id="markStatus">
+            <option value="em_espera">Em espera</option>
+            <option value="concluida">Concluída</option>
+            <option value="defeituosa">Defeituosa</option>
+            <option value="troca">Troca</option>
+            <option value="reembolso_parcial">Reembolso parcial</option>
+          </select>
+
+          <input 
+            type="text" 
+            class="input" 
+            id="markObservation" 
+            placeholder="Observação (opcional)"
+          />
+
+          <button class="btn btn-default" onclick="handleMark()">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
-            <span>Salvar</span>
+            Aplicar
           </button>
         </div>
-      </header>
+      </div>
+    </header>
 
-      <!-- Dialogs -->
-      <dialog id="dlg-recebido" class="dialog" aria-labelledby="rcd-title">
-        <form method="dialog" id="rcd-form">
-          <h3 id="rcd-title">Recebido no CD</h3>
-          <p class="dialog-desc">Registre quando o produto foi recebido no centro de distribuição.</p>
-
-          <div class="dialog-grid">
-            <div>
-              <label for="rcd-resp">Responsável</label>
-              <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" autocomplete="off" />
-            </div>
-
-            <div>
-              <label for="rcd-when">Data/Hora</label>
-              <input id="rcd-when" type="datetime-local" />
-            </div>
-          </div>
-
-          <div class="dialog-actions">
-            <div class="dialog-actions-right">
-              <button type="button" class="btn btn--ghost" id="rcd-cancel">
-                Cancelar
-              </button>
-              <button id="rcd-save" type="submit" class="btn btn--primary">
-                Salvar
-              </button>
-            </div>
-          </div>
-
-          <p class="dialog-hint">
-            Dica: se deixar o responsável vazio, será usado <b>cd</b>. Se não escolher uma data, uso a data/hora atual.
-          </p>
-        </form>
-      </dialog>
-
-      <dialog id="dlg-inspecao" class="dialog" aria-labelledby="insp-title">
-        <form method="dialog" id="insp-form">
-          <h3 id="insp-title">Inspeção</h3>
-          <div id="insp-sub" class="dialog-subtitle"></div>
-
-          <div>
-            <label for="insp-text" class="dialog-label">Observação (opcional)</label>
-            <textarea id="insp-text" rows="4" placeholder="Adicione detalhes sobre a inspeção..."></textarea>
-          </div>
-
-          <div class="dialog-actions-simple">
-            <button type="button" class="btn btn--ghost" id="insp-cancel">
-              Cancelar
-            </button>
-            <button type="submit" class="btn btn--primary" id="insp-confirm">
-              Confirmar
-            </button>
-          </div>
-        </form>
-      </dialog>
-
-      <!-- Grid de Cards -->
+    <main class="container main-content">
       <div class="grid">
         <!-- Dados da Devolução -->
-        <section class="card" aria-labelledby="sec-dados">
-          <h2 id="sec-dados">Dados da Devolução</h2>
-
-          <div class="row">
-            <label for="id_venda">Número do Pedido</label>
-            <input id="id_venda" name="id_venda" type="text" placeholder="Ex.: 12345 / TESTE-001" autocomplete="off" />
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">Dados da Devolução</h3>
           </div>
-
-          <div class="row">
-            <label for="cliente_nome">Cliente</label>
-            <input id="cliente_nome" name="cliente_nome" type="text" placeholder="Nome do cliente" autocomplete="name" />
-          </div>
-
-          <div class="row-group">
-            <div class="row">
-              <label for="loja_nome">Loja (apelido no canal)</label>
-              <input id="loja_nome" name="loja_nome" type="text" placeholder="Ex.: Minha Loja Oficial" autocomplete="organization" />
-            </div>
-            <div class="row">
-              <label for="data_compra">Data da compra</label>
-              <input id="data_compra" name="data_compra" type="date" inputmode="numeric" />
-            </div>
-          </div>
-
-          <div class="row-group">
-            <div class="row">
-              <label for="status">Status (interno)</label>
-              <select id="status" name="status">
-                <option value="">—</option>
-                <option value="pendente">Pendente</option>
-                <option value="em_analise">Em análise</option>
-                <option value="aprovado">Aprovado</option>
-                <option value="rejeitado">Rejeitado</option>
-                <option value="cancelado">Cancelado</option>
-              </select>
+          <div class="card-content">
+            <div class="form-group">
+              <label for="orderId">Número do Pedido</label>
+              <input type="text" class="input input-mono" id="orderId" value="LU-148447077863929" placeholder="Ex.: 12345 / TESTE-001">
             </div>
 
-            <div class="row">
-              <label for="tipo_reclamacao">Motivo da reclamação</label>
-              <select id="tipo_reclamacao" name="tipo_reclamacao">
-                <option value="">—</option>
-                <option value="produto_defeituoso">Produto defeituoso</option>
-                <option value="produto_danificado">Produto danificado</option>
-                <option value="nao_corresponde">Não corresponde à descrição</option>
-                <option value="arrependimento_cliente">Arrependimento do cliente</option>
-                <option value="entrega_atrasada">Entrega atrasada</option>
-              </select>
+            <div class="form-group">
+              <label for="customerName">Cliente</label>
+              <input type="text" class="input" id="customerName" value="Ivair flores oliveira" placeholder="Nome do cliente">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="storeName">Loja</label>
+                <input type="text" class="input" id="storeName" value="Magalu - Meta Parts" placeholder="Nome da loja">
+              </div>
+
+              <div class="form-group">
+                <label for="purchaseDate">Data da compra</label>
+                <input type="date" class="input" id="purchaseDate" value="2025-11-06">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="status">Status (interno)</label>
+                <select class="select" id="status">
+                  <option value="pendente">Pendente</option>
+                  <option value="em_analise" selected>Em análise</option>
+                  <option value="aprovado">Aprovado</option>
+                  <option value="rejeitado">Rejeitado</option>
+                  <option value="cancelado">Cancelado</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="reason">Motivo da reclamação</label>
+                <select class="select" id="reason">
+                  <option value="produto_defeituoso" selected>Produto defeituoso</option>
+                  <option value="produto_danificado">Produto danificado</option>
+                  <option value="nao_corresponde">Não corresponde à descrição</option>
+                  <option value="arrependimento_cliente">Arrependimento do cliente</option>
+                  <option value="entrega_atrasada">Entrega atrasada</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="sku">SKU / Item ID</label>
+              <input type="text" class="input input-mono" id="sku" value="KITF0190" placeholder="Ex.: SKU-12345">
             </div>
           </div>
-
-          <div class="row">
-            <label for="sku">SKU / Item ID</label>
-            <input id="sku" name="sku" type="text" placeholder="Ex.: SKU-12345" autocomplete="off" class="font-mono" />
-          </div>
-
-          <input id="order_id" name="order_id" type="hidden" />
-          <input id="ml_claim_id" name="ml_claim_id" type="hidden" />
-        </section>
+        </div>
 
         <!-- Valores -->
-        <section class="card" aria-labelledby="sec-valores">
-          <h2 id="sec-valores">Valores</h2>
-
-          <div class="row">
-            <label for="valor_produto">Valor do Produto</label>
-            <input id="valor_produto" name="valor_produto" type="text" placeholder="0,00" inputmode="decimal" autocomplete="off" />
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">Valores</h3>
           </div>
-
-          <div class="row">
-            <label for="valor_frete">Valor do Frete</label>
-            <input id="valor_frete" name="valor_frete" type="text" placeholder="0,00" inputmode="decimal" autocomplete="off" />
-          </div>
-
-          <div class="row">
-            <label for="valor_total">Valor Total a Reembolsar</label>
-            <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="input-readonly" readonly />
-          </div>
-
-          <!-- Resumo ML (somente informativo) -->
-          <div class="ml-summary" aria-live="polite">
-            <div class="ml-pair">
-              <span>Produto (ML):</span>
-              <strong id="ml-product-sum">—</strong>
-            </div>
-            <div class="ml-pair">
-              <span>Frete (ML):</span>
-              <strong id="ml-freight">—</strong>
-            </div>
-            <div class="ml-pair">
-              <span>Return cost (ML):</span>
-              <strong id="ml-return-cost">—</strong>
-              <small id="ml-return-cost-usd" class="muted">—</small>
-            </div>
-          </div>
-
-          <!-- Status Box -->
-          <div class="status-box">
-            <div class="status-item">
-              <span class="status-label">Status da Logística</span>
-              <span id="pill-log" class="pill -neutro">
-                Pendente
-              </span>
+          <div class="card-content">
+            <div class="form-group">
+              <label for="productValue">Valor do Produto</label>
+              <input type="number" class="input input-mono" id="productValue" value="121.35" step="0.01">
             </div>
 
-            <div class="status-item">
-              <span class="status-label">Recebimento no CD</span>
-              <button type="button" class="btn btn--sm btn--outline" id="btn-cd">
-                Gerenciar
-              </button>
+            <div class="form-group">
+              <label for="shippingValue">Valor do Frete</label>
+              <input type="number" class="input input-mono" id="shippingValue" value="15.00" step="0.01">
             </div>
 
-            <div class="cd-details" id="cd-info">
-              <span id="pill-cd" class="pill -neutro">
-                Não recebido
-              </span>
-              <span id="cd-sep" class="cd-sep" hidden>·</span>
-              <span id="cd-resp" class="cd-text" hidden></span>
-              <span id="cd-when" class="cd-text" hidden></span>
+            <div class="separator"></div>
+
+            <div class="form-group">
+              <label for="totalValue">Valor Total a Reembolsar</label>
+              <input type="text" class="input input-mono total-value" id="totalValue" readonly>
             </div>
 
-            <div class="status-item insp-inline">
-              <span class="status-label">Inspeção</span>
-              <div class="btn-group-sm">
-                <button id="btn-insp-aprova" class="btn btn--success btn--sm" type="button" title="Inspeção aprovada">
-                  Aprovar
+            <div class="separator"></div>
+
+            <!-- Status Box -->
+            <div class="status-box">
+              <div class="status-row">
+                <span class="status-label">Status da Logística</span>
+                <span class="badge badge-secondary" id="logStatusBadge">Em caminho</span>
+              </div>
+
+              <div class="status-row">
+                <span class="status-label">Recebimento no CD</span>
+                <button class="btn btn-outline btn-sm" onclick="openCdDialog()">
+                  <svg class="icon-sm" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                  </svg>
+                  Gerenciar
                 </button>
-                <button id="btn-insp-reprova" class="btn btn--danger btn--sm" type="button" title="Inspeção reprovada">
-                  Reprovar
-                </button>
+              </div>
+
+              <div id="cdReceivedInfo" class="cd-info" style="display: none;">
+                <span class="badge badge-default">Recebido no CD</span>
+                <span>·</span>
+                <span>Resp.: <span id="cdResponsibleText"></span></span>
+                <span>·</span>
+                <span id="cdDateTimeText"></span>
+              </div>
+
+              <div class="status-row inspection-row">
+                <span class="status-label">Inspeção</span>
+                <div class="inspection-buttons">
+                  <button class="btn btn-success btn-sm" onclick="openInspectionDialog('approve')">
+                    <svg class="icon-sm" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5"/>
+                    </svg>
+                    Aprovar
+                  </button>
+                  <button class="btn btn-destructive btn-sm" onclick="openInspectionDialog('reject')">
+                    <svg class="icon-sm" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5"/>
+                    </svg>
+                    Reprovar
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </section>
+        </div>
 
         <!-- Nota Fiscal -->
-        <section class="card" aria-labelledby="sec-nfe">
-          <h2 id="sec-nfe">Nota Fiscal</h2>
-
-          <div class="row">
-            <label for="nfe_numero">Número da NF-e</label>
-            <input id="nfe_numero" name="nfe_numero" type="text" placeholder="Ex.: 12345" autocomplete="off" />
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">Nota Fiscal</h3>
           </div>
+          <div class="card-content">
+            <div class="form-group">
+              <label for="invoiceNumber">Número da NF-e</label>
+              <input type="text" class="input" id="invoiceNumber" placeholder="Ex.: 12345">
+            </div>
 
-          <div class="row">
-            <label for="nfe_chave">Chave de acesso (44 dígitos)</label>
-            <input id="nfe_chave" name="nfe_chave" type="text" placeholder="35240112345678901234567890123456789012345678" maxlength="44" class="font-mono" autocomplete="off" />
+            <div class="form-group">
+              <label for="invoiceKey">Chave de acesso (44 dígitos)</label>
+              <input type="text" class="input input-mono" id="invoiceKey" placeholder="35240112345678901234567890123456789012345678" maxlength="44">
+            </div>
           </div>
-        </section>
+        </div>
 
         <!-- Observações -->
-        <section class="card" aria-labelledby="sec-obs">
-          <h2 id="sec-obs">Observações</h2>
-
-          <div class="row">
-            <label for="reclamacao">Detalhes da reclamação</label>
-            <textarea id="reclamacao" name="reclamacao" rows="6" placeholder="Descreva o motivo da devolução..."></textarea>
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">Observações</h3>
           </div>
-        </section>
-
-        <!-- Histórico (Timeline) -->
-        <section class="card" aria-labelledby="sec-hist">
-          <h2 id="sec-hist">Histórico</h2>
-          <div id="events-loading">Carregando…</div>
-          <div id="events-empty" hidden>Nenhum evento ainda</div>
-          <div id="events-list" class="timeline"></div>
-        </section>
+          <div class="card-content">
+            <div class="form-group">
+              <label for="notes">Detalhes da reclamação</label>
+              <textarea class="textarea" id="notes" rows="6" placeholder="Descreva o motivo da devolução..."></textarea>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
-
-    <!-- Toast -->
-    <div id="toast" class="toast" aria-live="polite"></div>
   </div>
+
+  <!-- CD Dialog -->
+  <div class="dialog-overlay" id="cdDialog" style="display: none;">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3 class="dialog-title">Recebido no CD</h3>
+        <button class="dialog-close" onclick="closeCdDialog()">×</button>
+      </div>
+      <p class="dialog-description">Registre quando o produto foi recebido no centro de distribuição.</p>
+      <div class="dialog-body">
+        <div class="form-group">
+          <label for="cdResponsible">Responsável</label>
+          <input type="text" class="input" id="cdResponsible" placeholder="Ex.: João (CD)">
+        </div>
+        <div class="form-group">
+          <label for="cdDateTime">Data/Hora</label>
+          <input type="datetime-local" class="input" id="cdDateTime">
+        </div>
+        <p class="dialog-hint">
+          Dica: se deixar o responsável vazio, será usado <strong>cd</strong>. Se não escolher uma data, uso a data/hora atual.
+        </p>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-outline" onclick="closeCdDialog()">Cancelar</button>
+        <button class="btn btn-default" onclick="handleCdSave()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Inspection Dialog -->
+  <div class="dialog-overlay" id="inspectionDialog" style="display: none;">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3 class="dialog-title">Inspeção</h3>
+        <button class="dialog-close" onclick="closeInspectionDialog()">×</button>
+      </div>
+      <p class="dialog-description" id="inspectionDescription"></p>
+      <div class="dialog-body">
+        <div class="form-group">
+          <label for="inspectionNotes">Observação (opcional)</label>
+          <textarea class="textarea" id="inspectionNotes" rows="4" placeholder="Adicione detalhes sobre a inspeção..."></textarea>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-outline" onclick="closeInspectionDialog()">Cancelar</button>
+        <button class="btn btn-default" onclick="handleInspectionConfirm()">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
 
   <script src="js/devolucao-editar.js"></script>
 </body>
