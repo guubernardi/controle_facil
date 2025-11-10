@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral com resolução de fluxo por card (corrigido p/ ml-shipping)
+// /public/js/index.js — Feed Geral com resolução de fluxo por card (corrigido c/ fallback 401/403 + stub messages)
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -24,6 +24,10 @@ class DevolucoesFeed {
     // cache de fluxo (evita bater no backend em loop)
     this.FLOW_TTL_MS = 30 * 60 * 1000;
     this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
+
+    // flags de fallback (ML barrando shipping) e messages 404
+    this.ML_SHIP_FORBIDDEN_KEY = 'rf:mlShipForbidden';
+    this.MSG_SYNC_404_FLAG     = 'rf:messagesSync404';
 
     // seller headers p/ /api/ml/*
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
@@ -201,8 +205,31 @@ class DevolucoesFeed {
   async atualizarDados(){
     const before=new Set(this.items.map(d=>String(d.id)));
     await this.syncClaimsWithFallback(); // pode ser no-op
-    await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
-    await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
+
+    // Shipping: se já sabemos que o ML vai negar, força leitura apenas do DB
+    const forbid = localStorage.getItem(this.ML_SHIP_FORBIDDEN_KEY) === '1';
+    const shipUrl = forbid
+      ? `/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1&no_meli=1`
+      : `/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`;
+
+    const rShip = await this.fetchQuiet(shipUrl);
+    if (!rShip.ok && (rShip.status===401 || rShip.status===403)) {
+      try { localStorage.setItem(this.ML_SHIP_FORBIDDEN_KEY, '1'); } catch {}
+      await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1&no_meli=1`);
+    } else if (rShip.ok) {
+      try { localStorage.removeItem(this.ML_SHIP_FORBIDDEN_KEY); } catch {}
+    }
+
+    // Messages: se 404 uma vez, memoriza para não repetir
+    let skipMsg = false;
+    try { skipMsg = localStorage.getItem(this.MSG_SYNC_404_FLAG) === '1'; } catch {}
+    if (!skipMsg) {
+      const rMsg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
+      if (!rMsg.ok && rMsg.status === 404) {
+        try { localStorage.setItem(this.MSG_SYNC_404_FLAG, '1'); } catch {}
+      }
+    }
+
     await this.carregar();
     const novos=this.items.filter(d=>!before.has(String(d.id))).length;
     if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -214,13 +241,11 @@ class DevolucoesFeed {
     if (!id) return;
     await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // tenta enriquecer esse retorno
 
-    // força leitura de status logístico por order_id
+    // força leitura de status logístico por order_id (com fallback)
     let sug = null;
     if (orderId) {
-      const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
-      if (r.ok) {
-        sug = r.data?.suggested_log_status || null;
-      }
+      const s = await this.fetchShippingFlow(orderId);
+      if (s) sug = this.normalizeFlow(s);
     }
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
@@ -285,13 +310,37 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
   }
 
-  // pega status logístico diretamente do resumo do backend
+  // pega status logístico diretamente do resumo do backend, com fallback para DB quando ML bloquear
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
-    const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
-    if (!r.ok) return "";
-    const s = r.data || {};
-    return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
+
+    const forbidden = localStorage.getItem(this.ML_SHIP_FORBIDDEN_KEY) === '1';
+    const base = `/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`;
+
+    const tryDb = async () => {
+      const r2 = await this.fetchQuiet(base + `&no_meli=1&update=1`);
+      if (!r2.ok) return "";
+      const s2 = r2.data || {};
+      return String(s2.suggested_log_status || s2.ml_substatus || s2.ml_status || "").toLowerCase();
+    };
+
+    if (forbidden) {
+      return await tryDb();
+    }
+
+    const r = await this.fetchQuiet(base);
+    if (r.ok) {
+      try { localStorage.removeItem(this.ML_SHIP_FORBIDDEN_KEY); } catch {}
+      const s = r.data || {};
+      return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
+    }
+
+    if (r.status === 401 || r.status === 403) {
+      try { localStorage.setItem(this.ML_SHIP_FORBIDDEN_KEY, '1'); } catch {}
+      return await tryDb();
+    }
+
+    return "";
   }
 
   async resolveAndPatchFlow(d){
