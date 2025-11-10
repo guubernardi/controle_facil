@@ -128,9 +128,11 @@ class DevolucoesFeed {
           } else if (r.status===403) {
             this._ml403BurstCount++;
             if (!this._ml403BurstTimer) {
-              this._ml403BurstTimer = setTimeout(()=>{ this._ml403BurstCount = 0; this._ml403BurstTimer=null; }, 60*1000);
+              this._ml403BurstTimer = setTimeout(()=>{
+                this._ml403BurstCount = 0; this._ml403BurstTimer=null;
+              }, 60*1000);
             }
-            if (this._ml403BurstCount >= 5) {
+            if (this._ml403BurstCount >= 3) { // ← agressivo: 3 em 60s pausa 2h
               this.blockMlShip(); // 2h
               this._ml403BurstCount = 0;
               clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
@@ -420,7 +422,7 @@ class DevolucoesFeed {
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";            // respeita bloqueio
 
-    // ⚠️ REMOVIDO o guard de seller headers para não travar o fluxo
+    // ⚠️ sem guard de seller headers para não travar o fluxo
     const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) {
       if (r.status===403) this.setNoAccess(orderId);
@@ -435,13 +437,16 @@ class DevolucoesFeed {
     const orderId = d?.id_venda || d?.order_id;
     if (!id || !orderId) return;
 
-    // limite por ciclo de render
+    // limite por ciclo de render — conta a TENTATIVA antes do fetch
     if (this._flowResolvesThisTick >= this.MAX_FLOW_RES_PER_TICK) return;
 
     // throttle: não tenta o mesmo pedido toda hora
     if (!this.shouldTryFlow(orderId)) return;
 
-    // cache: se já sei, aplico
+    // já conta esta tentativa (mesmo se vier de cache/403)
+    this._flowResolvesThisTick++;
+
+    // cache: se já sei, aplico e saio
     const cached = this.getCachedFlow(orderId);
     if (cached){
       if (cached === "__NO_ACCESS__") return; // não re-tenta por 24h
@@ -450,9 +455,11 @@ class DevolucoesFeed {
         await this.patchFlow(id, canon);
         this.queueRefresh(250);
       }
-      this._flowResolvesThisTick++;
       return;
     }
+
+    // respeita bloqueio global (rajada de 403)
+    if (!this.mlShipAllowed()) return;
 
     const found = await this.fetchShippingFlow(orderId);
     if (!found) return;
@@ -466,7 +473,6 @@ class DevolucoesFeed {
       await this.patchFlow(id, canon);
       this.queueRefresh(300);
     }
-    this._flowResolvesThisTick++;
   }
 
   async patchFlow(id, canon){
@@ -588,7 +594,7 @@ class DevolucoesFeed {
           <span class="campo-valor">${this.esc(d.loja_nome || "—")}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0  0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/></svg>
           <span class="campo-label">Data</span>
           <span class="campo-valor">${data}</span>
         </div>
@@ -607,7 +613,7 @@ class DevolucoesFeed {
       <div class="devolucao-footer">
         <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
           <button class="botao botao-outline botao-detalhes" data-action="open">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
             Ver Detalhes
           </button>
         </a>
