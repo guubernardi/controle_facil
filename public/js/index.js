@@ -31,7 +31,7 @@ class DevolucoesFeed {
     this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h (cache negativo por pedido)
     this._ml403BurstCount   = 0;
     this._ml403BurstTimer   = null;
-    this._messagesSyncDisabled = false;
+    this._messagesSyncDisabled = true; // sem rota /api/ml/messages/sync — não chamar
 
     // seller headers p/ /api/ml/*
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
@@ -85,7 +85,7 @@ class DevolucoesFeed {
         // Guardas específicas
         if (url.includes('/api/ml/messages/') && r.status===404) this._messagesSyncDisabled = true;
 
-        if (url.includes('/api/ml/shipping/status')) {
+        if (url.includes('/api/ml/shipping')) {
           if (r.status===401) {
             // sem sessão/token ML — pausa curto e avisa uma vez
             this.blockMlShip(30*60*1000); // 30min
@@ -248,10 +248,11 @@ class DevolucoesFeed {
     // Evita /shipping/sync com days (teu backend ainda não está pronto)
     // await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
 
-    if (!this._messagesSyncDisabled) {
-      const msg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
-      if (!msg.ok && msg.status===404) this._messagesSyncDisabled = true;
-    }
+    // Mensagens desativadas (evitar 404)
+    // if (!this._messagesSyncDisabled) {
+    //   const msg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
+    //   if (!msg.ok && msg.status===404) this._messagesSyncDisabled = true;
+    // }
 
     await this.carregar();
     const novos=this.items.filter(d=>!before.has(String(d.id))).length;
@@ -262,18 +263,23 @@ class DevolucoesFeed {
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
-    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // tenta enriquecer esse retorno
 
-    // força leitura de status logístico por order_id (se permitido)
+    // preferir endpoint que sempre existe e já puxa order/claim/return-cost
+    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/fetch-amounts`);
+
+    // força leitura de status logístico por order_id
     let sug = null;
     if (orderId && this.mlShipAllowed()) {
-      const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
+      const r = await this.fetchQuiet(`/api/ml/shipping/state?order_id=${encodeURIComponent(orderId)}&silent=1`);
       if (r.ok) {
-        sug = r.data?.suggested_log_status || null;
+        const d = r.data || {};
+        sug = d.flow || d.suggested_log_status || null;
       } else if (r.status===403) {
         this.setNoAccess(orderId);
       }
     }
+
+    // tenta claim (se existir)
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
     // update otimista no card
@@ -341,19 +347,25 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{}
   }
 
-  // pega status logístico diretamente do resumo do backend
+  // pega status logístico diretamente do resumo do backend (rota nova)
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
-    if (!this.mlShipAllowed()) return "";            // respeita bloqueio
-    if (!this.sellerId && !this.sellerNick) return ""; // sem info da loja, evite 403
+    if (!this.mlShipAllowed()) return ""; // respeita bloqueio
 
-    const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
+    const r = await this.fetchQuiet(`/api/ml/shipping/state?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) {
       if (r.status===403) this.setNoAccess(orderId);
       return "";
     }
     const s = r.data || {};
-    return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
+    const raw = s.flow
+              || s.suggested_log_status
+              || s.ml_substatus
+              || s.ml_status
+              || s.substatus
+              || s.status
+              || "";
+    return String(raw).toLowerCase();
   }
 
   async resolveAndPatchFlow(d){
@@ -561,8 +573,16 @@ class DevolucoesFeed {
   // ===== ações =====
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
-    if (modal && modal.showModal) modal.showModal();
-    else this.toast("Info",`Abrindo detalhes da devolução #${id}`,"info");
+    try {
+      if (modal && typeof modal.showModal === "function" && modal.isConnected) {
+        modal.showModal();
+        return;
+      }
+      // fallback: abre a página de edição em nova aba
+      window.open(`../devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
+    } catch {
+      window.open(`../devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
+    }
   }
   exportar(){
     const cols=["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","valor_produto","valor_frete","created_at"];
