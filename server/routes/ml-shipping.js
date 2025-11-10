@@ -2,77 +2,14 @@
 'use strict';
 
 const express = require('express');
+const router  = express.Router();
 const { query } = require('../db');
 
-const router = express.Router();
-const ML_BASE = 'https://api.mercadolibre.com';
-
-// ---------------- Token resolving ----------------
-async function loadTokenRowFromDb(sellerId, q = query) {
-  const sql = `
-    SELECT user_id, access_token, expires_at
-      FROM public.ml_tokens
-     WHERE user_id = $1
-     ORDER BY updated_at DESC
-     LIMIT 1`;
-  const { rows } = await q(sql, [sellerId]);
-  return rows[0] || null;
-}
-
-async function resolveSellerAccessToken(req) {
-  const direct = req.get('x-seller-token');
-  if (direct) return direct;
-
-  const sellerId = String(
-    req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || ''
-  ).replace(/\D/g, '');
-  if (sellerId) {
-    const row = await loadTokenRowFromDb(sellerId);
-    if (row?.access_token) return row.access_token;
-  }
-
-  if (req.session?.ml?.access_token) return req.session.ml.access_token;
-  return process.env.MELI_OWNER_TOKEN || '';
-}
-
-async function mget(req, path) {
-  const token = await resolveSellerAccessToken(req);
-  if (!token) {
-    const e = new Error('missing_access_token');
-    e.status = 401;
-    throw e;
-  }
-  const url = ML_BASE + path;
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
-  const txt = await r.text();
-  let j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch {}
-  if (!r.ok) {
-    const err = new Error(j?.message || j?.error || r.statusText);
-    err.status = r.status; err.body = j;
-    throw err;
-  }
-  return j;
-}
-
-// ---------------- Helpers locais ----------------
-function mapShipmentToLog(status = '', substatus = '') {
-  const s  = String(status).toLowerCase();
-  const ss = String(substatus).toLowerCase();
-
-  if (/(ready_to_ship|handling|to_be_agreed|ready|prepar)/.test(s) || /(ready|prep|etiq|label)/.test(ss))
-    return 'em_preparacao';
-
-  if (/(shipped|in_transit)/.test(s) || /(transit|transporte|out_for_delivery|returning_to_sender)/.test(ss))
-    return 'em_transporte';
-
-  if (/delivered/.test(s) || /(delivered|entreg|arrived|recebid)/.test(ss))
-    return 'recebido_cd';
-
-  if (/not_delivered/.test(s)) return 'em_transporte';
-  return null;
-}
-
+// -------- Helpers de coluna (cache simples) --------
+const _colsCache = {};
 async function tableHasColumns(table, cols) {
+  const key = `${table}:${cols.join(',')}`;
+  if (_colsCache[key]) return _colsCache[key];
   const { rows } = await query(
     `SELECT column_name FROM information_schema.columns
        WHERE table_schema='public' AND table_name=$1`,
@@ -80,172 +17,274 @@ async function tableHasColumns(table, cols) {
   );
   const set = new Set(rows.map(r => r.column_name));
   const out = {}; for (const c of cols) out[c] = set.has(c);
+  _colsCache[key] = out;
   return out;
 }
 
-async function updateReturnLogStatusIfAny(orderId, suggestedLog) {
-  if (!orderId || !suggestedLog) return { updated: false };
-  const has = await tableHasColumns('devolucoes', ['id','id_venda','order_id','log_status','updated_at']);
+function normalizeFlow(mlStatus, mlSub) {
+  const s = String(mlStatus || '').toLowerCase();
+  const sub = String(mlSub || '').toLowerCase();
 
-  const whereCol = has.id_venda ? 'id_venda' : (has.order_id ? 'order_id' : null);
-  if (!whereCol || !has.log_status) return { updated: false };
+  if (/^ready_to_ship|handling|to_be_agreed/.test(s) || /(label|ready)/.test(sub)) return 'em_preparacao';
+  if (/^shipped|not_delivered|in_transit|returning|shipping/.test(s) ||
+      /(in_transit|on_the_way|shipping_in_progress|out_for_delivery)/.test(sub)) return 'em_transporte';
+  if (/^delivered$/.test(s) || /(delivered|arrived|recebid)/.test(sub)) return 'recebido_cd';
+  if (/^cancel/.test(s) || /(returned|fechado|devolvido|closed)/.test(sub)) return 'fechado';
+  return 'pendente';
+}
 
-  const { rowCount } = await query(
+// -------- Token resolver --------
+async function getActiveMlToken(req) {
+  // 1) Sessão (se você salva assim)
+  if (req?.session?.user?.ml?.access_token) return req.session.user.ml.access_token;
+
+  // 2) Authorization: Bearer
+  const hAuth = req.get('authorization') || '';
+  const m = hAuth.match(/Bearer\s+(.+)/i);
+  if (m) return m[1];
+
+  // 3) Seller headers vindos do front
+  const sellerId   = req.get('x-seller-id') || null;
+  const sellerNick = req.get('x-seller-nick') || null;
+
+  // 4) ml_tokens por user_id e/ou nickname (pega o mais recente)
+  try {
+    // tenta usar is_active se existir
+    const cols = await tableHasColumns('ml_tokens', ['is_active','user_id','nickname','access_token','updated_at']);
+    const whereParts = [];
+    const params = [];
+    let p = 1;
+
+    if (cols.is_active) whereParts.push(`is_active IS TRUE`);
+
+    if (sellerId) { whereParts.push(`user_id = $${p++}::bigint`); params.push(sellerId); }
+    if (sellerNick) { whereParts.push(`lower(nickname) = lower($${p++})`); params.push(sellerNick); }
+
+    const where = whereParts.length ? `WHERE ${whereParts.join(' OR ')}` : ``;
+    const { rows } = await query(
+      `SELECT access_token
+         FROM ml_tokens
+       ${where}
+       ORDER BY updated_at DESC NULLS LAST
+       LIMIT 1`,
+      params
+    );
+    if (rows[0]?.access_token) return rows[0].access_token;
+  } catch (_) {}
+
+  // 5) Fallback global
+  if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
+  return null;
+}
+
+// -------- HTTP helper --------
+async function mlFetch(path, token, opts = {}) {
+  const base = 'https://api.mercadolibre.com';
+  const res = await fetch(base + path, {
+    method: opts.method || 'GET',
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...(opts.headers || {})
+    },
+    body: opts.body || null
+  });
+  const ct = res.headers.get('content-type') || '';
+  const data = ct.includes('application/json') ? await res.json().catch(() => ({})) : await res.text().catch(() => '');
+  if (!res.ok) {
+    const msg = data?.message || data?.error || `HTTP ${res.status}`;
+    const err = new Error(msg); err.status = res.status; err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+// -------- Status a partir de order_id --------
+async function getShippingStatusFromOrder(orderId, token) {
+  // 1) /orders/{id} => pega shipment_id
+  const order = await mlFetch(`/orders/${encodeURIComponent(orderId)}`, token);
+  const shipmentId = order?.shipping?.id || order?.shipping_id || order?.shipping?.id_shipping || null;
+  if (!shipmentId) {
+    // algumas contas usam "pack_id" => /shipments/search?pack=id
+    const search = await mlFetch(`/shipments/search?order=${encodeURIComponent(orderId)}`, token).catch(() => null);
+    const first = search?.results?.[0];
+    if (first?.id) return { shipmentId: first.id, mlStatus: first.status || null, mlSubstatus: first.substatus || null };
+    return { shipmentId: null, mlStatus: null, mlSubstatus: null };
+  }
+
+  // 2) /shipments/{id}
+  const ship = await mlFetch(`/shipments/${encodeURIComponent(shipmentId)}`, token);
+  return {
+    shipmentId,
+    mlStatus: ship?.status || null,
+    mlSubstatus: ship?.substatus || null
+  };
+}
+
+// -------- Atualiza DB com segurança de colunas --------
+async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus }) {
+  const cols = await tableHasColumns('devolucoes', ['ml_shipping_status','log_status','updated_at','id_venda']);
+  const sets = [];
+  const params = [];
+  let p = 1;
+
+  if (cols.ml_shipping_status) { sets.push(`ml_shipping_status = $${p++}`); params.push(mlSubstatus || mlStatus || null); }
+  if (cols.log_status && logStatus) { sets.push(`log_status = $${p++}`); params.push(logStatus); }
+  if (cols.updated_at) sets.push(`updated_at = now()`);
+
+  if (!sets.length) return { updated: false };
+
+  params.push(orderId);
+  await query(
     `UPDATE devolucoes
-        SET log_status = $1,
-            ${has.updated_at ? 'updated_at = now(),' : ''}
-            ${whereCol} = ${whereCol}  -- no-op p/ manter SQL válido
-      WHERE ${whereCol} = $2`,
-    [suggestedLog, String(orderId)]
+        SET ${sets.join(', ')}
+      WHERE id_venda = $${p}`,
+    params
   );
-  return { updated: !!rowCount, rowCount };
+  return { updated: true };
 }
 
-async function fetchShipmentsByOrder(req, orderId) {
-  let shipments = null;
-  try {
-    const j = await mget(req, `/orders/${encodeURIComponent(orderId)}/shipments`);
-    shipments = Array.isArray(j) ? j : (Array.isArray(j?.shipments) ? j.shipments : null);
-  } catch {
-    const j = await mget(req, `/shipments/search?order_id=${encodeURIComponent(orderId)}`);
-    shipments = Array.isArray(j?.results) ? j.results : null;
-  }
-  return shipments || [];
+// -------- Fallback sem token: tenta devolver status do próprio banco --------
+async function fallbackFromDb(orderId) {
+  const { rows } = await query(
+    `SELECT log_status, ml_shipping_status, shipping_status
+       FROM devolucoes
+      WHERE id_venda = $1
+      ORDER BY updated_at DESC NULLS LAST
+      LIMIT 1`,
+    [orderId]
+  );
+  const r = rows[0] || {};
+  const mlStatus = r.shipping_status || r.ml_shipping_status || null;
+  const logStatus = r.log_status || normalizeFlow(mlStatus, null);
+  return {
+    ml_status: r.shipping_status || null,
+    ml_substatus: r.ml_shipping_status || null,
+    suggested_log_status: logStatus,
+    fallback: true
+  };
 }
 
-async function computeBestLogForOrder(req, orderId) {
-  const list = await fetchShipmentsByOrder(req, orderId);
-  if (!list.length) return { bestLog: null, details: [] };
-
-  const details = [];
-  let bestLog = null;
-  const rank = { em_preparacao: 1, em_transporte: 2, recebido_cd: 3 };
-
-  for (const s of list) {
-    const id = s?.id || s?.shipment_id || s;
-    if (!id) continue;
-    const d = await mget(req, `/shipments/${encodeURIComponent(id)}`).catch(() => null);
-    if (!d) continue;
-    details.push(d);
-    const sug = mapShipmentToLog(d.status, d.substatus);
-    if (sug && (!bestLog || (rank[sug] || 0) > (rank[bestLog] || 0))) bestLog = sug;
-  }
-  return { bestLog, details };
-}
-
-// ---------------- Rotas ----------------
-
-// Stub pra matar 404 do front (ok deixar)
-router.get('/messages/sync', (req, res) => {
-  const days = parseInt(req.query.days || req.query._days || '0', 10) || null;
-  return res.json({ ok: true, stub: true, days, note: 'messages/sync ainda não implementado; endpoint de placeholder.' });
-});
-
-/** GET /api/ml/shipping/by-order/:orderId */
-router.get('/shipping/by-order/:orderId', async (req, res) => {
-  try {
-    const orderId = String(req.params.orderId || '').replace(/\D/g, '');
-    if (!orderId) return res.status(400).json({ error: 'order_id inválido' });
-
-    const list = await fetchShipmentsByOrder(req, orderId);
-    const details = [];
-    for (const s of list) {
-      const id = s?.id || s?.shipment_id || s;
-      if (!id) continue;
-      const d = await mget(req, `/shipments/${encodeURIComponent(id)}`).catch(() => null);
-      details.push(d || { id, error: 'fetch_failed' });
-    }
-    return res.json({ order_id: orderId, shipments: details });
-  } catch (e) {
-    res.status(e.status || 500).json({ error: e.message, detail: e.body || null });
-  }
-});
-
-/** GET /api/ml/shipping/status?order_id=... */
+// -------- GET /api/ml/shipping/status --------
 router.get('/shipping/status', async (req, res) => {
   try {
-    const orderId = String(req.query.order_id || '').replace(/\D/g, '');
-    if (!orderId) return res.status(400).json({ error: 'order_id é obrigatório' });
+    const orderId = req.query.order_id || req.query.orderId;
+    const shipmentIdQ = req.query.shipment_id || req.query.shipmentId || null;
+    const doUpdate = String(req.query.update ?? '1') !== '0';
 
-    const { bestLog, details } = await computeBestLogForOrder(req, orderId);
-    const main = details.sort((a,b) =>
-      new Date(b?.last_updated || b?.date_created || 0) - new Date(a?.last_updated || a?.date_created || 0)
-    )[0] || null;
+    if (!orderId && !shipmentIdQ) {
+      return res.status(400).json({ error: 'missing_param', detail: 'Informe order_id ou shipment_id' });
+    }
 
-    return res.json({
-      order_id: orderId,
-      shipment_id: main?.id || null,
-      ml_status: main?.status || null,
-      ml_substatus: main?.substatus || null,
-      suggested_log_status: bestLog || null,
-      last_updated: main?.last_updated || null
+    const token = await getActiveMlToken(req);
+    if (!token) {
+      // Sem token: tenta fallback do DB para não quebrar o front
+      if (orderId) {
+        const fb = await fallbackFromDb(orderId);
+        return res.json({
+          ok: true,
+          order_id: orderId,
+          shipment_id: null,
+          ml_status: fb.ml_status || null,
+          ml_substatus: fb.ml_substatus || null,
+          suggested_log_status: fb.suggested_log_status || null,
+          fallback: true
+        });
+      }
+      return res.status(401).json({ error: 'missing_access_token' });
+    }
+
+    let shipmentId = shipmentIdQ || null;
+    let mlStatus = null, mlSubstatus = null;
+
+    if (shipmentId) {
+      const ship = await mlFetch(`/shipments/${encodeURIComponent(shipmentId)}`, token);
+      mlStatus = ship?.status || null;
+      mlSubstatus = ship?.substatus || null;
+    } else {
+      const s = await getShippingStatusFromOrder(orderId, token);
+      shipmentId = s.shipmentId;
+      mlStatus = s.mlStatus;
+      mlSubstatus = s.mlSubstatus;
+    }
+
+    const suggested = normalizeFlow(mlStatus, mlSubstatus);
+
+    if (doUpdate && orderId) {
+      await updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus: suggested });
+    }
+
+    res.json({
+      ok: true,
+      order_id: orderId || null,
+      shipment_id: shipmentId || null,
+      ml_status: mlStatus,
+      ml_substatus: mlSubstatus,
+      suggested_log_status: suggested
     });
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message, detail: e.body || null });
+    const code = e?.status || 500;
+    res.status(code).json({ error: String(e?.message || e) });
   }
 });
 
-/**
- * GET /api/ml/shipping/sync
- * - ?order_id=...     (principal)
- * - ?days=...&limit=N (bulk real)
- */
+// -------- GET /api/ml/shipping/sync --------
+// - ?order_id=... => sincroniza apenas esse pedido
+// - ?days=30      => sincroniza pedidos criados nos últimos N dias
 router.get('/shipping/sync', async (req, res) => {
   try {
-    const orderId = String(req.query.order_id || '').replace(/\D/g, '');
-    const days    = parseInt(req.query.days || req.query._days || req.query.recent_days || '0', 10) || null;
-    const limit   = Math.min(300, Math.max(1, parseInt(req.query.limit || '100', 10) || 100));
+    const orderId = req.query.order_id || req.query.orderId || null;
+    const days = parseInt(req.query.days || req.query.recent_days || '0', 10) || 0;
+    const silent = /^1|true$/i.test(String(req.query.silent || '0'));
 
-    // ---- per-order ----
-    if (orderId) {
-      const { bestLog, details } = await computeBestLogForOrder(req, orderId);
-      const upd = await updateReturnLogStatusIfAny(orderId, bestLog);
-      return res.json({
-        ok: true,
-        order_id: orderId,
-        suggested_log_status: bestLog || null,
-        db_update: upd,
-        shipments: details
-      });
+    const token = await getActiveMlToken(req);
+    if (!token) {
+      // Se não há token, retorna 200 com mensagem amigável; o front já faz fallback
+      return res.status(200).json({ ok: false, warning: 'missing_access_token', updated: 0, total: 0 });
     }
 
-    // ---- bulk ----
-    if (!days) return res.status(400).json({ error: 'Informe ?order_id=... ou ?days=...' });
+    const touched = [];
+    const errs = [];
 
-    // pega devoluções recentes com id_venda/order_id numérico
-    const sql = `
-      SELECT id, 
-             COALESCE(NULLIF(id_venda, '')::text, NULLIF(order_id::text, '')) AS order_id
-        FROM devolucoes
-       WHERE COALESCE(NULLIF(id_venda, '') ~ '^[0-9]+$', FALSE)
-          OR COALESCE(NULLIF(order_id::text, '') ~ '^[0-9]+$', FALSE)
-         AND (created_at IS NULL OR created_at >= now() - make_interval(days => $1::int))
-       ORDER BY created_at DESC NULLS LAST
-       LIMIT $2
-    `;
-    const { rows } = await query(sql, [days, limit]);
-
-    let processed = 0, updated = 0, failures = 0;
-    const results = [];
-
-    for (const r of rows) {
-      const oid = String(r.order_id || '').replace(/\D/g, '');
-      if (!oid) continue;
+    const runOne = async (oid) => {
       try {
-        const { bestLog } = await computeBestLogForOrder(req, oid);
-        const upd = await updateReturnLogStatusIfAny(oid, bestLog);
-        processed++; if (upd.updated) updated++;
-        results.push({ order_id: oid, suggested_log_status: bestLog || null, db_update: upd });
+        const s = await getShippingStatusFromOrder(oid, token);
+        const suggested = normalizeFlow(s.mlStatus, s.mlSubstatus);
+        await updateReturnShipping({ orderId: oid, mlStatus: s.mlStatus, mlSubstatus: s.mlSubstatus, logStatus: suggested });
+        touched.push({ order_id: oid, shipment_id: s.shipmentId, ml_status: s.mlStatus, ml_substatus: s.mlSubstatus, suggested_log_status: suggested });
       } catch (e) {
-        failures++;
-        results.push({ order_id: oid, error: String(e?.message || e) });
+        errs.push({ order_id: oid, error: String(e?.message || e) });
       }
+    };
+
+    if (orderId) {
+      await runOne(orderId);
+    } else if (days > 0) {
+      // ATENÇÃO: usa id_venda (não "order_id") — corrige o 500
+      const { rows } = await query(
+        `SELECT DISTINCT id_venda
+           FROM devolucoes
+          WHERE id_venda IS NOT NULL
+            AND (created_at IS NULL OR created_at >= now() - ($1 || ' days')::interval)
+          LIMIT 400`,
+        [String(days)]
+      );
+      // processa em pequenos lotes
+      const ids = rows.map(r => String(r.id_venda)).filter(Boolean);
+      const chunk = 25;
+      for (let i = 0; i < ids.length; i += chunk) {
+        const part = ids.slice(i, i + chunk);
+        await Promise.allSettled(part.map(runOne));
+      }
+    } else {
+      return res.status(400).json({ error: 'missing_param', detail: 'Informe order_id ou days' });
     }
 
-    return res.json({ ok:true, days, limit, processed, updated, failures, results });
+    const out = { ok: true, total: touched.length, updated: touched.length, errors: errs };
+    if (!silent) out.touched = touched;
+    res.json(out);
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null });
+    res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
