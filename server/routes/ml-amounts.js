@@ -1,6 +1,6 @@
 // server/routes/ml-amounts.js
 // amounts + claim + frete + reason_label + preferência por seller_nick
-// + proxies: reasons, claim detail, return-cost
+// + proxies: reasons, claim detail, return-cost, returns-by-claim
 // + endpoint /enrich (no-op com log opcional)
 // ----------------------------------------------------------------------------
 'use strict';
@@ -400,6 +400,49 @@ module.exports = function registerMlAmounts(app) {
       }
     } catch (e) {
       return res.status(500).json({ error: 'Falha ao consultar claim', detail: e?.message || String(e) });
+    }
+  });
+
+  // ---------- PROXY: RETURNS por claim (suporta ?seller_nick=) ----------
+  // GET /api/ml/claims/:id/returns  => /post-purchase/v2/claims/:id/returns
+  app.get('/api/ml/claims/:id/returns', async (req, res) => {
+    const meta = { tried: [], errors: [], preferredNick: null };
+    try {
+      const claimId = String(req.params.id || '').trim();
+      if (!claimId) return res.status(400).json({ error: 'claim_id ausente' });
+
+      // tenta inferir loja/nick a partir da própria devolução vinculada
+      let dev = { loja_nome: null };
+      try {
+        const { rows } = await query(
+          `SELECT loja_nome FROM devolucoes
+            WHERE ml_claim_id = $1 OR claim_id = $1
+            ORDER BY id DESC LIMIT 1`,
+          [claimId]
+        );
+        if (rows.length) dev = rows[0];
+      } catch {}
+
+      const { pool: basePool, guessedNick } = await buildTokenPool(dev);
+      if (!basePool.length) return res.status(400).json({ error: 'Nenhum token disponível' });
+
+      const sellerNick = String(req.query.seller_nick || '').trim() || guessedNick || null;
+      meta.preferredNick = sellerNick || null;
+      const pool = preferNick(basePool, sellerNick);
+
+      try {
+        const { data } = await mgetWithAnyToken(pool, `/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`, meta, 'returns');
+        return res.json({ ok: true, data, meta });
+      } catch (e) {
+        const code = e.status || 502;
+        const label =
+          e.status === 401 ? 'missing_or_invalid_access_token' :
+          e.status === 403 ? 'forbidden_for_seller' :
+          'ml_error';
+        return res.status(code).json({ error: label, detail: e.message, meta, payload: e.payload || null });
+      }
+    } catch (e) {
+      return res.status(500).json({ error: 'Falha ao consultar returns', detail: e?.message || String(e) });
     }
   });
 
