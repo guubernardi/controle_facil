@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral (anti-loop + backoff 401/403/404)
+// /public/js/index.js — Feed Geral com resolução de fluxo por card (com guardas p/ 401/403)
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -16,15 +16,22 @@ class DevolucoesFeed {
     // auto-sync
     this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
-    this._syncRunning = false; // <-- evita rodar atualizarDados em paralelo
 
     // circuit breaker do claims/import (400)
     this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
 
-    // cache de fluxo (evita loop / backoff)
-    this.FLOW_TTL_MS = 30 * 60 * 1000; // 30min
+    // cache de fluxo (evita bater no backend em loop)
+    this.FLOW_TTL_MS = 30 * 60 * 1000;
     this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
+
+    // bloqueios específicos de ML/shipping
+    this.ML_SHIP_BLOCK_KEY  = "rf:mlShipping:blockUntil";
+    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 60 * 1000;  // 2h
+    this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h (cache negativo por pedido)
+    this._ml403BurstCount   = 0;
+    this._ml403BurstTimer   = null;
+    this._messagesSyncDisabled = false;
 
     // seller headers p/ /api/ml/*
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
@@ -53,6 +60,13 @@ class DevolucoesFeed {
   // ===== rede/util =====
   safeJson(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.status===204?{}:res.json(); }
 
+  mlShipAllowed(){ 
+    try{ const until=Number(localStorage.getItem(this.ML_SHIP_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; }
+  }
+  blockMlShip(ms=this.ML_SHIP_BLOCK_MS){
+    try{ localStorage.setItem(this.ML_SHIP_BLOCK_KEY, String(Date.now()+ms)); }catch{}
+  }
+
   async fetchQuiet(url){
     try{
       const headers = { Accept:"application/json" };
@@ -63,10 +77,38 @@ class DevolucoesFeed {
       const r = await fetch(url,{ headers, credentials:"include" });
       const ct = r.headers.get("content-type")||""; let body=null;
       if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
+
       if(!r.ok){
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
         console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
-        return { ok:false, status:r.status, detail };
+
+        // Guardas específicas
+        if (url.includes('/api/ml/messages/') && r.status===404) this._messagesSyncDisabled = true;
+
+        if (url.includes('/api/ml/shipping/status')) {
+          if (r.status===401) {
+            // sem sessão/token ML — pausa curto e avisa uma vez
+            this.blockMlShip(30*60*1000); // 30min
+            if (!this._lastSyncErrShown){
+              this._lastSyncErrShown = true;
+              this.toast("Conectar Mercado Livre","Sua sessão do ML não está ativa para esse pedido. Vou pausar por 30min.","erro");
+            }
+          } else if (r.status===403) {
+            // estou recebendo pedidos de lojas a que o token não pertence
+            this._ml403BurstCount++;
+            if (!this._ml403BurstTimer) {
+              this._ml403BurstTimer = setTimeout(()=>{ this._ml403BurstCount = 0; this._ml403BurstTimer=null; }, 60*1000);
+            }
+            if (this._ml403BurstCount >= 5) {
+              this.blockMlShip(); // 2h
+              this._ml403BurstCount = 0;
+              clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
+              this.toast("Pausado por 2h","Muitos 403 do ML (pedido de outra conta). Pausei as consultas de shipping.","erro");
+            }
+          }
+        }
+
+        return { ok:false, status:r.status, detail, data:body };
       }
       return { ok:true, status:r.status, data:body };
     }catch(e){
@@ -192,7 +234,7 @@ class DevolucoesFeed {
       const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio.","erro"); }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio/mensagens.","erro"); }
         return false;
       }
     }
@@ -200,33 +242,36 @@ class DevolucoesFeed {
   }
 
   async atualizarDados(){
-    if (this._syncRunning) return;           // <-- trava reentrância
-    this._syncRunning = true;
-    try{
-      const before=new Set(this.items.map(d=>String(d.id)));
-      await this.syncClaimsWithFallback(); // pode ser no-op
-      await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
-      // removido: /api/ml/messages/sync (está 404 no backend)
-      await this.carregar();
-      const novos=this.items.filter(d=>!before.has(String(d.id))).length;
-      if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
-      this.renderizar();
-    } finally {
-      this._syncRunning = false;
+    const before=new Set(this.items.map(d=>String(d.id)));
+    await this.syncClaimsWithFallback(); // pode ser no-op
+
+    // Evita /shipping/sync com days (teu backend ainda não está pronto)
+    // await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
+
+    if (!this._messagesSyncDisabled) {
+      const msg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
+      if (!msg.ok && msg.status===404) this._messagesSyncDisabled = true;
     }
+
+    await this.carregar();
+    const novos=this.items.filter(d=>!before.has(String(d.id))).length;
+    if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
+    this.renderizar();
   }
 
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
-    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
+    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // tenta enriquecer esse retorno
 
-    // força leitura de status logístico por order_id
+    // força leitura de status logístico por order_id (se permitido)
     let sug = null;
-    if (orderId) {
+    if (orderId && this.mlShipAllowed()) {
       const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
       if (r.ok) {
         sug = r.data?.suggested_log_status || null;
+      } else if (r.status===403) {
+        this.setNoAccess(orderId);
       }
     }
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
@@ -257,10 +302,9 @@ class DevolucoesFeed {
 
   normalizeFlow(s){
     if(!s) return "pendente";
-    const raw = String(s).toLowerCase();
-    if (raw.startsWith("deny:")) return "pendente"; // marcador de acesso negado → não insistir por 30min
-    const t = raw.replace(/\s+/g,"_");
+    const t = String(s).toLowerCase().replace(/\s+/g,"_");
 
+    // mapear nomes vindos do backend
     if (t.includes("preparacao")) return "em_preparacao";
     if (t === "transporte")       return "em_transporte";
     if (t.includes("recebido_cd")) return "recebido_cd";
@@ -284,22 +328,28 @@ class DevolucoesFeed {
     try{
       const raw = localStorage.getItem(this.FLOW_CACHE_PREFIX+orderId);
       if(!raw) return null;
-      const { ts, flow } = JSON.parse(raw);
-      if (!ts || Date.now()-ts > this.FLOW_TTL_MS) return null;
+      const { ts, flow, neg } = JSON.parse(raw);
+      const ttl = neg ? this.ML_NOACCESS_TTL_MS : this.FLOW_TTL_MS;
+      if (!ts || Date.now()-ts > ttl) return null;
       return flow || null;
     }catch{ return null; }
   }
   setCachedFlow(orderId, flow){
-    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
+    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{}
+  }
+  setNoAccess(orderId){
+    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{}
   }
 
   // pega status logístico diretamente do resumo do backend
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
+    if (!this.mlShipAllowed()) return "";            // respeita bloqueio
+    if (!this.sellerId && !this.sellerNick) return ""; // sem info da loja, evite 403
+
     const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) {
-      // marca “deny” para não insistir por 30min em casos de acesso/ausência
-      if (r.status === 401 || r.status === 403 || r.status === 404) return `deny:${r.status}`;
+      if (r.status===403) this.setNoAccess(orderId);
       return "";
     }
     const s = r.data || {};
@@ -314,7 +364,7 @@ class DevolucoesFeed {
     // cache: se já sei, aplico
     const cached = this.getCachedFlow(orderId);
     if (cached){
-      if (cached.startsWith?.("deny:")) return; // backoff de erro/acesso
+      if (cached === "__NO_ACCESS__") return; // não re-tenta por 24h
       const canon = this.normalizeFlow(cached);
       if (canon && canon !== this.normalizeFlow(this.extractFlowString(d))){
         await this.patchFlow(id, canon);
@@ -326,9 +376,7 @@ class DevolucoesFeed {
     const found = await this.fetchShippingFlow(orderId);
     if (!found) return;
 
-    this.setCachedFlow(orderId, found);         // cacheia inclusive “deny:*”
-    if (found.startsWith("deny:")) return;      // não tenta patch; só aguarda TTL
-
+    this.setCachedFlow(orderId, found);
     const canon = this.normalizeFlow(found);
     if (!canon) return;
 
@@ -392,12 +440,10 @@ class DevolucoesFeed {
       card.setAttribute("role","listitem");
       container.appendChild(card);
 
-      // tenta resolver fluxo em background, mas limita a 8 por render para não estourar
-      if (i < 8) {
-        const flowNow = this.normalizeFlow(this.extractFlowString(d));
-        if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
-          this.resolveAndPatchFlow(d); // não bloqueia a UI
-        }
+      // Se o fluxo ainda é "pendente", tenta resolver assíncrono (com todos os guardas ativos)
+      const flowNow = this.normalizeFlow(this.extractFlowString(d));
+      if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
+        this.resolveAndPatchFlow(d); // não bloqueia a UI
       }
     });
 
