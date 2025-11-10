@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral com resolução de fluxo por card (shipping/claim) + cache TTL
+// /public/js/index.js — Feed Geral com resolução de fluxo por card (sem endpoints 404)
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -21,7 +21,7 @@ class DevolucoesFeed {
     this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
 
-    // fluxo cache (não spammar backend)
+    // cache de fluxo (evita bater no backend em loop)
     this.FLOW_TTL_MS = 30 * 60 * 1000;
     this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
 
@@ -250,57 +250,39 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
   }
 
-  // tenta várias rotas existentes no backend para descobrir status de envio por order_id
-  async fetchShippingFlow(orderId){
-    if (!orderId) return "";
-    const qs = (o) => new URLSearchParams(o).toString();
-    const candidates = [
-      `/api/ml/shipping/status?${qs({ order_id: orderId })}`,
-      `/api/ml/shipping/by-order/${encodeURIComponent(orderId)}`,
-      `/api/ml/orders/${encodeURIComponent(orderId)}/shipping`,
-      `/api/ml/shipments?${qs({ order_id: orderId })}`,
-      `/api/ml/shipping/sync?${qs({ order_id: orderId, silent: 1 })}`, // existe no teu backend
-    ];
-    for (const url of candidates){
-      const r = await this.fetchQuiet(url);
-      if (!r.ok) continue;
-
-      const j = r.data?.data ?? r.data ?? {};
-      let status = String(
-        j.status || j.shipping_status || j.current_status || j.substatus || j.sub_status || j.flow || j.stage || ""
-      ).toLowerCase();
-      let sub = String(j.substatus || j.sub_status || "").toLowerCase();
-      let s = [status, sub].filter(Boolean).join("_");
-      if (s) return s;
-
-      if (Array.isArray(j) && j.length){
-        const o = j[0] || {};
-        const s2 = String(o.status || o.shipping_status || o.substatus || "").toLowerCase();
-        if (s2) return s2;
-      }
-      if (j.shipping){
-        const o = j.shipping;
-        const s3 = String(o.status || o.substatus || "").toLowerCase();
-        if (s3) return s3;
+  // ———— ÚNICO lugar que “descobre” o status de envio sem endpoints fantasmas ————
+  async fetchShippingFlow(orderId, returnId, claimId){
+    // 1) enrich do retorno (geralmente já traz return.shipping/status/substatus)
+    if (returnId){
+      const r = await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(returnId)}/enrich`);
+      if (r.ok){
+        const j = r.data?.data ?? r.data ?? {};
+        const ship = j.return?.shipping || j.shipping || {};
+        const s = String(ship.status || ship.substatus || j.shipping_status || "").toLowerCase();
+        if (s) return s;
       }
     }
-    return "";
-  }
-
-  async fetchClaimFlow(claimId){
-    if (!claimId) return "";
-    const candidates = [
-      `/api/ml/claims/${encodeURIComponent(claimId)}`,
-      `/api/ml/claims/inspect?claim_id=${encodeURIComponent(claimId)}`,
-      `/api/ml/claims/state?claim_id=${encodeURIComponent(claimId)}`
-    ];
-    for (const url of candidates){
-      const r = await this.fetchQuiet(url);
-      if (!r.ok) continue;
-      const c = r.data?.data ?? r.data?.claim ?? r.data ?? {};
-      const shipping = c.return?.shipping || {};
-      const s = String(shipping.status || shipping.substatus || c.stage || c.status || "").toLowerCase();
-      if (s) return s;
+    // 2) claim (fallback)
+    if (claimId){
+      const rc = await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
+      if (rc.ok){
+        const c = rc.data?.data ?? rc.data?.claim ?? rc.data ?? {};
+        const ship = c.return?.shipping || {};
+        const s = String(ship.status || ship.substatus || c.stage || c.status || "").toLowerCase();
+        if (s) return s;
+      }
+    }
+    // 3) força um sync por order_id e tenta ler o retorno novamente
+    if (orderId){
+      await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
+      if (returnId){
+        const r2 = await this.fetchQuiet(`/api/returns/${encodeURIComponent(returnId)}`);
+        if (r2.ok){
+          const d = r2.data?.data ?? r2.data ?? {};
+          const s = String(d.shipping_status || d.ml_shipping_status || d.log_status || "").toLowerCase();
+          if (s) return s;
+        }
+      }
     }
     return "";
   }
@@ -322,30 +304,14 @@ class DevolucoesFeed {
       return;
     }
 
-    // 1) shipping por order_id (usando endpoints que existem)
-    let found = await this.fetchShippingFlow(orderId);
-
-    // 2) se nada, tenta claim
-    if (!found && claimId) found = await this.fetchClaimFlow(claimId);
-
-    // 3) fallback: enrich do retorno (pode retornar shipping embutido)
-    if (!found){
-      const r = await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
-      if (r.ok){
-        const j = r.data?.data ?? r.data ?? {};
-        const ship = j.return?.shipping || j.shipping || {};
-        const st = String(ship.status || ship.substatus || j.shipping_status || "").toLowerCase();
-        found = st;
-      }
-    }
-
+    // sem endpoints 404: apenas enrich -> claim -> sync+GET /returns/:id
+    let found = await this.fetchShippingFlow(orderId, id, claimId);
     if (!found) return;
 
     this.setCachedFlow(orderId, found);
     const canon = this.normalizeFlow(found);
     if (!canon) return;
 
-    // se mudou, persiste e recarrega
     const curCanon = this.normalizeFlow(this.extractFlowString(d));
     if (canon !== curCanon){
       await this.patchFlow(id, canon);
@@ -354,7 +320,7 @@ class DevolucoesFeed {
   }
 
   async patchFlow(id, canon){
-    await this.fetchQuiet(`/api/returns/${encodeURIComponent(id)}`); // aquece (evita 1º 404 estranho)
+    await this.fetchQuiet(`/api/returns/${encodeURIComponent(id)}`); // aquece
     await fetch(`/api/returns/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type":"application/json" },
@@ -405,7 +371,7 @@ class DevolucoesFeed {
       card.setAttribute("role","listitem");
       container.appendChild(card);
 
-      // >>> Se o fluxo ainda é "pendente", tenta resolver assíncrono (shipping/claim) e persistir
+      // Se o fluxo ainda é "pendente", tenta resolver assíncrono
       const flowNow = this.normalizeFlow(this.extractFlowString(d));
       if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
         this.resolveAndPatchFlow(d); // não bloqueia a UI

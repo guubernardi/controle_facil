@@ -256,7 +256,15 @@ async function addReturnEvent(args = {}, req) {
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
 /* === NOVAS ROTAS DE RECLAMAÇÕES (messages/attachments/resolutions/evidences) === */
-app.use('/api/ml', require('./routes/ml-claims')); // <= AQUI
+app.use('/api/ml', require('./routes/ml-claims')); // <= mantém
+
+/* === NOVAS ROTAS DE SHIPPING (status, by-order, shipments etc.) === */
+try {
+  app.use('/api/ml', require('./routes/ml-shipping'));
+  console.log('[BOOT] ML Shipping ok');
+} catch (e) {
+  console.warn('[BOOT] ML Shipping opcional:', e?.message || e);
+}
 
 /* Demais módulos */
 try {
