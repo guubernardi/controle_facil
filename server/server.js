@@ -48,7 +48,7 @@ if (process.env.NODE_ENV !== 'production') {
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders: [
       'Content-Type','Accept','Idempotency-Key','x-job-token',
-      'x-seller-token','x-owner','x-seller-id','Authorization'
+      'x-seller-token','x-owner','x-seller-id','x-seller-nick','Authorization'
     ]
   }));
 }
@@ -114,6 +114,19 @@ app.use('/api', (_req, res, next) => {
     };
     res.locals.__jsonPatched = true;
   }
+  next();
+});
+
+/* ===== Shim de query para ML (aceitar recent_days como days) ===== */
+app.use('/api/ml', (req, _res, next) => {
+  try {
+    if (req.query && req.query.recent_days && !req.query.days) {
+      req.query.days = req.query.recent_days;
+    }
+    if (req.query && req.query._days && !req.query.days) {
+      req.query.days = req.query._days;
+    }
+  } catch {}
   next();
 });
 
@@ -256,9 +269,9 @@ async function addReturnEvent(args = {}, req) {
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
 /* === NOVAS ROTAS DE RECLAMAÇÕES (messages/attachments/resolutions/evidences) === */
-app.use('/api/ml', require('./routes/ml-claims')); // <= mantém
+app.use('/api/ml', require('./routes/ml-claims')); // mantém
 
-/* === NOVAS ROTAS DE SHIPPING (status, by-order, shipments etc.) === */
+/* === NOVAS ROTAS DE SHIPPING (status, by-order, sync, etc.) === */
 try {
   app.use('/api/ml', require('./routes/ml-shipping'));
   console.log('[BOOT] ML Shipping ok');
@@ -461,7 +474,6 @@ function setupMlAutoRefresh() {
     const summary = { refreshed:0, skipped:0, errors:0, details:[] };
 
     try {
-      // Seleciona contas que expiram antes de now()+aheadSec (ou sem expires_at)
       const sql = `
         SELECT user_id, nickname, refresh_token, expires_at
           FROM public.ml_tokens
