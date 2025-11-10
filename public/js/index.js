@@ -1,4 +1,5 @@
 // /public/js/index.js — Feed Geral com resolução de fluxo por card (com guardas p/ 401/403)
+// Anti-"F5": debounce de refresh + throttle de resolução de fluxo
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -31,7 +32,9 @@ class DevolucoesFeed {
     this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h (cache negativo por pedido)
     this._ml403BurstCount   = 0;
     this._ml403BurstTimer   = null;
-    this._messagesSyncDisabled = true; // sem rota /api/ml/messages/sync — não chamar
+
+    // sync de mensagens (desligado por enquanto)
+    this._messagesSyncDisabled = true;
 
     // seller headers p/ /api/ml/*
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
@@ -46,7 +49,34 @@ class DevolucoesFeed {
       pendente: new Set(["pendente","em_analise","em-analise","aberto"]),
     };
 
+    // ===== Anti-"F5": debounce e throttle =====
+    this._refreshTimer = null;
+    this.REFRESH_COOLDOWN_MS = 800;               // junta múltiplos reloads
+    this.TRY_FLOW_PREFIX = "rf:flowTry:";         // throttle por order_id
+    this.TRY_FLOW_MS = 10 * 60 * 1000;            // 10 minutos
+
     this.inicializar();
+  }
+
+  // Debounce de refresh (carregar+renderizar) para evitar loops
+  queueRefresh(delay = this.REFRESH_COOLDOWN_MS) {
+    if (this._refreshTimer) return;
+    this._refreshTimer = setTimeout(async () => {
+      this._refreshTimer = null;
+      await this.carregar();
+      this.renderizar();
+    }, delay);
+  }
+
+  // Throttle por pedido: só tenta resolver fluxo de X em X minutos
+  shouldTryFlow(orderId) {
+    try {
+      const k = this.TRY_FLOW_PREFIX + orderId;
+      const last = Number(localStorage.getItem(k) || 0);
+      if (Date.now() - last < this.TRY_FLOW_MS) return false;
+      localStorage.setItem(k, String(Date.now()));
+      return true;
+    } catch { return true; }
   }
 
   async inicializar() {
@@ -60,7 +90,7 @@ class DevolucoesFeed {
   // ===== rede/util =====
   safeJson(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.status===204?{}:res.json(); }
 
-  mlShipAllowed(){ 
+  mlShipAllowed(){
     try{ const until=Number(localStorage.getItem(this.ML_SHIP_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; }
   }
   blockMlShip(ms=this.ML_SHIP_BLOCK_MS){
@@ -83,18 +113,16 @@ class DevolucoesFeed {
         console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
 
         // Guardas específicas
-        if (url.includes('/api/ml/messages/') && r.status===404) this._messagesSyncDisabled = true;
+        if (url.includes('/api/ml/messages/')) this._messagesSyncDisabled = true;
 
-        if (url.includes('/api/ml/shipping')) {
+        if (url.includes('/api/ml/shipping/status')) {
           if (r.status===401) {
-            // sem sessão/token ML — pausa curto e avisa uma vez
             this.blockMlShip(30*60*1000); // 30min
             if (!this._lastSyncErrShown){
               this._lastSyncErrShown = true;
               this.toast("Conectar Mercado Livre","Sua sessão do ML não está ativa para esse pedido. Vou pausar por 30min.","erro");
             }
           } else if (r.status===403) {
-            // estou recebendo pedidos de lojas a que o token não pertence
             this._ml403BurstCount++;
             if (!this._ml403BurstTimer) {
               this._ml403BurstTimer = setTimeout(()=>{ this._ml403BurstCount = 0; this._ml403BurstTimer=null; }, 60*1000);
@@ -214,7 +242,8 @@ class DevolucoesFeed {
   // ===== Auto-sync =====
   startAutoSync(){
     const fire=()=>{ const b=document.getElementById("auto-refresh-hidden"); if(!b) return; if(document.hidden||!navigator.onLine) return; b.click(); };
-    setTimeout(fire,2000); setInterval(fire,this.SYNC_MS);
+    setTimeout(fire,2000);
+    setInterval(fire,this.SYNC_MS);
     document.addEventListener("visibilitychange",()=>{ if(!document.hidden) setTimeout(fire,500); });
     window.addEventListener("online",()=>setTimeout(fire,500));
   }
@@ -234,7 +263,7 @@ class DevolucoesFeed {
       const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio/mensagens.","erro"); }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio.","erro"); }
         return false;
       }
     }
@@ -245,10 +274,10 @@ class DevolucoesFeed {
     const before=new Set(this.items.map(d=>String(d.id)));
     await this.syncClaimsWithFallback(); // pode ser no-op
 
-    // Evita /shipping/sync com days (teu backend ainda não está pronto)
+    // (desligado) shipping/sync geral — teu backend ainda não está pronto
     // await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
 
-    // Mensagens desativadas (evitar 404)
+    // (desligado) mensagens ML ainda não implementadas no backend
     // if (!this._messagesSyncDisabled) {
     //   const msg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
     //   if (!msg.ok && msg.status===404) this._messagesSyncDisabled = true;
@@ -263,23 +292,18 @@ class DevolucoesFeed {
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
+    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // best-effort
 
-    // preferir endpoint que sempre existe e já puxa order/claim/return-cost
-    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/fetch-amounts`);
-
-    // força leitura de status logístico por order_id
+    // força leitura de status logístico por order_id (se permitido)
     let sug = null;
     if (orderId && this.mlShipAllowed()) {
-      const r = await this.fetchQuiet(`/api/ml/shipping/state?order_id=${encodeURIComponent(orderId)}&silent=1`);
+      const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
       if (r.ok) {
-        const d = r.data || {};
-        sug = d.flow || d.suggested_log_status || null;
+        sug = r.data?.suggested_log_status || null;
       } else if (r.status===403) {
         this.setNoAccess(orderId);
       }
     }
-
-    // tenta claim (se existir)
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
     // update otimista no card
@@ -288,7 +312,8 @@ class DevolucoesFeed {
       if (it) it.log_status = sug;
     }
 
-    await this.carregar(); this.renderizar();
+    // em vez de recarregar de imediato, entra na fila (debounce)
+    this.queueRefresh(200);
     this.toast("Sucesso","Devolução atualizada com o Mercado Livre.","sucesso");
   }
 
@@ -347,31 +372,28 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{}
   }
 
-  // pega status logístico diretamente do resumo do backend (rota nova)
+  // pega status logístico diretamente do resumo do backend
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
-    if (!this.mlShipAllowed()) return ""; // respeita bloqueio
+    if (!this.mlShipAllowed()) return "";            // respeita bloqueio
+    if (!this.sellerId && !this.sellerNick) return ""; // sem info da loja, evite 403
 
-    const r = await this.fetchQuiet(`/api/ml/shipping/state?order_id=${encodeURIComponent(orderId)}&silent=1`);
+    const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) {
       if (r.status===403) this.setNoAccess(orderId);
       return "";
     }
     const s = r.data || {};
-    const raw = s.flow
-              || s.suggested_log_status
-              || s.ml_substatus
-              || s.ml_status
-              || s.substatus
-              || s.status
-              || "";
-    return String(raw).toLowerCase();
+    return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
   async resolveAndPatchFlow(d){
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
     if (!id || !orderId) return;
+
+    // throttle: não tenta o mesmo pedido toda hora
+    if (!this.shouldTryFlow(orderId)) return;
 
     // cache: se já sei, aplico
     const cached = this.getCachedFlow(orderId);
@@ -380,7 +402,7 @@ class DevolucoesFeed {
       const canon = this.normalizeFlow(cached);
       if (canon && canon !== this.normalizeFlow(this.extractFlowString(d))){
         await this.patchFlow(id, canon);
-        await this.carregar(); this.renderizar();
+        this.queueRefresh(200);
       }
       return;
     }
@@ -395,7 +417,7 @@ class DevolucoesFeed {
     const curCanon = this.normalizeFlow(this.extractFlowString(d));
     if (canon !== curCanon){
       await this.patchFlow(id, canon);
-      await this.carregar(); this.renderizar();
+      this.queueRefresh(300);
     }
   }
 
@@ -452,10 +474,11 @@ class DevolucoesFeed {
       card.setAttribute("role","listitem");
       container.appendChild(card);
 
-      // Se o fluxo ainda é "pendente", tenta resolver assíncrono (com todos os guardas ativos)
+      // Se o fluxo ainda é "pendente", tenta resolver com throttle/anti-F5
       const flowNow = this.normalizeFlow(this.extractFlowString(d));
-      if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
-        this.resolveAndPatchFlow(d); // não bloqueia a UI
+      const oid = d.id_venda || d.order_id;
+      if (flowNow==="pendente" && oid) {
+        this.resolveAndPatchFlow(d); // assíncrono, sem travar a UI
       }
     });
 
@@ -573,16 +596,8 @@ class DevolucoesFeed {
   // ===== ações =====
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
-    try {
-      if (modal && typeof modal.showModal === "function" && modal.isConnected) {
-        modal.showModal();
-        return;
-      }
-      // fallback: abre a página de edição em nova aba
-      window.open(`../devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
-    } catch {
-      window.open(`../devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
-    }
+    if (modal && modal.showModal) modal.showModal();
+    else this.toast("Info",`Abrindo detalhes da devolução #${id}`,"info");
   }
   exportar(){
     const cols=["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","valor_produto","valor_frete","created_at"];
