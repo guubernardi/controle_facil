@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral (circuit breaker p/ 400 + "Atualizar ML" por card)
+// /public/js/index.js — Feed Geral com resolução de fluxo por card (shipping/claim) + cache TTL
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -9,17 +9,21 @@ class DevolucoesFeed {
     this.page = 1;
 
     // "Nova"
-    this.NEW_WINDOW_MS = 36 * 60 * 60 * 1000;   // 36h desde a primeira visualização
-    this.MAX_NEW_AGE_MS = 72 * 60 * 60 * 1000;  // 72h de idade real
+    this.NEW_WINDOW_MS = 36 * 60 * 60 * 1000;
+    this.MAX_NEW_AGE_MS = 72 * 60 * 60 * 1000;
     this.NEW_KEY_PREFIX = "rf:firstSeen:";
 
     // auto-sync
     this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
 
-    // circuit breaker p/ claims/import 400
+    // circuit breaker do claims/import (400)
     this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
+
+    // fluxo cache (não spammar backend)
+    this.FLOW_TTL_MS = 30 * 60 * 1000;
+    this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
 
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado","autorizado","autorizada"]),
@@ -39,16 +43,15 @@ class DevolucoesFeed {
     this.startAutoSync();
   }
 
-  // ------- rede -------
+  // ===== rede/util =====
   safeJson(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.status===204?{}:res.json(); }
   async fetchQuiet(url){
     try{
       const r = await fetch(url,{ headers:{Accept:"application/json"} });
       const ct = r.headers.get("content-type")||""; let body=null;
-      if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} }
-      else { try{ body = await r.text(); }catch{} }
+      if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
       if(!r.ok){
-        const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string"?body:"");
+        const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
         console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
         return { ok:false, status:r.status, detail };
       }
@@ -63,17 +66,13 @@ class DevolucoesFeed {
   dataBr(iso){ if(!iso) return "—"; try{ return new Date(iso).toLocaleDateString("pt-BR",{day:"2-digit",month:"short",year:"numeric"});}catch{ return "—"; } }
   esc(s){ const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
 
-  // datas confiáveis (nunca id)
   getDateMs(d){
     const keys = ["created_at","createdAt","created","inserted_at","updated_at","data_compra","order_date","date_created","paid_at","ml_created_at","ml_updated_at","dt","data"];
-    for(const k of keys){
-      const v=d?.[k]; if(!v) continue;
-      const t=Date.parse(v); if(!Number.isNaN(t)) return t;
-    }
+    for(const k of keys){ const v=d?.[k]; if(!v) continue; const t=Date.parse(v); if(!Number.isNaN(t)) return t; }
     return 0;
   }
 
-  // ------- "Nova devolução" -------
+  // ===== "Nova" =====
   stableKey(d){ return d?.id_venda || d?.ml_claim_id || d?.order_id || d?.resource_id || d?.id; }
   firstSeenTs(key){ try{ const k=this.NEW_KEY_PREFIX+key; const v=localStorage.getItem(k); if(v) return Number(v)||0; const now=Date.now(); localStorage.setItem(k,String(now)); return now; }catch{ return 0; } }
   isNova(d){
@@ -84,7 +83,7 @@ class DevolucoesFeed {
   }
   purgeOldSeen(){ try{ const now=Date.now(); for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(!k||!k.startsWith(this.NEW_KEY_PREFIX)) continue; const ts=Number(localStorage.getItem(k))||0; if(now-ts>20*this.MAX_NEW_AGE_MS) localStorage.removeItem(k); } }catch{} }
 
-  // ------- carregar -------
+  // ===== carregar =====
   getMockData(){ return [
     { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
     { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
@@ -95,7 +94,7 @@ class DevolucoesFeed {
   async carregar(){
     this.toggleSkeleton(true);
     try{
-      const urls = [
+      const urls=[
         `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
         `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
         `/api/returns`
@@ -116,27 +115,22 @@ class DevolucoesFeed {
       this.toast("Aviso","API indisponível. Exibindo dados de exemplo.","erro");
     }finally{ this.toggleSkeleton(false); }
   }
-
   toggleSkeleton(show){
-    const sk=$("loading-skeleton"); const listWrap=$("lista-devolucoes"); const list=$("container-devolucoes"); const vazio=$("mensagem-vazia");
-    function $(id){ return document.getElementById(id); }
+    const $=id=>document.getElementById(id);
+    const sk=$("loading-skeleton"), listWrap=$("lista-devolucoes"), list=$("container-devolucoes"), vazio=$("mensagem-vazia");
     if (sk) sk.hidden=!show;
     if (listWrap) listWrap.setAttribute("aria-busy", show?"true":"false");
     if (list){ if (show) list.innerHTML=""; list.style.display = show ? "none" : "grid"; }
     if (vazio && !show) vazio.hidden=true;
   }
 
-  // ------- UI -------
+  // ===== UI =====
   configurarUI(){
-    const campo=document.getElementById("campo-pesquisa");
-    campo?.addEventListener("input", e=>{ this.filtros.pesquisa=String(e.target.value||"").trim(); this.page=1; this.renderizar(); });
-
-    const sel=document.getElementById("filtro-status");
-    sel?.addEventListener("change", e=>{ this.filtros.status=(e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
-
+    document.getElementById("campo-pesquisa")?.addEventListener("input", e=>{ this.filtros.pesquisa=String(e.target.value||"").trim(); this.page=1; this.renderizar(); });
+    document.getElementById("filtro-status")?.addEventListener("change", e=>{ this.filtros.status=(e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
     document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
 
-    // CLICKs no grid: abrir detalhes OU sincronizar ML daquele card
+    // grid: open/enrich
     document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
       const card = e.target.closest?.("[data-return-id]"); if(!card) return;
       const id   = card.getAttribute("data-return-id");
@@ -148,7 +142,6 @@ class DevolucoesFeed {
       }
     });
 
-    // paginação
     document.getElementById("paginacao")?.addEventListener("click",(e)=>{
       const a=e.target.closest("button[data-page]"); if(!a) return;
       const p=Number(a.getAttribute("data-page")); if(!Number.isFinite(p)||p===this.page) return;
@@ -162,7 +155,7 @@ class DevolucoesFeed {
     document.body.appendChild(btn);
   }
 
-  // ------- Auto-sync -------
+  // ===== Auto-sync =====
   startAutoSync(){
     const fire=()=>{ const b=document.getElementById("auto-refresh-hidden"); if(!b) return; if(document.hidden||!navigator.onLine) return; b.click(); };
     setTimeout(fire,2000); setInterval(fire,this.SYNC_MS);
@@ -170,20 +163,20 @@ class DevolucoesFeed {
     window.addEventListener("online",()=>setTimeout(fire,500));
   }
 
-  // ------- Circuit breaker helpers -------
+  // ===== Circuit breaker claims/import =====
   claimsImportAllowed(){ try{ const until=Number(localStorage.getItem(this.CLAIMS_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
   blockClaimsImport(){ try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+this.CLAIMS_BLOCK_MS)); }catch{} }
 
-  // ------- Sync principal (enxuto) -------
+  // ===== Sync principal (curto) =====
   async syncClaimsWithFallback(){
     if (!this.claimsImportAllowed()) return false;
-    const days = [3,7,30];
-    for (const d of days){
-      console.info("[sync] claims/import tentativa:", `${d}d in_progress`);
+    for (const d of [3,7,30]){
+      console.info("[sync] claims/import:", `${d}d in_progress`);
       const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), status:"in_progress" });
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
       if (r.ok) return true;
-      if (r.status===400 || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id")){
+      const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
+      if (bad){
         this.blockClaimsImport();
         if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio/mensagens.","erro"); }
         return false;
@@ -194,7 +187,7 @@ class DevolucoesFeed {
 
   async atualizarDados(){
     const before=new Set(this.items.map(d=>String(d.id)));
-    await this.syncClaimsWithFallback(); // pode virar no-op se bloqueado
+    await this.syncClaimsWithFallback(); // pode ser no-op
     await this.fetchQuiet(`/api/ml/shipping/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
     await this.fetchQuiet(`/api/ml/messages/sync?recent_days=${this.RANGE_DIAS}&silent=1`);
     await this.carregar();
@@ -203,20 +196,135 @@ class DevolucoesFeed {
     this.renderizar();
   }
 
-  // ------- Quick enrich por card -------
+  // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
-    // tenta enrich do backend
-    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
-    // tenta forçar sync de shipping por pedido/claim se conhecido
+    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // tenta enriquecer esse retorno
     if (orderId) await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
-    if (claimId) await this.fetchQuiet(`/api/ml/claims/import?claim_id=${encodeURIComponent(claimId)}&silent=1`);
-    // recarrega
+    if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`); // puxa claim (para termos stage/status)
     await this.carregar(); this.renderizar();
     this.toast("Sucesso","Devolução atualizada com o Mercado Livre.","sucesso");
   }
 
-  // ------- Render -------
+  // ===== Fluxo (resolver via shipping/claim) =====
+  extractFlowString(d){
+    const pick=(o,ks)=>{ for(const k of ks){ if(o&&o[k]!=null) return String(o[k]); } return ""; };
+    let s = pick(d,[
+      "log_status","status_log","flow","flow_status","ml_flow",
+      "shipping_status","ship_status","ml_shipping_status","return_shipping_status","current_shipping_status","tracking_status",
+      "claim_status","claim_stage"
+    ]) || "";
+    if (!s && d.shipping) s = pick(d.shipping,["status","substatus"]);
+    if (!s && d.return)   s = pick(d.return,["status"]);
+    if (!s && d.claim)    s = pick(d.claim, ["stage","status"]);
+    return String(s||"").toLowerCase().trim();
+  }
+  normalizeFlow(s){
+    if(!s) return "pendente";
+    const t = s.replace(/\s+/g,"_");
+    if (t.includes("em_mediacao") || /(media[cç]ao|mediation)/.test(t)) return "mediacao";
+    if (t.includes("aguardando_postagem")) return "em_preparacao";
+    if (t.includes("postado")) return "em_transporte";
+    if (t.includes("em_transito")) return "em_transporte";
+    if (t.includes("a_caminho") || /(on_the_way|in_transit)/.test(t)) return "em_transporte";
+    if (t.includes("em_inspecao")) return "em_preparacao";
+    if (t.includes("nao_recebido")) return "pendente";
+    if (t.includes("devolvido") || t.includes("fechado") || /(closed)/.test(t)) return "fechado";
+    if (/(prepar|prep|ready_to_ship)/.test(t)) return "em_preparacao";
+    if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
+    if (/(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(t)) return "em_transporte";
+    if (/(delivered|entreg|arrived|recebid)/.test(t)) return "recebido_cd";
+    return "pendente";
+  }
+
+  getCachedFlow(orderId){
+    try{
+      const raw = localStorage.getItem(this.FLOW_CACHE_PREFIX+orderId);
+      if(!raw) return null;
+      const { ts, flow } = JSON.parse(raw);
+      if (!ts || Date.now()-ts > this.FLOW_TTL_MS) return null;
+      return flow || null;
+    }catch{ return null; }
+  }
+  setCachedFlow(orderId, flow){
+    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
+  }
+
+  async resolveAndPatchFlow(d){
+    const id = d?.id;
+    const orderId = d?.id_venda || d?.order_id;
+    const claimId = d?.ml_claim_id || d?.claim_id;
+    if (!id || !orderId) return;
+
+    // cache: se já sei, aplico
+    const cached = this.getCachedFlow(orderId);
+    if (cached){
+      const canon = this.normalizeFlow(cached);
+      if (canon && canon !== this.normalizeFlow(this.extractFlowString(d))){
+        await this.patchFlow(id, canon);
+        await this.carregar(); this.renderizar();
+      }
+      return;
+    }
+
+    // 1) shipping/state por order_id
+    let found = "";
+    let r = await this.fetchQuiet(`/api/ml/shipping/state?order_id=${encodeURIComponent(orderId)}`);
+    if (r.ok){
+      const obj = r.data && (r.data.data || r.data) || {};
+      const status = String(obj.status || obj.shipping_status || obj.substatus || "").toLowerCase();
+      const sub    = String(obj.substatus || obj.sub_status || "").toLowerCase();
+      found = [status, sub].filter(Boolean).join("_");
+    }
+
+    // 2) se não veio, tenta claim
+    if (!found && claimId){
+      r = await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
+      if (r.ok){
+        const c = (r.data && (r.data.data||r.data.claim||r.data)) || {};
+        const desc = String(
+          (c.return && c.return.shipping && (c.return.shipping.status || c.return.shipping.substatus)) ||
+          c.stage || c.status || ""
+        ).toLowerCase();
+        found = desc;
+      }
+    }
+
+    // 3) fallback: enrich do retorno (pode retornar shipping embutido)
+    if (!found){
+      r = await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
+      if (r.ok){
+        const j = r.data && (r.data.data || r.data) || {};
+        const ship = (j.return && j.return.shipping) || j.shipping || {};
+        const st = String(ship.status || ship.substatus || j.shipping_status || "").toLowerCase();
+        found = st;
+      }
+    }
+
+    if (!found) return;
+
+    this.setCachedFlow(orderId, found);
+    const canon = this.normalizeFlow(found);
+    if (!canon) return;
+
+    // se mudou, persiste e recarrega
+    const curCanon = this.normalizeFlow(this.extractFlowString(d));
+    if (canon !== curCanon){
+      await this.patchFlow(id, canon);
+      await this.carregar(); this.renderizar();
+    }
+  }
+
+  async patchFlow(id, canon){
+    await this.fetchQuiet(`/api/returns/${encodeURIComponent(id)}`); // aquece (evita 1º 404 estranho em alguns hosts)
+    await fetch(`/api/returns/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ log_status: canon, updated_by: "frontend-flow-resolver" })
+    }).catch(()=>{});
+  }
+
+  // ===== Render =====
   renderizar(){
     const container=document.getElementById("container-devolucoes");
     const vazio=document.getElementById("mensagem-vazia");
@@ -254,7 +362,17 @@ class DevolucoesFeed {
     container.style.display="grid";
     if (vazio) vazio.hidden=true;
     container.innerHTML="";
-    pageItems.forEach((d,i)=>{ const card=this.card(d,i); card.setAttribute("role","listitem"); container.appendChild(card); });
+    pageItems.forEach((d,i)=>{
+      const card=this.card(d,i);
+      card.setAttribute("role","listitem");
+      container.appendChild(card);
+
+      // >>> Se o fluxo ainda é "pendente", tenta resolver assíncrono (shipping/claim) e persistir
+      const flowNow = this.normalizeFlow(this.extractFlowString(d));
+      if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
+        this.resolveAndPatchFlow(d); // não bloqueia a UI
+      }
+    });
 
     this.renderPaginacao(totalPages);
   }
@@ -275,7 +393,7 @@ class DevolucoesFeed {
     nav.innerHTML=html;
   }
 
-  // ------- Card -------
+  // ===== Cards/Badges =====
   card(d, index=0){
     const el=document.createElement("div");
     el.className="card-devolucao slide-up";
@@ -340,9 +458,7 @@ class DevolucoesFeed {
     return el;
   }
 
-  // ------- Badges -------
   badgeNova(d){ return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
-
   badgeStatus(d){
     const grp=this.grupoStatus(d.status);
     const map={
@@ -354,8 +470,6 @@ class DevolucoesFeed {
     };
     return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status||"—")}</div>`;
   }
-
-  // fluxo (inclui “a caminho”)
   badgeFluxo(d){
     const s = this.extractFlowString(d);
     const flow = this.normalizeFlow(s);
@@ -364,31 +478,6 @@ class DevolucoesFeed {
     const key = flow || "pendente";
     return `<div class="badge ${css[key]||"badge"}" title="Fluxo da devolução">${labels[key]||"Fluxo"}</div>`;
   }
-  extractFlowString(d){
-    const pick=(o,ks)=>{ for(const k of ks){ if(o&&o[k]!=null) return String(o[k]); } return ""; };
-    let s = pick(d,["log_status","status_log","flow","flow_status","ml_flow","shipping_status","ship_status","ml_shipping_status","return_shipping_status","current_shipping_status","tracking_status","claim_status","claim_stage"]) || "";
-    if (!s && d.shipping) s = pick(d.shipping,["status","substatus"]);
-    if (!s && d.return)   s = pick(d.return,["status"]);
-    if (!s && d.claim)    s = pick(d.claim, ["stage","status"]);
-    return String(s||"").toLowerCase().trim();
-  }
-  normalizeFlow(s){
-    if(!s) return "pendente";
-    const t = s.replace(/\s+/g,"_");
-    if (t.includes("em_mediacao") || /(media[cç]ao|mediation)/.test(t)) return "mediacao";
-    if (t.includes("aguardando_postagem")) return "em_preparacao";
-    if (t.includes("postado")) return "em_transporte";
-    if (t.includes("em_transito")) return "em_transporte";
-    if (t.includes("a_caminho") || /(on_the_way|in_transit)/.test(t)) return "em_transporte";
-    if (t.includes("recebido_cd") || /(delivered|recebid|arrived)/.test(t)) return "recebido_cd";
-    if (t.includes("em_inspecao")) return "em_preparacao";
-    if (t.includes("nao_recebido")) return "pendente";
-    if (t.includes("devolvido") || t.includes("fechado") || /(closed)/.test(t)) return "fechado";
-    if (/(prepar|prep|ready_to_ship)/.test(t)) return "em_preparacao";
-    if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
-    if (/(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(t)) return "em_transporte";
-    return "pendente";
-  }
   grupoStatus(st){
     const s=String(st||"").toLowerCase();
     for (const [g,set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return g;
@@ -396,7 +485,7 @@ class DevolucoesFeed {
     return "pendente";
   }
 
-  // ------- ações -------
+  // ===== ações =====
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
     if (modal && modal.showModal) modal.showModal();
