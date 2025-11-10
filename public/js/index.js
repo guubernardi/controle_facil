@@ -340,16 +340,50 @@ class DevolucoesFeed {
     return String(s||"").toLowerCase().trim();
   }
 
+  // Deriva o fluxo com prioridade: CLAIM > SHIPPING > RETURN > LOG_STATUS
+  computeFlow(d){
+    const lower = v => String(v||"").toLowerCase();
+
+    // ---- CLAIM
+    const cStage = lower(d.claim?.stage || d.claim_stage || d.claim?.status || d.claim_status || d.claim_state);
+    if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
+    if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
+
+    // ---- SHIPPING
+    const sStat = lower(
+      d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
+      d.current_shipping_status || d.tracking_status ||
+      d.shipping?.status || d.ml_shipping?.status
+    );
+    const sSub  = lower(d.ml_substatus || d.shipping?.substatus || d.ml_shipping?.substatus);
+    const ship = [sStat, sSub].join("_");
+
+    if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return "em_preparacao";
+    if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return "em_transporte";
+    if (/delivered|entreg|arrived|recebid/.test(ship)) return "recebido_cd";
+    if (/not_delivered|cancel/.test(ship)) return "pendente";
+
+    // ---- RETURN
+    const rStat = lower(d.return?.status || d.return_status || d.status_devolucao || d.status_log);
+    if (/closed|fechado|devolvido|finaliz/.test(rStat)) return "fechado";
+
+    // ---- LOG STATUS interno (fallback)
+    const log = lower(d.log_status || d.flow || d.flow_status || d.ml_flow);
+    return this.normalizeFlow(log);
+  }
+
   normalizeFlow(s){
     if(!s) return "pendente";
     const t = String(s).toLowerCase().replace(/\s+/g,"_");
+
+    if (/(mediat|media[cç]ao)/.test(t)) return "mediacao";
+    if (/(disputa|reclama|claim_open|claim)/.test(t)) return "disputa";
 
     // mapear nomes vindos do backend
     if (t.includes("preparacao")) return "em_preparacao";
     if (t === "transporte")       return "em_transporte";
     if (t.includes("recebido_cd")) return "recebido_cd";
 
-    if (t.includes("em_mediacao") || /(media[cç]ao|mediation)/.test(t)) return "mediacao";
     if (t.includes("aguardando_postagem")) return "em_preparacao";
     if (t.includes("postado")) return "em_transporte";
     if (t.includes("em_transito")) return "em_transporte";
@@ -385,8 +419,8 @@ class DevolucoesFeed {
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";            // respeita bloqueio
-    if (!this.sellerId && !this.sellerNick) return ""; // sem info da loja, evite 403
 
+    // ⚠️ REMOVIDO o guard de seller headers para não travar o fluxo
     const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) {
       if (r.status===403) this.setNoAccess(orderId);
@@ -412,7 +446,7 @@ class DevolucoesFeed {
     if (cached){
       if (cached === "__NO_ACCESS__") return; // não re-tenta por 24h
       const canon = this.normalizeFlow(cached);
-      if (canon && canon !== this.normalizeFlow(this.extractFlowString(d))){
+      if (canon && canon !== this.computeFlow(d)){
         await this.patchFlow(id, canon);
         this.queueRefresh(250);
       }
@@ -427,7 +461,7 @@ class DevolucoesFeed {
     const canon = this.normalizeFlow(found);
     if (!canon) return;
 
-    const curCanon = this.normalizeFlow(this.extractFlowString(d));
+    const curCanon = this.computeFlow(d);
     if (canon !== curCanon){
       await this.patchFlow(id, canon);
       this.queueRefresh(300);
@@ -491,7 +525,7 @@ class DevolucoesFeed {
       container.appendChild(card);
 
       // Se o fluxo ainda é "pendente", tenta resolver com throttle/anti-F5
-      const flowNow = this.normalizeFlow(this.extractFlowString(d));
+      const flowNow = this.computeFlow(d);
       const oid = d.id_venda || d.order_id;
       if (flowNow==="pendente" && oid) {
         this.resolveAndPatchFlow(d); // assíncrono, sem travar a UI
@@ -573,7 +607,7 @@ class DevolucoesFeed {
       <div class="devolucao-footer">
         <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
           <button class="botao botao-outline botao-detalhes" data-action="open">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
             Ver Detalhes
           </button>
         </a>
@@ -595,8 +629,7 @@ class DevolucoesFeed {
     return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status||"—")}</div>`;
   }
   badgeFluxo(d){
-    const s = this.extractFlowString(d);
-    const flow = this.normalizeFlow(s);
+    const flow = this.computeFlow(d);
     const labels = { disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação", pronto_envio:"Pronto p/ Envio", em_transporte:"A caminho", recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente" };
     const css    = { disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente", pronto_envio:"badge-aprovado", em_transporte:"badge-info", recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge" };
     const key = flow || "pendente";
