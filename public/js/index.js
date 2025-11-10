@@ -18,11 +18,15 @@ class DevolucoesFeed {
     this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
 
+    // cooldown quando a API retornar invalid_claim_id
+    this.COOLDOWN_MS = 10 * 60 * 1000;
+    this._cooldownUntil = 0;
+
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado", "autorizado", "autorizada"]),
       rejeitado: new Set(["rejeitado", "rejeitada", "negado", "negada"]),
       finalizado: new Set(["concluido","concluida","finalizado","finalizada","fechado","fechada","encerrado","encerrada"]),
-      pendente: new Set(["pendente","em_analise","em-analise","aberto"])
+      pendente: new Set(["pendente","em_analise","em-analise","aberto"]),
     };
 
     this.inicializar();
@@ -98,11 +102,7 @@ class DevolucoesFeed {
       return now;
     } catch { return 0; }
   }
-  isNova(d){
-    const id = (d && (d.id ?? d.id_venda)) ? String(d.id ?? d.id_venda) : null;
-    if(!id) return false;
-    return (Date.now() - this.firstSeenTs(id)) <= this.NEW_WINDOW_MS;
-  }
+  isNova(d){ const id = d?.id ?? d?.id_venda ?? null; if(!id) return false; return (Date.now() - this.firstSeenTs(id)) <= this.NEW_WINDOW_MS; }
   purgeOldSeen(){
     try{
       const now = Date.now();
@@ -120,7 +120,7 @@ class DevolucoesFeed {
       { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
       { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
       { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado", log_status:"pronto_envio", created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
-      { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 }
+      { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 },
     ];
   }
 
@@ -137,7 +137,7 @@ class DevolucoesFeed {
         try {
           const j = await fetch(url,{ headers:{ Accept:"application/json" }}).then(r=>this.safeJson(r));
           const arr = this.coerceReturnsPayload(j);
-          if (Array.isArray(arr)) { list = arr; break; }
+          if (Array.isArray(arr) && arr.length >= 0) { list = arr; break; }
         } catch(e){ lastErr = e; }
       }
       this.items = Array.isArray(list) && list.length ? list : this.getMockData();
@@ -163,22 +163,14 @@ class DevolucoesFeed {
   // ========= UI =========
   configurarUI() {
     const campo = document.getElementById("campo-pesquisa");
-    campo?.addEventListener("input", (e)=>{
-      this.filtros.pesquisa = String(e.target.value||"").trim();
-      this.page=1; this.renderizar();
-    });
+    campo?.addEventListener("input", (e)=>{ this.filtros.pesquisa = String(e.target.value||"").trim(); this.page=1; this.renderizar(); });
 
     const selectFallback = document.getElementById("filtro-status");
-    selectFallback?.addEventListener("change",(e)=>{
-      this.filtros.status = (e.target.value||"todos").toLowerCase();
-      this.page=1; this.renderizar();
-    });
+    selectFallback?.addEventListener("change",(e)=>{ this.filtros.status = (e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
 
     document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
 
-    document.getElementById("btn-nova-devolucao")?.addEventListener("click",()=>{
-      this.toast("Info","Funcionalidade em desenvolvimento","info");
-    });
+    document.getElementById("btn-nova-devolucao")?.addEventListener("click",()=>{ this.toast("Info","Funcionalidade em desenvolvimento","info"); });
 
     document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
       const card = e.target.closest?.("[data-return-id]"); if(!card) return;
@@ -205,6 +197,8 @@ class DevolucoesFeed {
   // ========= Auto-sync =========
   startAutoSync() {
     const clickHiddenRefresh = () => {
+      // respeita cooldown
+      if (Date.now() < this._cooldownUntil) return;
       const btn = document.getElementById("auto-refresh-hidden");
       if (!btn) return;
       if (document.hidden || !navigator.onLine) return; // pausa em aba oculta/offline
@@ -216,26 +210,39 @@ class DevolucoesFeed {
     window.addEventListener("online",()=>setTimeout(clickHiddenRefresh, 500));
   }
 
-  // ========= Sync com FALLBACK robusto (sem duplicar status/statuses) =========
-  buildImportUrl({ days, statuses, key = "statuses" }) {
-    const qs = new URLSearchParams({
-      silent: "1",
-      all: "1"
-    });
+  // ========= Sync com FALLBACK robusto =========
+  buildImportUrl({ days, statuses, key = "statuses", from, to, ignoreInvalid = true }) {
+    const qs = new URLSearchParams({ silent: "1", all: "1" });
     if (Number.isFinite(days)) qs.append("days", String(days));
+    if (from && to) { qs.append("from", from); qs.append("to", to); }
     if (statuses) qs.append(key, statuses);
+    // dicas para o back ignorar IDs ruins (se a rota suportar; se não suportar, não quebra)
+    if (ignoreInvalid) { qs.append("ignore_invalid", "1"); qs.append("fail_fast", "0"); }
     return `/api/ml/claims/import?${qs.toString()}`;
+  }
+
+  classifyError(r){
+    const msg = (r?.detail || "").toString().toLowerCase();
+    return {
+      invalid: msg.includes("invalid_claim_id"),
+      unknownParam: msg.includes("unknown") || msg.includes("unrecognized") || msg.includes("unsupported") || msg.includes("param"),
+      auth: msg.includes("token") || msg.includes("unauthorized") || msg.includes("forbidden"),
+      rate: msg.includes("rate") || msg.includes("too many") || msg.includes("throttle"),
+    };
   }
 
   async tryImport({ days, statuses }) {
     // 1) tenta com "statuses"
     let url = this.buildImportUrl({ days, statuses, key:"statuses" });
     let r = await this.fetchQuiet(url);
-    if (r.ok) return { ok:true };
+    if (r.ok) return r;
 
-    // 2) se falhar, tenta com "status" (compat)
-    url = this.buildImportUrl({ days, statuses, key:"status" });
-    r = await this.fetchQuiet(url);
+    // 2) só tenta "status" se parecer erro de parâmetro (evita duplicar 400 por invalid_claim_id)
+    const kind = this.classifyError(r);
+    if (kind.unknownParam) {
+      url = this.buildImportUrl({ days, statuses, key:"status" });
+      r = await this.fetchQuiet(url);
+    }
     return r;
   }
 
@@ -244,30 +251,43 @@ class DevolucoesFeed {
       { label:"30d opened,in_progress", days: 30, statuses: "opened,in_progress" },
       { label:"7d in_progress",        days: 7,  statuses: "in_progress" },
       { label:"3d opened",             days: 3,  statuses: "opened" },
-      { label:"1d in_progress",        days: 1,  statuses: "in_progress" }
+      { label:"1d in_progress",        days: 1,  statuses: "in_progress" },
     ];
+
+    let sawInvalid = false;
 
     for (const a of attempts) {
       console.info("[sync] claims/import tentativa:", a.label);
       const r = await this.tryImport(a);
       if (r.ok) return true;
 
-      const msg = (r.detail || "").toString().toLowerCase();
-      // prossegue apenas se for o erro chato de IDs inválidos/400; senão, para.
-      if (!(msg.includes("invalid_claim_id") || r.status === 400)) break;
+      const k = this.classifyError(r);
+      if (k.invalid) { sawInvalid = true; break; } // não adianta insistir nas variações
+      // se for auth ou rate limit, também para (não é problema de parâmetro)
+      if (k.auth || k.rate) break;
     }
 
-    // Janela from/to — 24h
-    const to = new Date();
-    const from = new Date(Date.now() - 24*60*60*1000);
-    const pad = (n)=>String(n).padStart(2,"0");
-    const toStr   = `${to.getFullYear()}-${pad(to.getMonth()+1)}-${pad(to.getDate())}`;
-    const fromStr = `${from.getFullYear()}-${pad(from.getMonth()+1)}-${pad(from.getDate())}`;
-    const qs2 = new URLSearchParams({ from: fromStr, to: toStr, silent: "1", all: "1" });
-    qs2.append("statuses", "in_progress");
-    console.info("[sync] claims/import tentativa: from/to 1d");
-    const r2 = await this.fetchQuiet(`/api/ml/claims/import?${qs2.toString()}`);
-    return !!r2.ok;
+    // última cartada: janela from/to — 24h (só se não for erro de IDs inválidos)
+    if (!sawInvalid) {
+      const to = new Date();
+      const from = new Date(Date.now() - 24*60*60*1000);
+      const pad = (n)=>String(n).padStart(2,"0");
+      const toStr   = `${to.getFullYear()}-${pad(to.getMonth()+1)}-${pad(to.getDate())}`;
+      const fromStr = `${from.getFullYear()}-${pad(from.getMonth()+1)}-${pad(from.getDate())}`;
+
+      console.info("[sync] claims/import tentativa: from/to 1d");
+      const r2 = await this.fetchQuiet(this.buildImportUrl({ from: fromStr, to: toStr, statuses:"in_progress" }));
+      if (r2.ok) return true;
+
+      const k2 = this.classifyError(r2);
+      if (k2.invalid) sawInvalid = true;
+    }
+
+    // aplica cooldown para não spammar o back se for invalid_claim_id
+    if (sawInvalid) {
+      this._cooldownUntil = Date.now() + this.COOLDOWN_MS;
+    }
+    return false;
   }
 
   async atualizarDados() {
@@ -287,7 +307,11 @@ class DevolucoesFeed {
 
     if (!importedOk && !this._lastSyncErrShown) {
       this._lastSyncErrShown = true;
-      this.toast("Aviso", "Alguns claims do ML vieram inválidos. Vou continuar tentando com janelas menores automaticamente.", "erro");
+      if (Date.now() < this._cooldownUntil) {
+        this.toast("Aviso", "O ML retornou IDs de claim inválidos. Vou pausar novas tentativas por 10 minutos.", "erro");
+      } else {
+        this.toast("Aviso", "O ML não importou as disputas agora. Vou continuar tentando periodicamente.", "erro");
+      }
     }
 
     this.renderizar();
@@ -306,10 +330,7 @@ class DevolucoesFeed {
     const st = (this.filtros.status || "todos").toLowerCase();
 
     const filtrados = (this.items || []).filter((d) => {
-      const textoMatch = [
-        d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status,
-        d.log_status, d.claim_status, d.shipping_status
-      ]
+      const textoMatch = [d.cliente_nome, d.id_venda, d.sku, d.loja_nome, d.status, d.log_status, d.claim_status, d.shipping_status]
         .map((x)=>String(x||"").toLowerCase())
         .some((s)=>s.includes(q));
       const statusMatch = st === "todos" || this.grupoStatus(d.status) === st;
@@ -462,7 +483,7 @@ class DevolucoesFeed {
       aprovado:'<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
       rejeitado:'<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
       em_analise:'<div class="badge badge-info" title="Status interno">Em Análise</div>',
-      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>'
+      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
     };
     return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status || "—")}</div>`;
   }
@@ -470,16 +491,8 @@ class DevolucoesFeed {
   badgeFluxo(d){
     const s = String(d.log_status ?? d.claim_status ?? d.shipping_status ?? "").toLowerCase().trim();
     const flow = this.normalizeFlow(s);
-    const labels = {
-      disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação",
-      pronto_envio:"Pronto p/ Envio", em_transporte:"Em Transporte",
-      recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente"
-    };
-    const css = {
-      disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente",
-      pronto_envio:"badge-aprovado", em_transporte:"badge-info",
-      recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge"
-    };
+    const labels = { disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação", pronto_envio:"Pronto p/ Envio", em_transporte:"Em Transporte", recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente" };
+    const css = { disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente", pronto_envio:"badge-aprovado", em_transporte:"badge-info", recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge" };
     const key = flow || "pendente";
     return `<div class="badge ${css[key] || "badge"}" title="Fluxo da devolução">${labels[key] || "Fluxo"}</div>`;
   }
@@ -515,12 +528,8 @@ class DevolucoesFeed {
   // ========= Ações =========
   abrirDetalhes(id){
     const modal = document.getElementById("modal-detalhe");
-    if (modal && modal.showModal) {
-      modal.showModal();
-    } else {
-      // fallback: navega para a tela de edição
-      window.open(`./devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
-    }
+    if (modal && modal.showModal) modal.showModal();
+    else window.open(`./devolucao-editar.html?id=${encodeURIComponent(id)}`, "_blank", "noopener");
   }
 
   exportar(){
