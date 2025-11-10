@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — CORRIGIDO (ML return-cost + labels humanizados + disputa/mediação + timeline change)
+// /public/js/devolucao-editar.js — ML return-cost integrado + sem "Custos do ML" na UI
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -64,9 +64,9 @@
     var s = String(text || '').toLowerCase();
     var cls = 'pill -neutro';
     if (!text) cls = 'pill -neutro';
-    else if (s.includes('fech') || s.includes('aprov')) cls = 'pill -aprovado';
+    else if (s.includes('pend') || s.includes('caminho')) cls = 'pill -pendente';
+    else if (s.includes('aprov') || s.includes('recebido')) cls = 'pill -aprovado';
     else if (s.includes('rej') || s.includes('neg') || s.includes('reprov')) cls = 'pill -rejeitado';
-    else if (s.includes('analise') || s.includes('media') || s.includes('disput') || s.includes('abriu') || s.includes('caminho')) cls = 'pill -pendente';
     el.className = cls;
     el.textContent = text || '—';
   }
@@ -89,15 +89,16 @@
     if (sep) sep.hidden = false;
   }
 
-  // ===== Regras de cálculo (frente)
+  // ===== Regras de cálculo (frente) =====
   function calcTotalByRules(d){
-    var st = String(d.status || '').toLowerCase();             // status logístico
+    var st = String(d.status || '').toLowerCase();
     var mot= String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
+    var lgs= String(d.log_status || '').toLowerCase();
     var vp = Number(d.valor_produto || 0);
-    var vf = Number(d.valor_frete   || 0);
-    if (st.includes('rej') || st.includes('neg')) return 0;    // devolução rejeitada/negada
+    var vf = Number(d.valor_frete || 0);
+    if (st.includes('rej') || st.includes('neg')) return 0;
     if (mot.includes('arrependimento') || mot === 'arrependimento_cliente') return 0;
-    if (st === 'recebido_cd' || st === 'em_inspecao') return vf; // chegou/inspecionando: só frete
+    if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
     return vp + vf;
   }
 
@@ -182,20 +183,9 @@
 
   var current = {};
 
-  // ---- Label humano para status logístico
-  function statusLabel(st){
-    st = String(st || '').toLowerCase();
-    if (st === 'pronto_envio')   return 'preparou devolução';
-    if (st === 'em_transito')    return 'em transporte';
-    if (st === 'recebido_cd')    return 'recebido no CD';
-    if (st === 'em_inspecao')    return 'em inspeção';
-    if (st === 'encerrado')      return 'encerrado';
-    return st || '—';
-  }
-
   function updateSummary(d){
     var rs=$('resumo-status'), rl=$('resumo-log'), rc=$('resumo-cd'), rp=$('resumo-prod'), rf=$('resumo-frete'), rt=$('resumo-total');
-    if (rs) rs.textContent = statusLabel(d.status);
+    if (rs) rs.textContent = (d.status || '—').toLowerCase();
     if (rl) rl.textContent = (d.log_status || '—').toLowerCase();
     if (rc) rc.textContent = d.cd_recebido_em ? 'recebido' : 'não recebido';
     if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
@@ -457,7 +447,7 @@
 
     updateSummary(d); recalc();
 
-    // (removido) — sem totalização de "custos do ML" na UI
+    // (removido) — não há mais totalização de custos do ML na UI
   }
 
   // === ML summary UI (informativo) ===
@@ -571,10 +561,7 @@
 
     clearList('claim-related');
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
-    related.forEach(function(r){
-      if (typeof r === 'string') pushLi('claim-related', `<b>${r}</b>`);
-      else pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`);
-    });
+    related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
 
     // Preferência de motivo
     var prefer =
@@ -601,17 +588,12 @@
       }
     }
 
-    // ---- ML: Mediação/Disputa + status humano
+    // ---- ML: Mediação + status humano
     try {
       var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
       var status = (claim.status || '').toString().toLowerCase();
-
-      var inDispute   = stage.includes('dispute');
       var inMediation = stage.includes('mediation') || status.includes('mediation');
-
-      if (inDispute)        setPillState('pill-mediacao', 'Em disputa', 'pendente');
-      else if (inMediation) setPillState('pill-mediacao', 'Em mediação', 'pendente');
-      else                  setPillState('pill-mediacao', 'Sem mediação', 'neutro');
+      setPillState('pill-mediacao', inMediation ? 'Em mediação' : 'Sem mediação', inMediation ? 'pendente' : 'neutro');
 
       var statusDesc =
         (claim.return && claim.return.status) ||
@@ -1100,17 +1082,6 @@
 
       var reasonTxt = reasonFromMeta(meta);
       if (reasonTxt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">motivo: <b>'+ reasonTxt +'</b></span>');
-
-      // NOVO: detalhes de troca (change/replace)
-      if (meta && meta.change) {
-        var ch = meta.change;
-        if (ch.type)   metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">troca: <b>'+ ch.type +'</b></span>');
-        if (ch.status) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">troca status: <b>'+ ch.status +'</b></span>');
-        if (Array.isArray(ch.new_orders_ids) && ch.new_orders_ids.length)
-          metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">novo pedido: '+ ch.new_orders_ids.join(', ') +'</span>');
-        if (Array.isArray(ch.new_shipments) && ch.new_shipments.length)
-          metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">envios: '+ ch.new_shipments.join(', ') +'</span>');
-      }
 
       frag.appendChild(item);
     });
