@@ -9,8 +9,8 @@ class DevolucoesFeed {
     this.page = 1;
 
     // "Nova"
-    this.NEW_WINDOW_MS = 36 * 60 * 60 * 1000;
-    this.MAX_NEW_AGE_MS = 72 * 60 * 60 * 1000;
+    this.NEW_WINDOW_MS = 12 * 60 * 60 * 1000; // 12h
+    this.MAX_NEW_AGE_MS = 48 * 60 * 60 * 1000; // 48h
     this.NEW_KEY_PREFIX = "rf:firstSeen:";
 
     // auto-sync
@@ -250,6 +250,61 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
   }
 
+  // tenta várias rotas existentes no backend para descobrir status de envio por order_id
+  async fetchShippingFlow(orderId){
+    if (!orderId) return "";
+    const qs = (o) => new URLSearchParams(o).toString();
+    const candidates = [
+      `/api/ml/shipping/status?${qs({ order_id: orderId })}`,
+      `/api/ml/shipping/by-order/${encodeURIComponent(orderId)}`,
+      `/api/ml/orders/${encodeURIComponent(orderId)}/shipping`,
+      `/api/ml/shipments?${qs({ order_id: orderId })}`,
+      `/api/ml/shipping/sync?${qs({ order_id: orderId, silent: 1 })}`, // existe no teu backend
+    ];
+    for (const url of candidates){
+      const r = await this.fetchQuiet(url);
+      if (!r.ok) continue;
+
+      const j = r.data?.data ?? r.data ?? {};
+      let status = String(
+        j.status || j.shipping_status || j.current_status || j.substatus || j.sub_status || j.flow || j.stage || ""
+      ).toLowerCase();
+      let sub = String(j.substatus || j.sub_status || "").toLowerCase();
+      let s = [status, sub].filter(Boolean).join("_");
+      if (s) return s;
+
+      if (Array.isArray(j) && j.length){
+        const o = j[0] || {};
+        const s2 = String(o.status || o.shipping_status || o.substatus || "").toLowerCase();
+        if (s2) return s2;
+      }
+      if (j.shipping){
+        const o = j.shipping;
+        const s3 = String(o.status || o.substatus || "").toLowerCase();
+        if (s3) return s3;
+      }
+    }
+    return "";
+  }
+
+  async fetchClaimFlow(claimId){
+    if (!claimId) return "";
+    const candidates = [
+      `/api/ml/claims/${encodeURIComponent(claimId)}`,
+      `/api/ml/claims/inspect?claim_id=${encodeURIComponent(claimId)}`,
+      `/api/ml/claims/state?claim_id=${encodeURIComponent(claimId)}`
+    ];
+    for (const url of candidates){
+      const r = await this.fetchQuiet(url);
+      if (!r.ok) continue;
+      const c = r.data?.data ?? r.data?.claim ?? r.data ?? {};
+      const shipping = c.return?.shipping || {};
+      const s = String(shipping.status || shipping.substatus || c.stage || c.status || "").toLowerCase();
+      if (s) return s;
+    }
+    return "";
+  }
+
   async resolveAndPatchFlow(d){
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
@@ -267,35 +322,18 @@ class DevolucoesFeed {
       return;
     }
 
-    // 1) shipping/state por order_id
-    let found = "";
-    let r = await this.fetchQuiet(`/api/ml/shipping/state?order_id=${encodeURIComponent(orderId)}`);
-    if (r.ok){
-      const obj = r.data && (r.data.data || r.data) || {};
-      const status = String(obj.status || obj.shipping_status || obj.substatus || "").toLowerCase();
-      const sub    = String(obj.substatus || obj.sub_status || "").toLowerCase();
-      found = [status, sub].filter(Boolean).join("_");
-    }
+    // 1) shipping por order_id (usando endpoints que existem)
+    let found = await this.fetchShippingFlow(orderId);
 
-    // 2) se não veio, tenta claim
-    if (!found && claimId){
-      r = await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
-      if (r.ok){
-        const c = (r.data && (r.data.data||r.data.claim||r.data)) || {};
-        const desc = String(
-          (c.return && c.return.shipping && (c.return.shipping.status || c.return.shipping.substatus)) ||
-          c.stage || c.status || ""
-        ).toLowerCase();
-        found = desc;
-      }
-    }
+    // 2) se nada, tenta claim
+    if (!found && claimId) found = await this.fetchClaimFlow(claimId);
 
     // 3) fallback: enrich do retorno (pode retornar shipping embutido)
     if (!found){
-      r = await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
+      const r = await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
       if (r.ok){
-        const j = r.data && (r.data.data || r.data) || {};
-        const ship = (j.return && j.return.shipping) || j.shipping || {};
+        const j = r.data?.data ?? r.data ?? {};
+        const ship = j.return?.shipping || j.shipping || {};
         const st = String(ship.status || ship.substatus || j.shipping_status || "").toLowerCase();
         found = st;
       }
@@ -316,7 +354,7 @@ class DevolucoesFeed {
   }
 
   async patchFlow(id, canon){
-    await this.fetchQuiet(`/api/returns/${encodeURIComponent(id)}`); // aquece (evita 1º 404 estranho em alguns hosts)
+    await this.fetchQuiet(`/api/returns/${encodeURIComponent(id)}`); // aquece (evita 1º 404 estranho)
     await fetch(`/api/returns/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type":"application/json" },
