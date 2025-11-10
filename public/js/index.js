@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed Geral com resolução de fluxo por card (corrigido c/ fallback 401/403 + stub messages)
+// /public/js/index.js — Feed Geral (anti-loop + backoff 401/403/404)
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -16,18 +16,15 @@ class DevolucoesFeed {
     // auto-sync
     this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
+    this._syncRunning = false; // <-- evita rodar atualizarDados em paralelo
 
     // circuit breaker do claims/import (400)
     this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
 
-    // cache de fluxo (evita bater no backend em loop)
-    this.FLOW_TTL_MS = 30 * 60 * 1000;
+    // cache de fluxo (evita loop / backoff)
+    this.FLOW_TTL_MS = 30 * 60 * 1000; // 30min
     this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
-
-    // flags de fallback (ML barrando shipping) e messages 404
-    this.ML_SHIP_FORBIDDEN_KEY = 'rf:mlShipForbidden';
-    this.MSG_SYNC_404_FLAG     = 'rf:messagesSync404';
 
     // seller headers p/ /api/ml/*
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
@@ -195,7 +192,7 @@ class DevolucoesFeed {
       const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio/mensagens.","erro"); }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio.","erro"); }
         return false;
       }
     }
@@ -203,49 +200,34 @@ class DevolucoesFeed {
   }
 
   async atualizarDados(){
-    const before=new Set(this.items.map(d=>String(d.id)));
-    await this.syncClaimsWithFallback(); // pode ser no-op
-
-    // Shipping: se já sabemos que o ML vai negar, força leitura apenas do DB
-    const forbid = localStorage.getItem(this.ML_SHIP_FORBIDDEN_KEY) === '1';
-    const shipUrl = forbid
-      ? `/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1&no_meli=1`
-      : `/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`;
-
-    const rShip = await this.fetchQuiet(shipUrl);
-    if (!rShip.ok && (rShip.status===401 || rShip.status===403)) {
-      try { localStorage.setItem(this.ML_SHIP_FORBIDDEN_KEY, '1'); } catch {}
-      await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1&no_meli=1`);
-    } else if (rShip.ok) {
-      try { localStorage.removeItem(this.ML_SHIP_FORBIDDEN_KEY); } catch {}
+    if (this._syncRunning) return;           // <-- trava reentrância
+    this._syncRunning = true;
+    try{
+      const before=new Set(this.items.map(d=>String(d.id)));
+      await this.syncClaimsWithFallback(); // pode ser no-op
+      await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
+      // removido: /api/ml/messages/sync (está 404 no backend)
+      await this.carregar();
+      const novos=this.items.filter(d=>!before.has(String(d.id))).length;
+      if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
+      this.renderizar();
+    } finally {
+      this._syncRunning = false;
     }
-
-    // Messages: se 404 uma vez, memoriza para não repetir
-    let skipMsg = false;
-    try { skipMsg = localStorage.getItem(this.MSG_SYNC_404_FLAG) === '1'; } catch {}
-    if (!skipMsg) {
-      const rMsg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
-      if (!rMsg.ok && rMsg.status === 404) {
-        try { localStorage.setItem(this.MSG_SYNC_404_FLAG, '1'); } catch {}
-      }
-    }
-
-    await this.carregar();
-    const novos=this.items.filter(d=>!before.has(String(d.id))).length;
-    if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
-    this.renderizar();
   }
 
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
-    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // tenta enriquecer esse retorno
+    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`);
 
-    // força leitura de status logístico por order_id (com fallback)
+    // força leitura de status logístico por order_id
     let sug = null;
     if (orderId) {
-      const s = await this.fetchShippingFlow(orderId);
-      if (s) sug = this.normalizeFlow(s);
+      const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
+      if (r.ok) {
+        sug = r.data?.suggested_log_status || null;
+      }
     }
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
@@ -275,9 +257,10 @@ class DevolucoesFeed {
 
   normalizeFlow(s){
     if(!s) return "pendente";
-    const t = String(s).toLowerCase().replace(/\s+/g,"_");
+    const raw = String(s).toLowerCase();
+    if (raw.startsWith("deny:")) return "pendente"; // marcador de acesso negado → não insistir por 30min
+    const t = raw.replace(/\s+/g,"_");
 
-    // mapear nomes vindos do backend
     if (t.includes("preparacao")) return "em_preparacao";
     if (t === "transporte")       return "em_transporte";
     if (t.includes("recebido_cd")) return "recebido_cd";
@@ -310,37 +293,17 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow })); }catch{}
   }
 
-  // pega status logístico diretamente do resumo do backend, com fallback para DB quando ML bloquear
+  // pega status logístico diretamente do resumo do backend
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
-
-    const forbidden = localStorage.getItem(this.ML_SHIP_FORBIDDEN_KEY) === '1';
-    const base = `/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`;
-
-    const tryDb = async () => {
-      const r2 = await this.fetchQuiet(base + `&no_meli=1&update=1`);
-      if (!r2.ok) return "";
-      const s2 = r2.data || {};
-      return String(s2.suggested_log_status || s2.ml_substatus || s2.ml_status || "").toLowerCase();
-    };
-
-    if (forbidden) {
-      return await tryDb();
+    const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
+    if (!r.ok) {
+      // marca “deny” para não insistir por 30min em casos de acesso/ausência
+      if (r.status === 401 || r.status === 403 || r.status === 404) return `deny:${r.status}`;
+      return "";
     }
-
-    const r = await this.fetchQuiet(base);
-    if (r.ok) {
-      try { localStorage.removeItem(this.ML_SHIP_FORBIDDEN_KEY); } catch {}
-      const s = r.data || {};
-      return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
-    }
-
-    if (r.status === 401 || r.status === 403) {
-      try { localStorage.setItem(this.ML_SHIP_FORBIDDEN_KEY, '1'); } catch {}
-      return await tryDb();
-    }
-
-    return "";
+    const s = r.data || {};
+    return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
   async resolveAndPatchFlow(d){
@@ -351,6 +314,7 @@ class DevolucoesFeed {
     // cache: se já sei, aplico
     const cached = this.getCachedFlow(orderId);
     if (cached){
+      if (cached.startsWith?.("deny:")) return; // backoff de erro/acesso
       const canon = this.normalizeFlow(cached);
       if (canon && canon !== this.normalizeFlow(this.extractFlowString(d))){
         await this.patchFlow(id, canon);
@@ -362,7 +326,9 @@ class DevolucoesFeed {
     const found = await this.fetchShippingFlow(orderId);
     if (!found) return;
 
-    this.setCachedFlow(orderId, found);
+    this.setCachedFlow(orderId, found);         // cacheia inclusive “deny:*”
+    if (found.startsWith("deny:")) return;      // não tenta patch; só aguarda TTL
+
     const canon = this.normalizeFlow(found);
     if (!canon) return;
 
@@ -426,10 +392,12 @@ class DevolucoesFeed {
       card.setAttribute("role","listitem");
       container.appendChild(card);
 
-      // Se o fluxo ainda é "pendente", tenta resolver assíncrono
-      const flowNow = this.normalizeFlow(this.extractFlowString(d));
-      if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
-        this.resolveAndPatchFlow(d); // não bloqueia a UI
+      // tenta resolver fluxo em background, mas limita a 8 por render para não estourar
+      if (i < 8) {
+        const flowNow = this.normalizeFlow(this.extractFlowString(d));
+        if (flowNow==="pendente" && (d.id_venda || d.order_id)) {
+          this.resolveAndPatchFlow(d); // não bloqueia a UI
+        }
       }
     });
 
