@@ -300,7 +300,8 @@ try {
   console.warn('[BOOT] Returns Log opcional:', e?.message || e);
 }
 
-/* ========= Returns principal (ROBUSTO) ========= */
+/* ========= Returns principal (robusto + fallback) ========= */
+let __returnsMounted = false;
 try {
   const candidates = [
     './routes/returns',
@@ -319,21 +320,96 @@ try {
   const isRouter = !!mod && typeof mod === 'object' && (typeof mod.use === 'function' || Array.isArray(mod.stack));
 
   if (isFn) {
-    mod(app); // registrador (define app.get('/api/returns', ...))
+    mod(app);
+    __returnsMounted = true;
     console.log(`[BOOT] Returns ok (registrador) via ${usedPath}`);
   } else if (isRouter) {
-    // Monta nos dois – cobre Router que exporta paths relativos a '/' ou '/returns'
     app.use('/api', mod);
     app.use('/api/returns', mod);
+    __returnsMounted = true;
     console.log(`[BOOT] Returns ok (Router) via ${usedPath}`);
   } else {
     throw new Error(`export inválido do módulo (${typeof mod}). Esperado função ou Router`);
   }
 } catch (e) {
-  console.warn('[BOOT] Returns falhou:', e?.message || e);
+  console.warn('[BOOT] Returns falhou (vai usar fallback):', e?.message || e);
 }
 
-/* ========= Chat por devolução (ROBUSTO) ========= */
+/** ---- Fallback mínimo para /api/returns (só GET lista) ---- */
+if (!__returnsMounted) {
+  const fallback = express.Router();
+  fallback.get('/', async (req, res) => {
+    try {
+      // aceita 3 jeitos: (1) page/pageSize, (2) limit&range_days, (3) vazio
+      const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
+      const pageQ   = parseInt(req.query.page || '1', 10);
+      const limit   = Math.max(1, Math.min(Number.isFinite(limitQ) ? limitQ : 200, 200));
+      const page    = Math.max(1, Number.isFinite(pageQ) ? pageQ : 1);
+      const offset  = (page - 1) * limit;
+
+      const orderBy  = String(req.query.orderBy || 'created_at');
+      const orderDir = (String(req.query.orderDir || 'desc').toLowerCase() === 'asc') ? 'asc' : 'desc';
+
+      const allowedCols = new Set([
+        'id','id_venda','cliente_nome','loja_nome','sku',
+        'status','log_status','status_operacional',
+        'valor_produto','valor_frete','created_at','updated_at'
+      ]);
+
+      // sanity do ORDER BY
+      const col = allowedCols.has(orderBy) ? orderBy : 'created_at';
+
+      const cols = [...allowedCols].join(',');
+      const { rows } = await query(
+        `SELECT ${cols}
+           FROM devolucoes
+          ORDER BY ${col} ${orderDir} NULLS LAST
+          LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+      const countQ = await query(`SELECT COUNT(*)::int AS n FROM devolucoes`);
+      const total  = countQ.rows[0]?.n || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+
+      // formato que teu front já consome
+      res.json({
+        items: rows.map(r => ({
+          id: r.id,
+          id_venda: r.id_venda,
+          cliente_nome: r.cliente_nome,
+          loja_nome: r.loja_nome,
+          sku: r.sku,
+          status: r.status,
+          created_at: r.created_at ?? r.updated_at ?? null,
+          valor_produto: r.valor_produto,
+          valor_frete: r.valor_frete,
+          // campos auxiliares do feed (sem inferência de timeline aqui)
+          log_status_suggested: r.log_status || null,
+          has_mediation: false
+        })),
+        total,
+        page,
+        pageSize: limit,
+        totalPages
+      });
+    } catch (e) {
+      console.error('[returns:fallback] erro:', e);
+      res.status(500).json({ error:'Falha ao listar devoluções (fallback)' });
+    }
+  });
+
+  // Também aceita /api/returns/search do front (mesmo resultado do /)
+  fallback.get('/search', async (req, res) => {
+    req.query.page = req.query.page || '1';
+    req.query.pageSize = req.query.pageSize || '200';
+    return fallback.handle(req, res);
+  });
+
+  app.use('/api/returns', fallback);
+  console.log('[BOOT] Returns Fallback ON (GET /api/returns e /api/returns/search)');
+}
+
+/* ========= Chat por devolução (robusto) ========= */
 try {
   const chatCandidates = [
     './routes/returns-messages',
@@ -424,6 +500,24 @@ catch (e) { console.warn('[BOOT] Dashboard opcional:', e?.message || e); }
 app.get('/api/db/ping', async (req, res) => {
   try { const r = await qOf(req)('select now() as now'); res.json({ ok:true, now:r.rows[0].now }); }
   catch (e) { res.status(500).json({ ok:false, error:String(e) }); }
+});
+
+/** Lista rotas ativas (p/ diagnosticar 404) */
+app.get('/api/_debug/routes', (_req, res) => {
+  const list = [];
+  function dig(stack, base='') {
+    for (const layer of stack) {
+      if (layer.route && layer.route.path) {
+        const methods = Object.keys(layer.route.methods || {}).filter(m => layer.route.methods[m]);
+        list.push({ path: base + layer.route.path, methods });
+      } else if (layer.name === 'router' && layer.handle?.stack) {
+        const prefix = layer.regexp?.fast_slash ? base : base + (layer.regexp?.source || '');
+        dig(layer.handle.stack, base);
+      }
+    }
+  }
+  if (app._router?.stack) dig(app._router.stack);
+  res.json(list);
 });
 
 app.get('/api/_debug/tenant', async (req, res) => {
