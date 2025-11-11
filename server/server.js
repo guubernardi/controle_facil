@@ -292,14 +292,6 @@ try {
   console.log('[BOOT] Central ok');
 } catch (e) { console.warn('[BOOT] Central opcional:', e?.message || e); }
 
-/* >>>>>>>>>> MONTA /api/returns/logs ANTES DE /api/returns <<<<<<<<<< */
-try {
-  app.use('/api/returns', require('./routes/returns-log'));
-  console.log('[BOOT] Returns Log ok (montado ANTES de Returns)');
-} catch (e) {
-  console.warn('[BOOT] Returns Log opcional:', e?.message || e);
-}
-
 /* ========= Returns principal (robusto + fallback) ========= */
 let __returnsMounted = false;
 try {
@@ -311,26 +303,15 @@ try {
     './routes/returns-router.js'
   ];
   let mod = null, usedPath = null;
-  for (const p of candidates) {
-    try { mod = require(p); usedPath = p; break; } catch {}
-  }
+  for (const p of candidates) { try { mod = require(p); usedPath = p; break; } catch {} }
   if (!mod) throw new Error('módulo ./routes/returns não encontrado');
 
   const isFn = (typeof mod === 'function');
   const isRouter = !!mod && typeof mod === 'object' && (typeof mod.use === 'function' || Array.isArray(mod.stack));
 
-  if (isFn) {
-    mod(app);
-    __returnsMounted = true;
-    console.log(`[BOOT] Returns ok (registrador) via ${usedPath}`);
-  } else if (isRouter) {
-    app.use('/api', mod);
-    app.use('/api/returns', mod);
-    __returnsMounted = true;
-    console.log(`[BOOT] Returns ok (Router) via ${usedPath}`);
-  } else {
-    throw new Error(`export inválido do módulo (${typeof mod}). Esperado função ou Router`);
-  }
+  if (isFn) { mod(app); __returnsMounted = true; console.log(`[BOOT] Returns ok (registrador) via ${usedPath}`); }
+  else if (isRouter) { app.use('/api', mod); app.use('/api/returns', mod); __returnsMounted = true; console.log(`[BOOT] Returns ok (Router) via ${usedPath}`); }
+  else { throw new Error(`export inválido do módulo (${typeof mod}). Esperado função ou Router`); }
 } catch (e) {
   console.warn('[BOOT] Returns falhou (vai usar fallback):', e?.message || e);
 }
@@ -355,11 +336,9 @@ if (!__returnsMounted) {
         'status','log_status','status_operacional',
         'valor_produto','valor_frete','created_at','updated_at'
       ]);
-
-      // sanity do ORDER BY
       const col = allowedCols.has(orderBy) ? orderBy : 'created_at';
-
       const cols = [...allowedCols].join(',');
+
       const { rows } = await query(
         `SELECT ${cols}
            FROM devolucoes
@@ -371,7 +350,6 @@ if (!__returnsMounted) {
       const total  = countQ.rows[0]?.n || 0;
       const totalPages = Math.max(1, Math.ceil(total / limit));
 
-      // formato que teu front já consome
       res.json({
         items: rows.map(r => ({
           id: r.id,
@@ -383,7 +361,6 @@ if (!__returnsMounted) {
           created_at: r.created_at ?? r.updated_at ?? null,
           valor_produto: r.valor_produto,
           valor_frete: r.valor_frete,
-          // campos auxiliares do feed (sem inferência de timeline aqui)
           log_status_suggested: r.log_status || null,
           has_mediation: false
         })),
@@ -399,14 +376,23 @@ if (!__returnsMounted) {
   });
 
   // Também aceita /api/returns/search do front (mesmo resultado do /)
-  fallback.get('/search', async (req, res) => {
-    req.query.page = req.query.page || '1';
-    req.query.pageSize = req.query.pageSize || '200';
-    return fallback.handle(req, res);
-  });
+  fallback.get('/search', (req, res, next) => fallback.handle(req, res, next));
 
   app.use('/api/returns', fallback);
   console.log('[BOOT] Returns Fallback ON (GET /api/returns e /api/returns/search)');
+}
+
+/* ========= Returns LOGS (DEPOIS dos returns, com guard) ========= */
+try {
+  const returnsLogRouter = require('./routes/returns-log');
+  // Só encaminha "/:id/logs..." para o router de logs, o resto segue
+  app.use('/api/returns', (req, res, next) => {
+    if (/^\/\d+\/logs(\/.*)?$/i.test(req.path || '')) return returnsLogRouter(req, res, next);
+    return next();
+  });
+  console.log('[BOOT] Returns Log ok (depois de Returns, com guard)');
+} catch (e) {
+  console.warn('[BOOT] Returns Log opcional:', e?.message || e);
 }
 
 /* ========= Chat por devolução (robusto) ========= */
@@ -504,20 +490,19 @@ app.get('/api/db/ping', async (req, res) => {
 
 /** Lista rotas ativas (p/ diagnosticar 404) */
 app.get('/api/_debug/routes', (_req, res) => {
-  const list = [];
-  function dig(stack, base='') {
-    for (const layer of stack) {
-      if (layer.route && layer.route.path) {
+  const acc = [];
+  const dump = (stack, base='') => {
+    stack?.forEach(layer => {
+      if (layer.route) {
         const methods = Object.keys(layer.route.methods || {}).filter(m => layer.route.methods[m]);
-        list.push({ path: base + layer.route.path, methods });
+        acc.push({ path: base + layer.route.path, methods });
       } else if (layer.name === 'router' && layer.handle?.stack) {
-        const prefix = layer.regexp?.fast_slash ? base : base + (layer.regexp?.source || '');
-        dig(layer.handle.stack, base);
+        dump(layer.handle.stack, base);
       }
-    }
-  }
-  if (app._router?.stack) dig(app._router.stack);
-  res.json(list);
+    });
+  };
+  dump(app._router?.stack, '');
+  res.json(acc);
 });
 
 app.get('/api/_debug/tenant', async (req, res) => {
@@ -599,7 +584,6 @@ function setupMlAutoSync() {
 
 /* ================== ML AutoRefresh de Tokens ================== */
 let _mlRefresh_lastRun = null; // exposto em /api/ml/refresh/last-run
-
 function setupMlAutoRefresh() {
   const enabled = String(process.env.ML_AUTO_REFRESH_ENABLED ?? 'true').toLowerCase() === 'true';
   if (!enabled) { console.log('[ML REFRESH] Desabilitado por env'); return; }
