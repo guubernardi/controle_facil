@@ -36,6 +36,10 @@ class DevolucoesFeed {
     this._ml403BurstCount   = 0;
     this._ml403BurstTimer   = null;
 
+    // ML open returns (desliga por 24h se 404 no back)
+    this.ML_OPEN_DISABLE_KEY = "rf:disableMlOpenReturnsUntil";
+    this.ML_OPEN_DISABLE_MS  = 24 * 60 * 60 * 1000;
+
     // mensagens (off por enquanto)
     this._messagesSyncDisabled = true;
 
@@ -195,6 +199,12 @@ class DevolucoesFeed {
 
   // tenta vários endpoints “open returns” no backend e mescla
   async mergeMlOpenReturns(days=30){
+    // Se já detectamos que o back não tem esses endpoints, não tenta de novo agora
+    try {
+      const disableUntil = Number(localStorage.getItem(this.ML_OPEN_DISABLE_KEY) || 0);
+      if (Date.now() < disableUntil) return;
+    } catch {}
+
     const ml = await this.fetchMlOpenReturns(days);
     if (!ml || !ml.length) return;
 
@@ -231,9 +241,17 @@ class DevolucoesFeed {
       if (r.ok) {
         const arr = this.coerceReturnsPayload(r.data);
         if (Array.isArray(arr) && arr.length) return arr;
-      } else if (r.status === 401) {
-        this.toast("Conectar Mercado Livre","Faça login/autorize o ML para listar devoluções abertas.","erro");
-        return [];
+        // 200 mas vazio → tenta o próximo candidate
+      } else {
+        if (r.status === 404) {
+          // desativa novas tentativas por 24h para eliminar spam de 404 no console
+          try { localStorage.setItem(this.ML_OPEN_DISABLE_KEY, String(Date.now() + this.ML_OPEN_DISABLE_MS)); } catch {}
+          return [];
+        }
+        if (r.status === 401) {
+          this.toast("Conectar Mercado Livre","Faça login/autorize o ML para listar devoluções abertas.","erro");
+          return [];
+        }
       }
     }
     return [];
@@ -680,14 +698,14 @@ class DevolucoesFeed {
       disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação",
       pronto_envio:"Pronto p/ Envio", em_transporte:"A caminho",
       recebido_cd:"Recebido no CD", fechado:"Fechado", agendado:"Agendado",
-      expirar:"Expirar", retorno_comprador:"Retorno ao Comprador",
+      expirado:"Expirado", retorno_comprador:"Retorno ao Comprador",
       cancelado:"Cancelado", pendente:"Fluxo Pendente"
     };
     const css    = {
       disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente",
       pronto_envio:"badge-aprovado", em_transporte:"badge-info",
       recebido_cd:"badge-aprovado", fechado:"badge-rejeitado",
-      agendado:"badge-info", expirar:"badge-info", retorno_comprador:"badge-info",
+      agendado:"badge-info", expirado:"badge-info", retorno_comprador:"badge-info",
       cancelado:"badge-rejeitado", pendente:"badge"
     };
     const key = flow || "pendente";
@@ -724,13 +742,13 @@ class DevolucoesFeed {
     }
   }
   returnStatusClass(s){
-    if (/^delivered$/.test(s))          return "badge-aprovado";
+    if (/^delivered$/.test(s))                return "badge-aprovado";
     if (/^shipped$|pending_delivered$/.test(s)) return "badge-info";
     if (/^ready_to_ship$|label_generated$/.test(s)) return "badge-pendente";
-    if (/^cancel/.test(s))              return "badge-rejeitado";
-    if (/^not_delivered$|failed$/.test(s)) return "badge-rejeitado";
+    if (/^cancel/.test(s))                    return "badge-rejeitado";
+    if (/^not_delivered$|failed$/.test(s))    return "badge-rejeitado";
     if (/^scheduled$|return_to_buyer$/.test(s)) return "badge-info";
-    if (/^expired$/.test(s))            return "badge-rejeitado";
+    if (/^expired$/.test(s))                  return "badge-rejeitado";
     return "badge";
   }
 
@@ -789,7 +807,7 @@ class DevolucoesFeed {
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0  1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorFrete)}</span>
         </div>
