@@ -1,271 +1,242 @@
-// server/routes/ml-returns.js
+// server/routes/returns.js
 'use strict';
 
+const express = require('express');
 const { query } = require('../db');
 
-// ---- fetch helper (Node 18+ tem fetch nativo; senão cai no node-fetch) ----
-const _fetch = (typeof fetch === 'function')
-  ? fetch
-  : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+/**
+ * Pequenos helpers
+ */
+function toInt(v, def) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : def;
+}
+function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
-// ---- token helper ----
-async function getMLToken(req) {
-  if (req?.user?.ml?.access_token) return req.user.ml.access_token;
-  if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
-  try {
-    const { rows } = await query(
-      `SELECT access_token
-         FROM ml_tokens
-        WHERE is_active IS TRUE
-        ORDER BY updated_at DESC NULLS LAST
-        LIMIT 1`
-    );
-    return rows[0]?.access_token || null;
-  } catch { return null; }
+function buildDateFrom(rangeDays) {
+  const d = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
+  // ISO compatível com Postgres
+  return d.toISOString();
 }
 
-// ---- chamada genérica à API do ML ----
-async function mlFetch(path, token, opts = {}) {
-  const url = `https://api.mercadolibre.com${path}`;
-  const r = await _fetch(url, {
-    ...opts,
-    headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) }
-  });
-  let j = null; try { j = await r.json(); } catch {}
-  if (!r.ok) {
-    const msg = (j && (j.message || j.error))
-      ? `${j.error || ''} ${j.message || ''}`.trim()
-      : `ML HTTP ${r.status}`;
-    const err = new Error(msg); err.status = r.status; err.payload = j; throw err;
-  }
-  return j;
+/**
+ * Colunas permitidas para ORDER BY e seleção
+ */
+const ALLOWED_COLS = [
+  'id',
+  'id_venda',
+  'cliente_nome',
+  'loja_nome',
+  'sku',
+  'status',
+  'log_status',
+  'status_operacional',
+  'valor_produto',
+  'valor_frete',
+  'created_at',
+  'updated_at'
+];
+
+const ORDERABLE = new Set(ALLOWED_COLS);
+
+/**
+ * Mapeia uma linha do banco para o payload que o front consome
+ */
+function mapRow(r) {
+  return {
+    id: r.id,
+    id_venda: r.id_venda,
+    cliente_nome: r.cliente_nome,
+    loja_nome: r.loja_nome,
+    sku: r.sku,
+    status: r.status,
+    created_at: r.created_at ?? r.updated_at ?? null,
+    valor_produto: r.valor_produto,
+    valor_frete: r.valor_frete,
+    // campos auxiliares do feed
+    log_status_suggested: r.log_status || null,
+    has_mediation: false
+  };
 }
 
-function bad(res, code, msg, extra) {
-  return res.status(code).json({ error: msg, ...(extra || {}) });
-}
+module.exports = function registerReturns(app) {
+  const router = express.Router();
 
-/* ========================= Helpers de compatibilidade ========================= */
-
-function coerceArr(j){
-  if (Array.isArray(j)) return j;
-  if (!j || typeof j !== 'object') return [];
-  return j.results || j.items || j.data || j.returns || j.list || [];
-}
-
-function buildClaimsSearchURL({ sellerId, statuses, fromISO, limit=50, offset=0, role='seller' }) {
-  const url = new URL('https://api.mercadolibre.com/post-purchase/v1/claims/search');
-  if (sellerId) url.searchParams.set('seller', sellerId);
-  if (statuses) url.searchParams.set('status', statuses);
-  if (fromISO)  url.searchParams.set('date_created_from', fromISO);
-  if (role)     url.searchParams.set('role', role);
-  url.searchParams.set('limit', String(limit));
-  url.searchParams.set('offset', String(offset));
-  url.searchParams.set('order', 'date_desc');
-  return url;
-}
-
-async function mlPaged(url, token, wantAll) {
-  const out = [];
-  while (true) {
-    const r  = await _fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` }});
-    const j  = await r.json().catch(()=>({}));
-    if (r.status === 401) throw Object.assign(new Error('ml_unauthorized'), { status: 401, payload: j });
-    if (r.status === 403) throw Object.assign(new Error('ml_forbidden'),    { status: 403, payload: j });
-    if (!r.ok)            throw Object.assign(new Error('ml_error'),        { status: r.status, payload: j });
-
-    const arr = coerceArr(j);
-    out.push(...arr);
-
-    const { total = out.length, offset = 0, limit = 50 } = j.paging || {};
-    if (!wantAll || (Number(offset) + Number(limit) >= Number(total))) break;
-
-    const next = (Number(offset) || 0) + (Number(limit) || 50);
-    url.searchParams.set('offset', String(next));
-  }
-  return out;
-}
-
-async function searchClaims(token, { sellerId, statuses, fromISO, limit=50, offset=0, all=false }) {
-  const url = buildClaimsSearchURL({ sellerId, statuses, fromISO, limit, offset, role: 'seller' });
-  return mlPaged(url, token, all);
-}
-
-async function returnsForClaimIds(token, claimIds) {
-  const items = [];
-  for (const id of claimIds) {
+  /**
+   * GET /api/returns
+   * Aceita:
+   *  - page, pageSize (paginado)
+   *  - OU limit & range_days (recortes rápidos)
+   *  - orderBy, orderDir
+   *  - status (opcional, vírgula separada)
+   */
+  router.get('/', async (req, res) => {
     try {
-      const ret = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(id)}/returns`, token);
-      items.push({ claim_id: id, return: ret });
-    } catch (e) {
-      // Sem retorno associado ou erro de upstream — mantém no payload para debug
-      items.push({ claim_id: id, error: true, status: e.status, upstream: e.payload });
-    }
-  }
-  return items;
-}
+      // Compat: três jeitos de paginação/limite
+      const limitRaw = toInt(req.query.pageSize ?? req.query.limit, null);
+      const pageRaw  = toInt(req.query.page, null);
 
-/* ========================= Rotas ========================= */
+      const limit = clamp(limitRaw ?? 200, 1, 200);
+      const page  = clamp(pageRaw ?? 1, 1, 10_000);
+      const offset = (page - 1) * limit;
 
-module.exports = function registerMlReturns(app) {
-  /* ---- NOVAS ROTAS OFICIAIS ---- */
+      // Order
+      const orderBy  = ORDERABLE.has(String(req.query.orderBy)) ? String(req.query.orderBy) : 'created_at';
+      const orderDir = String(req.query.orderDir || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-  // Devolução a partir do claim_id
-  app.get('/api/ml/claims/:claim_id/returns', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente (defina ML_ACCESS_TOKEN ou configure integração).');
-      const claimId = String(req.params.claim_id).trim();
-      const data = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`, token);
-      res.json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ error: 'Falha ao consultar returns por claim', detail: e.message, upstream: e.payload });
-    }
-  });
+      // Filtros
+      const rangeDays = clamp(toInt(req.query.range_days, 0) || toInt(req.query.days, 0) || 0, 0, 90);
+      const dateFrom  = rangeDays > 0 ? buildDateFrom(rangeDays) : null;
 
-  // Reviews de uma devolução
-  app.get('/api/ml/returns/:return_id/reviews', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-      const returnId = String(req.params.return_id).trim();
-      const data = await mlFetch(`/post-purchase/v1/returns/${encodeURIComponent(returnId)}/reviews`, token);
-      res.json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ error: 'Falha ao consultar reviews da devolução', detail: e.message, upstream: e.payload });
-    }
-  });
+      const statusFilterRaw = (req.query.status || req.query.statuses || '').toString().trim();
+      const statuses = statusFilterRaw ? statusFilterRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-  // Reasons (flow=seller_return_failed)
-  app.get('/api/ml/returns/reasons', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-      const flow = req.query.flow || 'seller_return_failed';
-      const claimId = req.query.claim_id;
-      if (!claimId) return bad(res, 400, 'Parâmetro claim_id é obrigatório.');
-      const q = new URLSearchParams({ flow, claim_id: String(claimId) }).toString();
-      const data = await mlFetch(`/post-purchase/v1/returns/reasons?${q}`, token);
-      res.json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ error: 'Falha ao obter reasons', detail: e.message, upstream: e.payload });
-    }
-  });
+      // Monta WHERE dinâmico simples
+      const where = [];
+      const params = [];
 
-  // Upload de evidência (front envia base64)
-  // Body: { file_base64: "<sem prefixo data:>", filename?: "img.png", content_type?: "image/png" }
-  app.post('/api/ml/claims/:claim_id/returns/attachments', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-      const claimId = String(req.params.claim_id).trim();
+      if (dateFrom) {
+        params.push(dateFrom);
+        where.push(`(created_at IS NULL OR created_at >= $${params.length})`);
+      }
 
-      const b64 = req.body?.file_base64;
-      if (!b64) return bad(res, 400, 'Envie file_base64 no body (sem prefixo data:).');
+      if (statuses.length) {
+        // status IN (...)
+        const base = params.length;
+        const ph = statuses.map((_, i) => `$${base + 1 + i}`).join(',');
+        params.push(...statuses);
+        where.push(`status IN (${ph})`);
+      }
 
-      const filename = req.body?.filename || 'evidencia.png';
-      const mime = req.body?.content_type || 'image/png';
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-      const { Blob, FormData } = globalThis;
-      if (!Blob || !FormData) return bad(res, 501, 'Runtime sem Blob/FormData nativos (Node 18+).');
+      // Seleção (usa apenas colunas conhecidas)
+      const cols = ALLOWED_COLS.join(',');
 
-      const buffer = Buffer.from(b64, 'base64');
-      const blob = new Blob([buffer], { type: mime });
+      const sqlList = `
+        SELECT ${cols}
+          FROM devolucoes
+        ${whereSql}
+        ORDER BY ${orderBy} ${orderDir} NULLS LAST
+        LIMIT $${params.length + 1}
+        OFFSET $${params.length + 2}
+      `;
 
-      const form = new FormData();
-      form.append('file', blob, filename);
+      const sqlCount = `
+        SELECT COUNT(*)::int AS n
+          FROM devolucoes
+        ${whereSql}
+      `;
 
-      const data = await mlFetch(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}/returns/attachments`, token, {
-        method: 'POST',
-        body: form
-      });
-      res.json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ error: 'Falha ao enviar evidência', detail: e.message, upstream: e.payload });
-    }
-  });
+      const list = await query(sqlList, [...params, limit, offset]);
+      const count = await query(sqlCount, params);
 
-  // Return-review unificado (OK = body vazio; Fail = array de reviews)
-  app.post('/api/ml/returns/:return_id/return-review', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-      const returnId = String(req.params.return_id).trim();
-      const hasBody = req.body && Object.keys(req.body).length;
-      const body = hasBody ? JSON.stringify(req.body) : null;
-      const data = await mlFetch(`/post-purchase/v1/returns/${encodeURIComponent(returnId)}/return-review`, token, {
-        method: 'POST',
-        headers: { 'Content-Type': hasBody ? 'application/json' : undefined },
-        body
-      });
-      res.json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ error: 'Falha ao registrar return-review', detail: e.message, upstream: e.payload });
-    }
-  });
-
-  // Custo do envio da devolução
-  app.get('/api/ml/claims/:claim_id/charges/return-cost', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-      const claimId = String(req.params.claim_id).trim();
-      const q = new URLSearchParams();
-      if (String(req.query.calculate_amount_usd || '') === 'true') q.set('calculate_amount_usd', 'true');
-      const path = `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost` + (q.toString() ? `?${q}` : '');
-      const data = await mlFetch(path, token);
-      res.json(data);
-    } catch (e) {
-      res.status(e.status || 502).json({ error: 'Falha ao consultar custo de devolução', detail: e.message, upstream: e.payload });
-    }
-  });
-
-  // Batch helper: recebe claim_ids e traz os returns associados
-  app.post('/api/ml/returns/batch-by-claims', async (req, res) => {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-      const claimIds = Array.isArray(req.body?.claim_ids) ? req.body.claim_ids.map(String) : [];
-      if (!claimIds.length) return bad(res, 400, 'Envie claim_ids (array).');
-      const items = await returnsForClaimIds(token, claimIds);
-      res.json({ items });
-    } catch (e) {
-      res.status(500).json({ error: 'Falha no batch de returns', detail: e.message });
-    }
-  });
-
-  /* ---- COMPATIBILIDADE: reexpõe /open|/search|/list para o front legado ---- */
-  async function handleLegacyOpen(req, res) {
-    try {
-      const token = await getMLToken(req);
-      if (!token) return bad(res, 501, 'Token do ML ausente.');
-
-      const sellerId = req.get('x-seller-id') || req.query.seller || process.env.ML_SELLER_ID || '';
-      const statuses = String(req.query.status || 'opened,in_progress');
-      const days     = Math.max(1, Math.min(60, Number(req.query.days || 7)));
-      const fromISO  = new Date(Date.now() - days*24*60*60*1000).toISOString();
-      const wantAll  = String(req.query.all || '1') === '1';
-
-      // 1) pega claims recentes
-      const claims = await searchClaims(token, { sellerId, statuses, fromISO, limit: 50, offset: 0, all: wantAll });
-      const claimIds = claims.map(c => c.id || c.claim_id).filter(Boolean);
-
-      // 2) para cada claim, tenta recuperar o return associado
-      const items = await returnsForClaimIds(token, claimIds);
+      const total = count.rows[0]?.n || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
 
       res.json({
-        items,
-        meta: {
-          claims_found: claimIds.length,
-          sellerId: sellerId || null,
-          statuses, fromISO, all: wantAll
-        }
+        items: list.rows.map(mapRow),
+        total,
+        page,
+        pageSize: limit,
+        totalPages
       });
     } catch (e) {
-      res.status(e.status || 502).json({ error: e.message || 'ml_error', upstream: e.payload || null });
+      console.error('[returns] list erro:', e);
+      res.status(500).json({ error: 'Falha ao listar devoluções' });
     }
-  }
-  app.get('/api/ml/returns/open',   handleLegacyOpen);
-  app.get('/api/ml/returns/search', handleLegacyOpen);
-  app.get('/api/ml/returns/list',   handleLegacyOpen);
+  });
+
+  /**
+   * GET /api/returns/search?q=...
+   * Mesma estrutura do list, mas força filtro textual, sem paginação (cap 200).
+   */
+  router.get('/search', async (req, res) => {
+    try {
+      const q = String(req.query.q || req.query.query || '').trim();
+      if (!q) {
+        // Se não veio q, delega para a lista padrão (reaproveita a lógica acima)
+        req.url = '/';
+        return router.handle(req, res);
+      }
+
+      // Filtros opcionais compatíveis
+      const rangeDays = clamp(toInt(req.query.range_days, 0) || toInt(req.query.days, 0) || 0, 0, 90);
+      const dateFrom  = rangeDays > 0 ? buildDateFrom(rangeDays) : null;
+
+      const statusFilterRaw = (req.query.status || req.query.statuses || '').toString().trim();
+      const statuses = statusFilterRaw ? statusFilterRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+      const where = [];
+      const params = [];
+
+      if (dateFrom) { params.push(dateFrom); where.push(`(created_at IS NULL OR created_at >= $${params.length})`); }
+      if (statuses.length) {
+        const base = params.length;
+        const ph = statuses.map((_, i) => `$${base + 1 + i}`).join(',');
+        params.push(...statuses);
+        where.push(`status IN (${ph})`);
+      }
+
+      params.push(`%${q.replace(/\s+/g, '%')}%`);
+      where.push(`(
+        CAST(id AS TEXT) ILIKE $${params.length}
+        OR CAST(id_venda AS TEXT) ILIKE $${params.length}
+        OR COALESCE(cliente_nome,'') ILIKE $${params.length}
+        OR COALESCE(loja_nome,'') ILIKE $${params.length}
+        OR COALESCE(sku,'') ILIKE $${params.length}
+      )`);
+
+      const whereSql = `WHERE ${where.join(' AND ')}`;
+      const cols = ALLOWED_COLS.join(',');
+
+      const { rows } = await query(
+        `SELECT ${cols}
+           FROM devolucoes
+         ${whereSql}
+         ORDER BY created_at DESC NULLS LAST
+         LIMIT 200`,
+        params
+      );
+
+      res.json({
+        items: rows.map(mapRow),
+        total: rows.length,
+        page: 1,
+        pageSize: rows.length,
+        totalPages: 1
+      });
+    } catch (e) {
+      console.error('[returns] search erro:', e);
+      res.status(500).json({ error: 'Falha na busca de devoluções' });
+    }
+  });
+
+  /**
+   * (Opcional) GET /api/returns/:id  — útil para telas de detalhe
+   */
+  router.get('/:id', async (req, res) => {
+    try {
+      const id = toInt(req.params.id, 0);
+      if (!id) return res.status(400).json({ error: 'id inválido' });
+
+      const cols = ALLOWED_COLS.join(',');
+      const { rows } = await query(
+        `SELECT ${cols}
+           FROM devolucoes
+          WHERE id = $1
+          LIMIT 1`,
+        [id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+      res.json(mapRow(rows[0]));
+    } catch (e) {
+      console.error('[returns] get-by-id erro:', e);
+      res.status(500).json({ error: 'Falha ao obter devolução' });
+    }
+  });
+
+  // Monta sob /api/returns
+  app.use('/api/returns', router);
+  console.log('[BOOT] Returns ok (routes/returns.js)');
 };
