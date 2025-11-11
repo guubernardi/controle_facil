@@ -8,7 +8,7 @@ const _fetch = (typeof fetch === 'function')
   ? fetch
   : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 
-// ---- token helper (ajuste aqui se for multi-loja / multi-token) ----
+// ---- token helper ----
 async function getMLToken(req) {
   if (req?.user?.ml?.access_token) return req.user.ml.access_token;
   if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
@@ -21,31 +21,22 @@ async function getMLToken(req) {
         LIMIT 1`
     );
     return rows[0]?.access_token || null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// ---- chamada genérica à API do ML com tratamento de erro ----
+// ---- chamada genérica à API do ML ----
 async function mlFetch(path, token, opts = {}) {
   const url = `https://api.mercadolibre.com${path}`;
   const r = await _fetch(url, {
     ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(opts.headers || {})
-    }
+    headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) }
   });
-  let j = null;
-  try { j = await r.json(); } catch {}
+  let j = null; try { j = await r.json(); } catch {}
   if (!r.ok) {
     const msg = (j && (j.message || j.error))
       ? `${j.error || ''} ${j.message || ''}`.trim()
       : `ML HTTP ${r.status}`;
-    const err = new Error(msg);
-    err.status = r.status;
-    err.payload = j;
-    throw err;
+    const err = new Error(msg); err.status = r.status; err.payload = j; throw err;
   }
   return j;
 }
@@ -54,25 +45,77 @@ function bad(res, code, msg, extra) {
   return res.status(code).json({ error: msg, ...(extra || {}) });
 }
 
-module.exports = function registerMlReturns(app) {
-  /**
-   * ========================= ROTAS NOVAS (DOC OFICIAL) =========================
-   * - GET  /post-purchase/v2/claims/{claim_id}/returns
-   * - GET  /post-purchase/v1/returns/{return_id}/reviews
-   * - GET  /post-purchase/v1/returns/reasons?flow=seller_return_failed&claim_id={id}
-   * - POST /post-purchase/v1/claims/{claim_id}/returns/attachments   (multipart)
-   * - POST /post-purchase/v1/returns/{return_id}/return-review       (body vazio = OK)
-   * - GET  /post-purchase/v1/claims/{claim_id}/charges/return-cost[?calculate_amount_usd=true]
-   * - POST /api/ml/returns/batch-by-claims (helper interno)
-   */
+/* ========================= Helpers de compatibilidade ========================= */
 
-  // 1) Devolução a partir do claim_id
+function coerceArr(j){
+  if (Array.isArray(j)) return j;
+  if (!j || typeof j !== 'object') return [];
+  return j.results || j.items || j.data || j.returns || j.list || [];
+}
+
+function buildClaimsSearchURL({ sellerId, statuses, fromISO, limit=50, offset=0, role='seller' }) {
+  const url = new URL('https://api.mercadolibre.com/post-purchase/v1/claims/search');
+  if (sellerId) url.searchParams.set('seller', sellerId);
+  if (statuses) url.searchParams.set('status', statuses);
+  if (fromISO)  url.searchParams.set('date_created_from', fromISO);
+  if (role)     url.searchParams.set('role', role);
+  url.searchParams.set('limit', String(limit));
+  url.searchParams.set('offset', String(offset));
+  url.searchParams.set('order', 'date_desc');
+  return url;
+}
+
+async function mlPaged(url, token, wantAll) {
+  const out = [];
+  while (true) {
+    const r  = await _fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` }});
+    const j  = await r.json().catch(()=>({}));
+    if (r.status === 401) throw Object.assign(new Error('ml_unauthorized'), { status: 401, payload: j });
+    if (r.status === 403) throw Object.assign(new Error('ml_forbidden'),    { status: 403, payload: j });
+    if (!r.ok)            throw Object.assign(new Error('ml_error'),        { status: r.status, payload: j });
+
+    const arr = coerceArr(j);
+    out.push(...arr);
+
+    const { total = out.length, offset = 0, limit = 50 } = j.paging || {};
+    if (!wantAll || (Number(offset) + Number(limit) >= Number(total))) break;
+
+    const next = (Number(offset) || 0) + (Number(limit) || 50);
+    url.searchParams.set('offset', String(next));
+  }
+  return out;
+}
+
+async function searchClaims(token, { sellerId, statuses, fromISO, limit=50, offset=0, all=false }) {
+  const url = buildClaimsSearchURL({ sellerId, statuses, fromISO, limit, offset, role: 'seller' });
+  return mlPaged(url, token, all);
+}
+
+async function returnsForClaimIds(token, claimIds) {
+  const items = [];
+  for (const id of claimIds) {
+    try {
+      const ret = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(id)}/returns`, token);
+      items.push({ claim_id: id, return: ret });
+    } catch (e) {
+      // Sem retorno associado ou erro de upstream — mantém no payload para debug
+      items.push({ claim_id: id, error: true, status: e.status, upstream: e.payload });
+    }
+  }
+  return items;
+}
+
+/* ========================= Rotas ========================= */
+
+module.exports = function registerMlReturns(app) {
+  /* ---- NOVAS ROTAS OFICIAIS ---- */
+
+  // Devolução a partir do claim_id
   app.get('/api/ml/claims/:claim_id/returns', async (req, res) => {
     try {
       const token = await getMLToken(req);
       if (!token) return bad(res, 501, 'Token do ML ausente (defina ML_ACCESS_TOKEN ou configure integração).');
       const claimId = String(req.params.claim_id).trim();
-
       const data = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`, token);
       res.json(data);
     } catch (e) {
@@ -80,13 +123,12 @@ module.exports = function registerMlReturns(app) {
     }
   });
 
-  // 2) Reviews da devolução (warehouse/seller/apelações finalizadas)
+  // Reviews de uma devolução
   app.get('/api/ml/returns/:return_id/reviews', async (req, res) => {
     try {
       const token = await getMLToken(req);
       if (!token) return bad(res, 501, 'Token do ML ausente.');
       const returnId = String(req.params.return_id).trim();
-
       const data = await mlFetch(`/post-purchase/v1/returns/${encodeURIComponent(returnId)}/reviews`, token);
       res.json(data);
     } catch (e) {
@@ -94,16 +136,14 @@ module.exports = function registerMlReturns(app) {
     }
   });
 
-  // 3) Reasons para revisão falha do vendedor (flow=seller_return_failed)
+  // Reasons (flow=seller_return_failed)
   app.get('/api/ml/returns/reasons', async (req, res) => {
     try {
       const token = await getMLToken(req);
       if (!token) return bad(res, 501, 'Token do ML ausente.');
-
       const flow = req.query.flow || 'seller_return_failed';
       const claimId = req.query.claim_id;
       if (!claimId) return bad(res, 400, 'Parâmetro claim_id é obrigatório.');
-
       const q = new URLSearchParams({ flow, claim_id: String(claimId) }).toString();
       const data = await mlFetch(`/post-purchase/v1/returns/reasons?${q}`, token);
       res.json(data);
@@ -112,8 +152,8 @@ module.exports = function registerMlReturns(app) {
     }
   });
 
-  // 4) Upload de evidência (aceita base64 do front)
-  // Body esperado: { file_base64: "<sem prefixo data:>", filename?: "img.png", content_type?: "image/png" }
+  // Upload de evidência (front envia base64)
+  // Body: { file_base64: "<sem prefixo data:>", filename?: "img.png", content_type?: "image/png" }
   app.post('/api/ml/claims/:claim_id/returns/attachments', async (req, res) => {
     try {
       const token = await getMLToken(req);
@@ -126,9 +166,8 @@ module.exports = function registerMlReturns(app) {
       const filename = req.body?.filename || 'evidencia.png';
       const mime = req.body?.content_type || 'image/png';
 
-      // Node 18+ tem Blob/FormData globais (undici)
       const { Blob, FormData } = globalThis;
-      if (!Blob || !FormData) return bad(res, 501, 'Runtime sem Blob/FormData nativos. Use Node 18+ ou adicione um polyfill.');
+      if (!Blob || !FormData) return bad(res, 501, 'Runtime sem Blob/FormData nativos (Node 18+).');
 
       const buffer = Buffer.from(b64, 'base64');
       const blob = new Blob([buffer], { type: mime });
@@ -146,18 +185,14 @@ module.exports = function registerMlReturns(app) {
     }
   });
 
-  // 5) Return review unificado (OK/Fail).
-  //  - Body vazio => revisão OK para todas as ordens
-  //  - Body array => revisão FALHA por ordem (reason_id, message, attachments[], order_id quando aplicável)
+  // Return-review unificado (OK = body vazio; Fail = array de reviews)
   app.post('/api/ml/returns/:return_id/return-review', async (req, res) => {
     try {
       const token = await getMLToken(req);
       if (!token) return bad(res, 501, 'Token do ML ausente.');
       const returnId = String(req.params.return_id).trim();
-
       const hasBody = req.body && Object.keys(req.body).length;
       const body = hasBody ? JSON.stringify(req.body) : null;
-
       const data = await mlFetch(`/post-purchase/v1/returns/${encodeURIComponent(returnId)}/return-review`, token, {
         method: 'POST',
         headers: { 'Content-Type': hasBody ? 'application/json' : undefined },
@@ -169,17 +204,14 @@ module.exports = function registerMlReturns(app) {
     }
   });
 
-  // 6) Custo de envio da devolução (return-cost por claim)
+  // Custo do envio da devolução
   app.get('/api/ml/claims/:claim_id/charges/return-cost', async (req, res) => {
     try {
       const token = await getMLToken(req);
       if (!token) return bad(res, 501, 'Token do ML ausente.');
       const claimId = String(req.params.claim_id).trim();
-
       const q = new URLSearchParams();
-      if (String(req.query.calculate_amount_usd || '') === 'true') {
-        q.set('calculate_amount_usd', 'true');
-      }
+      if (String(req.query.calculate_amount_usd || '') === 'true') q.set('calculate_amount_usd', 'true');
       const path = `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost` + (q.toString() ? `?${q}` : '');
       const data = await mlFetch(path, token);
       res.json(data);
@@ -188,27 +220,52 @@ module.exports = function registerMlReturns(app) {
     }
   });
 
-  // 7) Helper: batch por lista de claims (para seu importador)
-  // Body: { claim_ids: ["5298178312", "..."] }
+  // Batch helper: recebe claim_ids e traz os returns associados
   app.post('/api/ml/returns/batch-by-claims', async (req, res) => {
     try {
       const token = await getMLToken(req);
       if (!token) return bad(res, 501, 'Token do ML ausente.');
       const claimIds = Array.isArray(req.body?.claim_ids) ? req.body.claim_ids.map(String) : [];
       if (!claimIds.length) return bad(res, 400, 'Envie claim_ids (array).');
-
-      const out = [];
-      for (const id of claimIds) {
-        try {
-          const ret = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(id)}/returns`, token);
-          out.push({ claim_id: id, ok: true, data: ret });
-        } catch (e) {
-          out.push({ claim_id: id, ok: false, error: e.message, upstream: e.payload });
-        }
-      }
-      res.json({ items: out });
+      const items = await returnsForClaimIds(token, claimIds);
+      res.json({ items });
     } catch (e) {
       res.status(500).json({ error: 'Falha no batch de returns', detail: e.message });
     }
   });
+
+  /* ---- COMPATIBILIDADE: reexpõe /open|/search|/list para o front legado ---- */
+  async function handleLegacyOpen(req, res) {
+    try {
+      const token = await getMLToken(req);
+      if (!token) return bad(res, 501, 'Token do ML ausente.');
+
+      const sellerId = req.get('x-seller-id') || req.query.seller || process.env.ML_SELLER_ID || '';
+      const statuses = String(req.query.status || 'opened,in_progress');
+      const days     = Math.max(1, Math.min(60, Number(req.query.days || 7)));
+      const fromISO  = new Date(Date.now() - days*24*60*60*1000).toISOString();
+      const wantAll  = String(req.query.all || '1') === '1';
+
+      // 1) pega claims recentes
+      const claims = await searchClaims(token, { sellerId, statuses, fromISO, limit: 50, offset: 0, all: wantAll });
+      const claimIds = claims.map(c => c.id || c.claim_id).filter(Boolean);
+
+      // 2) para cada claim, tenta recuperar o return associado
+      const items = await returnsForClaimIds(token, claimIds);
+
+      res.json({
+        items,
+        meta: {
+          claims_found: claimIds.length,
+          sellerId: sellerId || null,
+          statuses, fromISO, all: wantAll
+        }
+      });
+    } catch (e) {
+      res.status(e.status || 502).json({ error: e.message || 'ml_error', upstream: e.payload || null });
+    }
+  }
+  app.get('/api/ml/returns/open',   handleLegacyOpen);
+  app.get('/api/ml/returns/search', handleLegacyOpen);
+  app.get('/api/ml/returns/list',   handleLegacyOpen);
 };
