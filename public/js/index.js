@@ -28,7 +28,7 @@ class DevolucoesFeed {
 
     // bloqueios específicos de ML/shipping
     this.ML_SHIP_BLOCK_KEY  = "rf:mlShipping:blockUntil";
-    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 60 * 1000;  // 2h
+    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 1000 * 60;  // 2h
     this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h (cache negativo por pedido)
     this._ml403BurstCount   = 0;
     this._ml403BurstTimer   = null;
@@ -61,7 +61,7 @@ class DevolucoesFeed {
     this.inicializar();
   }
 
-  // Debounce de refresh (carregar+renderizar) para evitar loops
+  // Debounce de refresh (carregar+renderizar)
   queueRefresh(delay = this.REFRESH_COOLDOWN_MS) {
     if (this._refreshTimer) return;
     this._refreshTimer = setTimeout(async () => {
@@ -71,7 +71,7 @@ class DevolucoesFeed {
     }, delay);
   }
 
-  // Throttle por pedido: só tenta resolver fluxo de X em X minutos
+  // Throttle por pedido
   shouldTryFlow(orderId) {
     try {
       const k = this.TRY_FLOW_PREFIX + orderId;
@@ -132,7 +132,7 @@ class DevolucoesFeed {
                 this._ml403BurstCount = 0; this._ml403BurstTimer=null;
               }, 60*1000);
             }
-            if (this._ml403BurstCount >= 3) { // ← agressivo: 3 em 60s pausa 2h
+            if (this._ml403BurstCount >= 3) { // 3 em 60s → pausa 2h
               this.blockMlShip(); // 2h
               this._ml403BurstCount = 0;
               clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
@@ -171,14 +171,6 @@ class DevolucoesFeed {
     return Date.now()-this.firstSeenTs(key) <= this.NEW_WINDOW_MS;
   }
   purgeOldSeen(){ try{ const now=Date.now(); for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(!k||!k.startsWith(this.NEW_KEY_PREFIX)) continue; const ts=Number(localStorage.getItem(k))||0; if(now-ts>20*this.MAX_NEW_AGE_MS) localStorage.removeItem(k); } }catch{} }
-
-  // ===== carregar =====
-  getMockData(){ return [
-    { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
-    { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
-    { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado", log_status:"pronto_envio", created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
-    { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 },
-  ];}
 
   async carregar(){
     this.toggleSkeleton(true);
@@ -257,6 +249,34 @@ class DevolucoesFeed {
   claimsImportAllowed(){ try{ const until=Number(localStorage.getItem(this.CLAIMS_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
   blockClaimsImport(){ try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+this.CLAIMS_BLOCK_MS)); }catch{} }
 
+  // ===== Sync de devoluções (novo) =====
+  async syncReturnsWithFallback(){
+    const daysList = [3,7,30];
+    for (const d of daysList){
+      const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d) });
+
+      // 1) endpoint principal
+      for (const url of [
+        `/api/ml/returns/import?${qs.toString()}`,
+        `/api/ml/returns/sync?${qs.toString()}`,
+        `/api/returns/sync?${qs.toString()}`
+      ]) {
+        console.info("[sync] returns:", url);
+        const r = await this.fetchQuiet(url);
+        if (r.ok) return true;
+
+        if (r.status === 401) {
+          this.toast("Conectar Mercado Livre","Sua sessão do ML expirou. Entre novamente para sincronizar devoluções.","erro");
+          return false;
+        }
+        // 404: endpoint não existe — tenta próximo fallback
+        // 429/5xx: só sai do loop desse d e tenta outro d
+        if ([429,500,502,503,504].includes(r.status)) break;
+      }
+    }
+    return false;
+  }
+
   // ===== Sync principal (curto) =====
   async syncClaimsWithFallback(){
     if (!this.claimsImportAllowed()) return false;
@@ -276,21 +296,18 @@ class DevolucoesFeed {
   }
 
   async atualizarDados(){
-    if (this._syncInFlight) return;            // ← lock anti-dobro
+    if (this._syncInFlight) return;            // lock anti-dobro
     this._syncInFlight = true;
     try{
       const before=new Set(this.items.map(d=>String(d.id)));
-      await this.syncClaimsWithFallback(); // pode ser no-op
 
-      // (desligado) shipping/sync geral — teu backend ainda não está pronto
-      // await this.fetchQuiet(`/api/ml/shipping/sync?days=${this.RANGE_DIAS}&silent=1`);
+      // 1) puxa novas devoluções do ML (urgente)
+      await this.syncReturnsWithFallback();
 
-      // (desligado) mensagens ML ainda não implementadas no backend
-      // if (!this._messagesSyncDisabled) {
-      //   const msg = await this.fetchQuiet(`/api/ml/messages/sync?days=${this.RANGE_DIAS}&silent=1`);
-      //   if (!msg.ok && msg.status===404) this._messagesSyncDisabled = true;
-      // }
+      // 2) tenta também claims (movimenta estágios/fluxo)
+      await this.syncClaimsWithFallback();
 
+      // 3) recarrega lista e renderiza
       await this.carregar();
       const novos=this.items.filter(d=>!before.has(String(d.id))).length;
       if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -317,13 +334,10 @@ class DevolucoesFeed {
     }
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
-    // update otimista no card
     if (sug) {
       const it = this.items.find(x => String(x.id) === String(id));
       if (it) it.log_status = sug;
     }
-
-    // em vez de recarregar de imediato, entra na fila (debounce)
     this.queueRefresh(250);
     this.toast("Sucesso","Devolução atualizada com o Mercado Livre.","sucesso");
   }
@@ -342,16 +356,16 @@ class DevolucoesFeed {
     return String(s||"").toLowerCase().trim();
   }
 
-  // Deriva o fluxo com prioridade: CLAIM > SHIPPING > RETURN > LOG_STATUS
+  // CLAIM > SHIPPING > RETURN > LOG_STATUS
   computeFlow(d){
     const lower = v => String(v||"").toLowerCase();
 
-    // ---- CLAIM
+    // CLAIM
     const cStage = lower(d.claim?.stage || d.claim_stage || d.claim?.status || d.claim_status || d.claim_state);
     if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
     if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
 
-    // ---- SHIPPING
+    // SHIPPING
     const sStat = lower(
       d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
       d.current_shipping_status || d.tracking_status ||
@@ -365,11 +379,11 @@ class DevolucoesFeed {
     if (/delivered|entreg|arrived|recebid/.test(ship)) return "recebido_cd";
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
-    // ---- RETURN
+    // RETURN
     const rStat = lower(d.return?.status || d.return_status || d.status_devolucao || d.status_log);
     if (/closed|fechado|devolvido|finaliz/.test(rStat)) return "fechado";
 
-    // ---- LOG STATUS interno (fallback)
+    // Fallback
     const log = lower(d.log_status || d.flow || d.flow_status || d.ml_flow);
     return this.normalizeFlow(log);
   }
@@ -381,11 +395,9 @@ class DevolucoesFeed {
     if (/(mediat|media[cç]ao)/.test(t)) return "mediacao";
     if (/(disputa|reclama|claim_open|claim)/.test(t)) return "disputa";
 
-    // mapear nomes vindos do backend
     if (t.includes("preparacao")) return "em_preparacao";
     if (t === "transporte")       return "em_transporte";
     if (t.includes("recebido_cd")) return "recebido_cd";
-
     if (t.includes("aguardando_postagem")) return "em_preparacao";
     if (t.includes("postado")) return "em_transporte";
     if (t.includes("em_transito")) return "em_transporte";
@@ -421,8 +433,6 @@ class DevolucoesFeed {
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";            // respeita bloqueio
-
-    // ⚠️ sem guard de seller headers para não travar o fluxo
     const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) {
       if (r.status===403) this.setNoAccess(orderId);
@@ -437,16 +447,16 @@ class DevolucoesFeed {
     const orderId = d?.id_venda || d?.order_id;
     if (!id || !orderId) return;
 
-    // limite por ciclo de render — conta a TENTATIVA antes do fetch
+    // limite por ciclo de render — conta a tentativa antes do fetch
     if (this._flowResolvesThisTick >= this.MAX_FLOW_RES_PER_TICK) return;
 
-    // throttle: não tenta o mesmo pedido toda hora
+    // throttle
     if (!this.shouldTryFlow(orderId)) return;
 
-    // já conta esta tentativa (mesmo se vier de cache/403)
+    // conta esta tentativa
     this._flowResolvesThisTick++;
 
-    // cache: se já sei, aplico e saio
+    // cache
     const cached = this.getCachedFlow(orderId);
     if (cached){
       if (cached === "__NO_ACCESS__") return; // não re-tenta por 24h
@@ -458,7 +468,6 @@ class DevolucoesFeed {
       return;
     }
 
-    // respeita bloqueio global (rajada de 403)
     if (!this.mlShipAllowed()) return;
 
     const found = await this.fetchShippingFlow(orderId);
@@ -530,11 +539,11 @@ class DevolucoesFeed {
       card.setAttribute("role","listitem");
       container.appendChild(card);
 
-      // Se o fluxo ainda é "pendente", tenta resolver com throttle/anti-F5
+      // Se o fluxo ainda é "pendente", tenta resolver com throttle
       const flowNow = this.computeFlow(d);
       const oid = d.id_venda || d.order_id;
       if (flowNow==="pendente" && oid) {
-        this.resolveAndPatchFlow(d); // assíncrono, sem travar a UI
+        this.resolveAndPatchFlow(d); // assíncrono
       }
     });
 
@@ -594,12 +603,12 @@ class DevolucoesFeed {
           <span class="campo-valor">${this.esc(d.loja_nome || "—")}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0  0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/></svg>
           <span class="campo-label">Data</span>
           <span class="campo-valor">${data}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0  0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/></svg>
           <span class="campo-label">Produto</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
