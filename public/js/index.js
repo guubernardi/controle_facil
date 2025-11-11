@@ -1,6 +1,4 @@
-// /public/js/index.js — Feed Geral com resolução de fluxo por card (guards 401/403)
-// Agora com auto-descoberta do endpoint de sync de devoluções (GET/POST + cache)
-
+// /public/js/index.js — Feed com fallback ao vivo das “devoluções abertas” do ML
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -19,55 +17,50 @@ class DevolucoesFeed {
     this.SYNC_MS = 5 * 60 * 1000;
     this._lastSyncErrShown = false;
 
-    // circuit breaker do claims/import (400)
+    // circuit breaker claims/import
     this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
 
-    // cache de fluxo (evita bater no backend em loop)
+    // fluxo cache
     this.FLOW_TTL_MS = 30 * 60 * 1000;
-    this.FLOW_CACHE_PREFIX = "rf:flowCache:"; // por order_id
+    this.FLOW_CACHE_PREFIX = "rf:flowCache:";
 
-    // bloqueios específicos de ML/shipping
+    // ML shipping guard
     this.ML_SHIP_BLOCK_KEY  = "rf:mlShipping:blockUntil";
-    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 60 * 1000;  // 2h
-    this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h (cache negativo por pedido)
+    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 60 * 1000;
+    this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000;
     this._ml403BurstCount   = 0;
     this._ml403BurstTimer   = null;
 
-    // sync de mensagens (desligado por enquanto)
+    // mensagens (off por enquanto)
     this._messagesSyncDisabled = true;
 
-    // seller headers p/ /api/ml/* e /api/meli/*
+    // seller headers
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
                    || localStorage.getItem('rf:sellerId') || '';
     this.sellerNick = document.querySelector('meta[name="ml-seller-nick"]')?.content?.trim()
                    || localStorage.getItem('rf:sellerNick') || '';
 
-    // cache do endpoint de returns
-    this.RET_SYNC_URL_KEY    = "rf:returnsSync:url";
-    this.RET_SYNC_METHOD_KEY = "rf:returnsSync:method";
-    this._returnsSyncWarned  = false;
-
     this.STATUS_GRUPOS = {
-      aprovado: new Set(["aprovado","autorizado","autorizada"]),
-      rejeitado: new Set(["rejeitado","rejeitada","negado","negada"]),
+      aprovado:   new Set(["aprovado","autorizado","autorizada"]),
+      rejeitado:  new Set(["rejeitado","rejeitada","negado","negada"]),
       finalizado: new Set(["concluido","concluida","finalizado","finalizada","fechado","fechada","encerrado","encerrada"]),
-      pendente: new Set(["pendente","em_analise","em-analise","aberto"]),
+      pendente:   new Set(["pendente","em_analise","em-analise","aberto"]),
     };
 
-    // ===== Anti-"F5": debounce/throttle/locks =====
+    // anti-F5
     this._refreshTimer = null;
-    this.REFRESH_COOLDOWN_MS = 800;                // junta múltiplos reloads
-    this.TRY_FLOW_PREFIX = "rf:flowTry:";          // throttle por order_id
-    this.TRY_FLOW_MS = 10 * 60 * 1000;             // 10 minutos
-    this._syncInFlight = false;                    // lock para atualizarDados()
-    this.MAX_FLOW_RES_PER_TICK = 2;                // resolve no máx. 2 cards por render
+    this.REFRESH_COOLDOWN_MS = 800;
+    this.TRY_FLOW_PREFIX = "rf:flowTry:";
+    this.TRY_FLOW_MS = 10 * 60 * 1000;
+    this._syncInFlight = false;
+    this.MAX_FLOW_RES_PER_TICK = 2;
     this._flowResolvesThisTick = 0;
 
     this.inicializar();
   }
 
-  // Debounce de refresh (carregar+renderizar)
+  // ===== infra util =====
   queueRefresh(delay = this.REFRESH_COOLDOWN_MS) {
     if (this._refreshTimer) return;
     this._refreshTimer = setTimeout(async () => {
@@ -76,8 +69,6 @@ class DevolucoesFeed {
       this.renderizar();
     }, delay);
   }
-
-  // Throttle por pedido
   shouldTryFlow(orderId) {
     try {
       const k = this.TRY_FLOW_PREFIX + orderId;
@@ -87,7 +78,6 @@ class DevolucoesFeed {
       return true;
     } catch { return true; }
   }
-
   async inicializar() {
     this.configurarUI();
     await this.carregar();
@@ -96,16 +86,9 @@ class DevolucoesFeed {
     this.startAutoSync();
   }
 
-  // ===== rede/util =====
   safeJson(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.status===204?{}:res.json(); }
-
-  mlShipAllowed(){
-    try{ const until=Number(localStorage.getItem(this.ML_SHIP_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; }
-  }
-  blockMlShip(ms=this.ML_SHIP_BLOCK_MS){
-    try{ localStorage.setItem(this.ML_SHIP_BLOCK_KEY, String(Date.now()+ms)); }catch{}
-  }
-
+  mlShipAllowed(){ try{ const until=Number(localStorage.getItem(this.ML_SHIP_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
+  blockMlShip(ms=this.ML_SHIP_BLOCK_MS){ try{ localStorage.setItem(this.ML_SHIP_BLOCK_KEY, String(Date.now()+ms)); }catch{} }
   _headersFor(url){
     const h = { Accept:"application/json" };
     if (/^\/api\/ml\//.test(url) || /^\/api\/meli\//.test(url)) {
@@ -114,7 +97,6 @@ class DevolucoesFeed {
     }
     return h;
   }
-
   async fetchQuiet(url){
     try{
       const headers = this._headersFor(url);
@@ -126,15 +108,12 @@ class DevolucoesFeed {
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
         console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
 
-        // Guardas específicas
-        if (url.includes('/api/ml/messages/')) this._messagesSyncDisabled = true;
-
         if (url.includes('/api/ml/shipping/status')) {
           if (r.status===401) {
-            this.blockMlShip(30*60*1000); // 30min
+            this.blockMlShip(30*60*1000);
             if (!this._lastSyncErrShown){
               this._lastSyncErrShown = true;
-              this.toast("Conectar Mercado Livre","Sua sessão do ML não está ativa para esse pedido. Vou pausar por 30min.","erro");
+              this.toast("Conectar Mercado Livre","Sua sessão do ML não está ativa para esse pedido. Pausando 30min.","erro");
             }
           } else if (r.status===403) {
             this._ml403BurstCount++;
@@ -142,14 +121,13 @@ class DevolucoesFeed {
               this._ml403BurstTimer = setTimeout(()=>{ this._ml403BurstCount = 0; this._ml403BurstTimer=null; }, 60*1000);
             }
             if (this._ml403BurstCount >= 3) {
-              this.blockMlShip(); // 2h
+              this.blockMlShip();
               this._ml403BurstCount = 0;
               clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
-              this.toast("Pausado por 2h","Muitos 403 do ML (pedido de outra conta). Pausei as consultas de shipping.","erro");
+              this.toast("Pausado por 2h","Muitos 403 do ML (pedido de outra conta). Pausei consultas de shipping.","erro");
             }
           }
         }
-
         return { ok:false, status:r.status, detail, data:body };
       }
       return { ok:true, status:r.status, data:body };
@@ -159,36 +137,17 @@ class DevolucoesFeed {
     }
   }
 
-  async fetchQuietPost(url, jsonBody){
-    try{
-      const headers = { ...this._headersFor(url), "Content-Type":"application/json" };
-      const r = await fetch(url,{ method:"POST", headers, credentials:"include", body: JSON.stringify(jsonBody||{}) });
-      const ct = r.headers.get("content-type")||""; let body=null;
-      if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
-      if (!r.ok){
-        const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
-        console.info("[sync POST]", url, "→", r.status, (detail||"").toString().slice(0,160));
-        return { ok:false, status:r.status, detail, data:body };
-      }
-      return { ok:true, status:r.status, data:body };
-    }catch(e){
-      console.info("[sync POST]", url, "→ falhou", e?.message||String(e));
-      return { ok:false, error:e?.message||String(e) };
-    }
-  }
-
   coerceReturnsPayload(j){ if(Array.isArray(j)) return j; if(!j||typeof j!=="object") return []; return j.items||j.data||j.returns||j.list||[]; }
   formatBRL(n){ return Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}); }
   dataBr(iso){ if(!iso) return "—"; try{ return new Date(iso).toLocaleDateString("pt-BR",{day:"2-digit",month:"short",year:"numeric"});}catch{ return "—"; } }
   esc(s){ const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
-
   getDateMs(d){
     const keys = ["created_at","createdAt","created","inserted_at","updated_at","data_compra","order_date","date_created","paid_at","ml_created_at","ml_updated_at","dt","data"];
     for(const k of keys){ const v=d?.[k]; if(!v) continue; const t=Date.parse(v); if(!Number.isNaN(t)) return t; }
     return 0;
   }
 
-  // ===== "Nova" =====
+  // ===== “Nova” =====
   stableKey(d){ return d?.id_venda || d?.ml_claim_id || d?.order_id || d?.resource_id || d?.id; }
   firstSeenTs(key){ try{ const k=this.NEW_KEY_PREFIX+key; const v=localStorage.getItem(k); if(v) return Number(v)||0; const now=Date.now(); localStorage.setItem(k,String(now)); return now; }catch{ return 0; } }
   isNova(d){
@@ -200,16 +159,11 @@ class DevolucoesFeed {
   purgeOldSeen(){ try{ const now=Date.now(); for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(!k||!k.startsWith(this.NEW_KEY_PREFIX)) continue; const ts=Number(localStorage.getItem(k))||0; if(now-ts>20*this.MAX_NEW_AGE_MS) localStorage.removeItem(k); } }catch{} }
 
   // ===== carregar =====
-  getMockData(){ return [
-    { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
-    { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
-    { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado", log_status:"pronto_envio", created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
-    { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 },
-  ];}
-
+  getMockData(){ return []; } // sem mock p/ não confundir datas
   async carregar(){
     this.toggleSkeleton(true);
     try{
+      // 1) banco
       const urls=[
         `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
         `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
@@ -223,14 +177,103 @@ class DevolucoesFeed {
           if (Array.isArray(arr)) { list=arr; break; }
         }catch(e){ last=e; }
       }
-      this.items = Array.isArray(list)&&list.length ? list : this.getMockData();
-      if(!list && last) throw last;
+      this.items = Array.isArray(list) ? list : [];
+
+      // 2) ML “open” (merge sem depender do banco)
+      await this.mergeMlOpenReturns();
+
+      if(!list && !this.items.length && last) throw last;
     }catch(e){
-      console.warn("[index] Falha ao carregar; usando mock.", e?.message);
-      this.items=this.getMockData();
-      this.toast("Aviso","API indisponível. Exibindo dados de exemplo.","erro");
+      console.warn("[index] Falha ao carregar", e?.message);
+      this.toast("Aviso","Não consegui carregar as devoluções.","erro");
     }finally{ this.toggleSkeleton(false); }
   }
+
+  // tenta vários endpoints “open returns” no backend e mescla
+  async mergeMlOpenReturns(days=30){
+    const ml = await this.fetchMlOpenReturns(days);
+    if (!ml || !ml.length) return;
+
+    // normaliza + dedup por order_id/id_venda
+    const norm = ml.map(r => this.mapMlReturnToItem(r)).filter(Boolean);
+    const byKey = new Map();
+
+    const push = (arr, tag) => {
+      for (const it of arr) {
+        const key = String(it.id_venda || it.order_id || it.id || "");
+        if (!key) continue;
+        if (!byKey.has(key)) byKey.set(key, { ...it, _source: tag });
+      }
+    };
+
+    push(this.items, "db");
+    push(norm, "ml-live");
+
+    this.items = Array.from(byKey.values());
+  }
+
+  async fetchMlOpenReturns(days=30){
+    const qs = new URLSearchParams({
+      days: String(days), status: "opened,in_progress", all: "1", silent: "1"
+    }).toString();
+
+    const candidates = [
+      `/api/ml/returns/open?${qs}`,
+      `/api/ml/returns/search?${qs}`,
+      `/api/ml/returns/list?${qs}`
+    ];
+    for (const url of candidates){
+      const r = await this.fetchQuiet(url);
+      if (r.ok) {
+        const arr = this.coerceReturnsPayload(r.data);
+        if (Array.isArray(arr) && arr.length) return arr;
+      } else if (r.status === 401) {
+        this.toast("Conectar Mercado Livre","Faça login/autorize o ML para listar devoluções abertas.","erro");
+        return [];
+      }
+    }
+    return [];
+  }
+
+  mapMlReturnToItem(ret){
+    try{
+      // Tenta achar order_id
+      const orderId =
+        ret.order_id || ret.order?.id || ret.purchase?.order_id ||
+        ret.resource?.order_id || ret.resource_id || ret.sale?.order_id;
+
+      const created =
+        ret.date_created || ret.creation_date || ret.created_at || ret.created;
+
+      // Cliente
+      const buyerName =
+        ret.buyer?.nickname || ret.buyer?.name || ret.buyer_name || "—";
+
+      // Status/log
+      const flow =
+        ret.shipping?.substatus || ret.shipping?.status ||
+        ret.return_shipping_status || ret.ml_substatus || ret.ml_status || ret.status || "";
+
+      // Valores (se existirem)
+      const vp = Number(ret.amounts?.sale_amount || ret.amounts?.value || 0);
+      const vf = Number(ret.amounts?.shipping_amount || 0);
+
+      if (!orderId) return null;
+
+      return {
+        id: `ml-${orderId}`,
+        id_venda: String(orderId),
+        cliente_nome: String(buyerName),
+        loja_nome: this.sellerNick ? `Mercado Livre · ${this.sellerNick}` : "Mercado Livre",
+        status: "pendente",
+        log_status: String(flow || "").toLowerCase(),
+        valor_produto: vp,
+        valor_frete: vf,
+        created_at: created || new Date().toISOString(),
+      };
+    } catch { return null; }
+  }
+
   toggleSkeleton(show){
     const $=id=>document.getElementById(id);
     const sk=$("loading-skeleton"), listWrap=$("lista-devolucoes"), list=$("container-devolucoes"), vazio=$("mensagem-vazia");
@@ -246,7 +289,7 @@ class DevolucoesFeed {
     document.getElementById("filtro-status")?.addEventListener("change", e=>{ this.filtros.status=(e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
     document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
 
-    // grid: open/enrich
+    // grid
     document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
       const card = e.target.closest?.("[data-return-id]"); if(!card) return;
       const id   = card.getAttribute("data-return-id");
@@ -284,109 +327,7 @@ class DevolucoesFeed {
   claimsImportAllowed(){ try{ const until=Number(localStorage.getItem(this.CLAIMS_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
   blockClaimsImport(){ try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+this.CLAIMS_BLOCK_MS)); }catch{} }
 
-  // ===== Descoberta + sync de devoluções =====
-  _getCachedRetSync(){
-    try {
-      const url = localStorage.getItem(this.RET_SYNC_URL_KEY) || "";
-      const method = localStorage.getItem(this.RET_SYNC_METHOD_KEY) || "";
-      if (url && method) return { url, method };
-    } catch {}
-    return null;
-  }
-  _setCachedRetSync(url, method){
-    try {
-      localStorage.setItem(this.RET_SYNC_URL_KEY, url);
-      localStorage.setItem(this.RET_SYNC_METHOD_KEY, method);
-    } catch {}
-  }
-  _clearCachedRetSync(){
-    try {
-      localStorage.removeItem(this.RET_SYNC_URL_KEY);
-      localStorage.removeItem(this.RET_SYNC_METHOD_KEY);
-    } catch {}
-  }
-
-  async _tryOneRetEndpoint(base, days){
-    const qs = new URLSearchParams({ silent:"1", all:"1", days:String(days) }).toString();
-
-    // 1) Tenta GET
-    const getUrl = `${base}?${qs}`;
-    const g = await this.fetchQuiet(getUrl);
-    if (g.ok) return { ok:true, url: base, method:"GET" };
-    if (g.status === 401) return { ok:false, auth:true }; // precisa logar ML
-
-    // 2) Tenta POST
-    const p = await this.fetchQuietPost(base, { silent:1, all:1, days:days });
-    if (p.ok) return { ok:true, url: base, method:"POST" };
-    if (p.status === 401) return { ok:false, auth:true };
-
-    // Se 404/501/405 segue vida; outros erros só registram
-    return { ok:false };
-  }
-
-  async _discoverRetSync(days){
-    const candidates = [
-      // Prováveis
-      "/api/ml/returns/import",
-      "/api/ml/returns/sync",
-      "/api/returns/sync",
-      "/api/returns/import",
-      // Variações comuns
-      "/api/meli/returns/import",
-      "/api/ml/returns/pull",
-      "/api/ml/returns/fetch",
-      "/api/returns/ingest",
-      "/api/returns/ml/sync",
-    ];
-    for (const base of candidates){
-      const r = await this._tryOneRetEndpoint(base, days);
-      if (r.auth) { // falta autenticação ML
-        this.toast("Conectar Mercado Livre","Sua sessão do ML expirou. Entre novamente para sincronizar devoluções.","erro");
-        return null;
-      }
-      if (r.ok) {
-        this._setCachedRetSync(r.url, r.method);
-        console.info("[returns] endpoint descoberto:", r.method, r.url);
-        return r;
-      }
-    }
-    return null;
-  }
-
-  async syncReturnsWithFallback(){
-    // Tenta usar o cache primeiro
-    const cached = this._getCachedRetSync();
-    const daysList = [3,7,30];
-
-    // 1) Se tenho cache, tento com ele (3→7→30)
-    if (cached){
-      for (const d of daysList){
-        console.info("[returns] usando cache", cached.method, cached.url, d+"d");
-        const res = (cached.method === "POST")
-          ? await this.fetchQuietPost(cached.url, { silent:1, all:1, days:d })
-          : await this.fetchQuiet(`${cached.url}?${new URLSearchParams({silent:"1",all:"1",days:String(d)})}`);
-        if (res.ok) return true;
-        // Se 404, invalida cache e vai para descoberta
-        if (res.status === 404) { this._clearCachedRetSync(); break; }
-        if (res.status === 401) { this.toast("Conectar Mercado Livre","Sua sessão do ML expirou. Entre novamente para sincronizar devoluções.","erro"); return false; }
-      }
-    }
-
-    // 2) Descobre endpoint (3→7→30)
-    for (const d of daysList){
-      const found = await this._discoverRetSync(d);
-      if (found) return true; // a própria descoberta já fez a call que deu OK
-    }
-
-    // 3) Se nada deu certo, avisa uma vez só
-    if (!this._returnsSyncWarned){
-      this._returnsSyncWarned = true;
-      this.toast("Sem endpoint de devoluções","Não encontrei rota de sync/import no backend. Sigo mostrando o que já está no banco.", "erro");
-    }
-    return false;
-  }
-
-  // ===== Sync de claims (curto) =====
+  // ===== Syncs curtos =====
   async syncClaimsWithFallback(){
     if (!this.claimsImportAllowed()) return false;
     for (const d of [3,7,30]){
@@ -397,7 +338,7 @@ class DevolucoesFeed {
       const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h e seguir com envio.","erro"); }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h.","erro"); }
         return false;
       }
     }
@@ -405,18 +346,12 @@ class DevolucoesFeed {
   }
 
   async atualizarDados(){
-    if (this._syncInFlight) return; // lock anti-dobro
+    if (this._syncInFlight) return;
     this._syncInFlight = true;
     try{
       const before=new Set(this.items.map(d=>String(d.id)));
-
-      // 1) puxa novas devoluções do ML (com descoberta)
-      await this.syncReturnsWithFallback();
-
-      // 2) tenta também claims (movimenta estágios/fluxo)
+      await this.mergeMlOpenReturns();  // puxa “abertas” do ML
       await this.syncClaimsWithFallback();
-
-      // 3) recarrega
       await this.carregar();
       const novos=this.items.filter(d=>!before.has(String(d.id))).length;
       if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -431,15 +366,11 @@ class DevolucoesFeed {
     if (!id) return;
     await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // best-effort
 
-    // força leitura de status logístico por order_id (se permitido)
     let sug = null;
     if (orderId && this.mlShipAllowed()) {
       const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
-      if (r.ok) {
-        sug = r.data?.suggested_log_status || null;
-      } else if (r.status===403) {
-        this.setNoAccess(orderId);
-      }
+      if (r.ok) sug = r.data?.suggested_log_status || null;
+      else if (r.status===403) this.setNoAccess(orderId);
     }
     if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
@@ -451,7 +382,7 @@ class DevolucoesFeed {
     this.toast("Sucesso","Devolução atualizada com o Mercado Livre.","sucesso");
   }
 
-  // ===== Fluxo (resolver via shipping/claim) =====
+  // ===== Fluxo =====
   extractFlowString(d){
     const pick=(o,ks)=>{ for(const k of ks){ if(o&&o[k]!=null) return String(o[k]); } return ""; };
     let s = pick(d,[
@@ -464,17 +395,12 @@ class DevolucoesFeed {
     if (!s && d.claim)    s = pick(d.claim, ["stage","status"]);
     return String(s||"").toLowerCase().trim();
   }
-
-  // CLAIM > SHIPPING > RETURN > LOG_STATUS
   computeFlow(d){
     const lower = v => String(v||"").toLowerCase();
-
-    // CLAIM
     const cStage = lower(d.claim?.stage || d.claim_stage || d.claim?.status || d.claim_status || d.claim_state);
     if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
     if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
 
-    // SHIPPING
     const sStat = lower(
       d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
       d.current_shipping_status || d.tracking_status ||
@@ -482,45 +408,36 @@ class DevolucoesFeed {
     );
     const sSub  = lower(d.ml_substatus || d.shipping?.substatus || d.ml_shipping?.substatus);
     const ship = [sStat, sSub].join("_");
-
     if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return "em_preparacao";
     if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return "em_transporte";
     if (/delivered|entreg|arrived|recebid/.test(ship)) return "recebido_cd";
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
-    // RETURN
     const rStat = lower(d.return?.status || d.return_status || d.status_devolucao || d.status_log);
     if (/closed|fechado|devolvido|finaliz/.test(rStat)) return "fechado";
 
-    // Fallback
     const log = lower(d.log_status || d.flow || d.flow_status || d.ml_flow);
     return this.normalizeFlow(log);
   }
-
-  normalizeFlow(s){
-    if(!s) return "pendente";
-    const t = String(s).toLowerCase().replace(/\s+/g,"_");
-
-    if (/(mediat|media[cç]ao)/.test(t)) return "mediacao";
-    if (/(disputa|reclama|claim_open|claim)/.test(t)) return "disputa";
-
-    if (t.includes("preparacao")) return "em_preparacao";
-    if (t === "transporte")       return "em_transporte";
-    if (t.includes("recebido_cd")) return "recebido_cd";
-    if (t.includes("aguardando_postagem")) return "em_preparacao";
-    if (t.includes("postado")) return "em_transporte";
-    if (t.includes("em_transito")) return "em_transporte";
-    if (t.includes("a_caminho") || /(on_the_way|in_transit)/.test(t)) return "em_transporte";
-    if (t.includes("em_inspecao")) return "em_preparacao";
-    if (t.includes("nao_recebido")) return "pendente";
-    if (t.includes("devolvido") || t.includes("fechado") || /(closed)/.test(t)) return "fechado";
-    if (/(prepar|prep|ready_to_ship)/.test(t)) return "em_preparacao";
-    if (/(pronto|label|etiq|ready)/.test(t)) return "pronto_envio";
-    if (/(transit|transito|transporte|enviado|shipped|out_for_delivery|returning_to_sender)/.test(t)) return "em_transporte";
-    if (/(delivered|entreg|arrived|recebid)/.test(t)) return "recebido_cd";
+  normalizeFlow(t){
+    if(!t) return "pendente";
+    const s = String(t).toLowerCase().replace(/\s+/g,"_");
+    if (/(mediat|media[cç]ao)/.test(s)) return "mediacao";
+    if (/(disputa|reclama|claim_open|claim)/.test(s)) return "disputa";
+    if (s.includes("preparacao")) return "em_preparacao";
+    if (s === "transporte") return "em_transporte";
+    if (s.includes("recebido_cd")) return "recebido_cd";
+    if (s.includes("aguardando_postagem")) return "em_preparacao";
+    if (s.includes("postado")) return "em_transporte";
+    if (/(em_transito|on_the_way|in_transit|a_caminho)/.test(s)) return "em_transporte";
+    if (s.includes("em_inspecao")) return "em_preparacao";
+    if (/(devolvido|fechado|closed)/.test(s)) return "fechado";
+    if (/(prepar|prep|ready_to_ship)/.test(s)) return "em_preparacao";
+    if (/(pronto|label|etiq|ready)/.test(s)) return "pronto_envio";
+    if (/(transit|transito|transporte|shipped|out_for_delivery|returning_to_sender)/.test(s)) return "em_transporte";
+    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "recebido_cd";
     return "pendente";
   }
-
   getCachedFlow(orderId){
     try{
       const raw = localStorage.getItem(this.FLOW_CACHE_PREFIX+orderId);
@@ -531,22 +448,14 @@ class DevolucoesFeed {
       return flow || null;
     }catch{ return null; }
   }
-  setCachedFlow(orderId, flow){
-    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{}
-  }
-  setNoAccess(orderId){
-    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{}
-  }
+  setCachedFlow(orderId, flow){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{} }
+  setNoAccess(orderId){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{} }
 
-  // pega status logístico diretamente do resumo do backend
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
-    if (!this.mlShipAllowed()) return "";            // respeita bloqueio
+    if (!this.mlShipAllowed()) return "";
     const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
-    if (!r.ok) {
-      if (r.status===403) this.setNoAccess(orderId);
-      return "";
-    }
+    if (!r.ok) { if (r.status===403) this.setNoAccess(orderId); return ""; }
     const s = r.data || {};
     return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
@@ -555,19 +464,13 @@ class DevolucoesFeed {
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
     if (!id || !orderId) return;
-
-    // limite por ciclo de render
     if (this._flowResolvesThisTick >= this.MAX_FLOW_RES_PER_TICK) return;
-
-    // throttle
     if (!this.shouldTryFlow(orderId)) return;
-
     this._flowResolvesThisTick++;
 
-    // cache
     const cached = this.getCachedFlow(orderId);
     if (cached){
-      if (cached === "__NO_ACCESS__") return; // não re-tenta por 24h
+      if (cached === "__NO_ACCESS__") return;
       const canon = this.normalizeFlow(cached);
       if (canon && canon !== this.computeFlow(d)){
         await this.patchFlow(id, canon);
@@ -575,7 +478,6 @@ class DevolucoesFeed {
       }
       return;
     }
-
     if (!this.mlShipAllowed()) return;
 
     const found = await this.fetchShippingFlow(orderId);
@@ -640,19 +542,16 @@ class DevolucoesFeed {
     container.style.display="grid";
     if (vazio) vazio.hidden=true;
     container.innerHTML="";
-    this._flowResolvesThisTick = 0; // reset do limite por render
+    this._flowResolvesThisTick = 0;
 
     pageItems.forEach((d,i)=>{
       const card=this.card(d,i);
       card.setAttribute("role","listitem");
       container.appendChild(card);
 
-      // Se o fluxo ainda é "pendente", tenta resolver com throttle
       const flowNow = this.computeFlow(d);
       const oid = d.id_venda || d.order_id;
-      if (flowNow==="pendente" && oid) {
-        this.resolveAndPatchFlow(d); // assíncrono
-      }
+      if (flowNow==="pendente" && oid) this.resolveAndPatchFlow(d);
     });
 
     this.renderPaginacao(totalPages);
@@ -674,7 +573,7 @@ class DevolucoesFeed {
     nav.innerHTML=html;
   }
 
-  // ===== Cards/Badges =====
+  // badges
   card(d, index=0){
     const el=document.createElement("div");
     el.className="card-devolucao slide-up";
@@ -711,17 +610,17 @@ class DevolucoesFeed {
           <span class="campo-valor">${this.esc(d.loja_nome || "—")}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0  0 1 1 0V1h1a2 2 0  0 1 2 2v11a2 2 0  0 1-2 2H2a2 2 0  0 1-2-2V3a2 2 0  0 1 2-2h1V.5a.5.5 0  0 1 .5-.5z"/></svg>
           <span class="campo-label">Data</span>
           <span class="campo-valor">${data}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0  0 1 8 1zm3.5 3v-.5a3.5 3.5 0 1 0-7 0V4H1v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4h-3.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0  0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0  0 1 8 1zm3.5 3v-.5a3.5 3.5 0  1 0-7 0V4H1v10a2 2 0  0 0 2 2h10a2 2 0  0 0 2-2V4h-3.5z"/></svg>
           <span class="campo-label">Produto</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorFrete)}</span>
         </div>
@@ -765,7 +664,7 @@ class DevolucoesFeed {
     return "pendente";
   }
 
-  // ===== ações =====
+  // ações
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
     if (modal && modal.showModal) modal.showModal();
@@ -784,6 +683,5 @@ class DevolucoesFeed {
   }
 }
 
-// boot
 if (document.readyState==="loading") document.addEventListener("DOMContentLoaded",()=>new DevolucoesFeed());
 else new DevolucoesFeed();

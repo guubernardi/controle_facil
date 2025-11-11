@@ -255,7 +255,7 @@ function resolveLogStatusFromRow(row, lastEventType) {
   if (/prep|prepar|embal|label|etiq|ready|pronto/.test(sub)) return 'preparacao';
   if (/disput|chargeback|contest/.test(sub)) return 'disputa';
   if (/transit|transport|enviado|ship/.test(sub)) return 'transporte';
-  if (/delivered|entreg|arrived|recebid/.test(sub)) return 'recebido_cd';
+  if (/(delivered|entreg|arrived|recebid)/.test(sub)) return 'recebido_cd';
 
   return null;
 }
@@ -287,6 +287,120 @@ async function loadLastEventsMap(ids) {
   return map;
 }
 
+/* ===== Helpers ML – busca de devoluções e persistência ===== */
+function coerceArr(j){
+  if (Array.isArray(j)) return j;
+  if (!j || typeof j !== 'object') return [];
+  return j.results || j.items || j.data || j.returns || j.list || [];
+}
+function normalizeFlow(s='') {
+  const t = String(s).toLowerCase().replace(/\s+/g,'_');
+  if (/(ready|label|etiq|prep|prepar)/.test(t)) return 'em_preparacao';
+  if (/(in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito)/.test(t)) return 'em_transporte';
+  if (/(delivered|entreg|arrived|recebid)/.test(t)) return 'recebido_cd';
+  if (/(mediat|media[cç]ao)/.test(t)) return 'em_mediacao';
+  if (/(disput|claim)/.test(t)) return 'disputa';
+  if (/(closed|fechad|devolvid)/.test(t)) return 'fechado';
+  return 'pendente';
+}
+function mapReturnToRow(ret, sellerNick='') {
+  const orderId =
+    ret.order_id || ret.order?.id || ret.purchase?.order_id ||
+    ret.resource?.order_id || ret.resource_id || ret.sale?.order_id;
+  if (!orderId) return null;
+
+  const created =
+    ret.date_created || ret.creation_date || ret.created_at || ret.created || null;
+
+  const buyer =
+    ret.buyer?.nickname || ret.buyer?.name || ret.buyer_name || '—';
+
+  const shipStatus =
+    ret.shipping?.substatus || ret.shipping?.status ||
+    ret.return_shipping_status || ret.ml_substatus || ret.ml_status || ret.status || '';
+
+  const saleAmount     = Number(ret.amounts?.sale_amount || ret.amounts?.value || 0) || null;
+  const shippingAmount = Number(ret.amounts?.shipping_amount || 0) || null;
+
+  return {
+    id_venda: String(orderId),
+    cliente_nome: String(buyer),
+    loja_nome: sellerNick ? `Mercado Livre · ${sellerNick}` : 'Mercado Livre',
+    status: 'pendente',
+    log_status: normalizeFlow(shipStatus),
+    valor_produto: saleAmount,
+    valor_frete: shippingAmount,
+    created_at: created || null
+  };
+}
+function buildSearchURL({ sellerId, statuses, fromISO, limit=50, offset=0, role='seller' }) {
+  const url = new URL('https://api.mercadolibre.com/returns/search');
+  if (sellerId) url.searchParams.set('seller', sellerId);
+  if (statuses) url.searchParams.set('status', statuses);
+  if (fromISO)  url.searchParams.set('date_created_from', fromISO);
+  if (role)     url.searchParams.set('role', role);
+  url.searchParams.set('limit', String(limit));
+  url.searchParams.set('offset', String(offset));
+  return url;
+}
+async function mlSearchReturns(token, opts) {
+  const out = [];
+  let url = buildSearchURL(opts);
+
+  while (true) {
+    const r = await _fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
+    const j = await r.json().catch(()=>({}));
+
+    if (r.status === 401) throw Object.assign(new Error('ml_unauthorized'), { status: 401, payload: j });
+    if (r.status === 403) throw Object.assign(new Error('ml_forbidden'),    { status: 403, payload: j });
+    if (!r.ok)            throw Object.assign(new Error('ml_error'),        { status: r.status, payload: j });
+
+    const arr = coerceArr(j);
+    out.push(...arr);
+
+    const { total=out.length, offset=0, limit=50 } = j.paging || {};
+    const wantAll = !!opts.all;
+    if (!wantAll || offset + limit >= total) break;
+
+    const next = (Number(offset) || 0) + (Number(limit) || 50);
+    url = buildSearchURL({ ...opts, offset: next });
+  }
+  return out;
+}
+async function devolucoesTableCols() {
+  const { rows } = await query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='devolucoes'`
+  );
+  return new Set(rows.map(r => r.column_name));
+}
+async function upsertReturnBasic(row) {
+  const { rows } = await query(`SELECT id FROM devolucoes WHERE id_venda = $1 LIMIT 1`, [row.id_venda]);
+  const cols = await devolucoesTableCols();
+
+  const allowed = ['id_venda','cliente_nome','loja_nome','status','log_status','valor_produto','valor_frete','created_at']
+    .filter(c => cols.has(c));
+
+  const data = {};
+  for (const k of allowed) if (row[k] !== undefined) data[k] = row[k];
+  const keys = Object.keys(data);
+
+  if (!rows.length) {
+    if (!keys.length) return null;
+    const ph = keys.map((_,i)=>`$${i+1}`);
+    const vals = keys.map(k=>data[k]);
+    const ins = await query(`INSERT INTO devolucoes (${keys.join(',')}) VALUES (${ph.join(',')}) RETURNING id`, vals);
+    return ins.rows[0]?.id || null;
+  } else {
+    if (!keys.length) return rows[0].id;
+    const set = keys.map((k,i)=>`${k}=$${i+1}`).join(', ');
+    const vals = keys.map(k=>data[k]);
+    vals.push(rows[0].id);
+    await query(`UPDATE devolucoes SET ${set} WHERE id=$${vals.length}`, vals);
+    return rows[0].id;
+  }
+}
+
 /* ============================ ROTAS ============================ */
 module.exports = function registerReturns(app) {
   /* ---------- Diagnóstico de colunas ---------- */
@@ -305,12 +419,11 @@ module.exports = function registerReturns(app) {
       const {
         status = '',
         page = '1',
-        pageSize = '15',                  // <-- default 15
-        orderBy  = 'created_at',         // <-- mais recente primeiro
+        pageSize = '15',
+        orderBy  = 'created_at',
         orderDir = 'desc'
       } = req.query;
 
-      // Campos possíveis + extras usados para inferência
       const base = [
         'id','id_venda','cliente_nome','loja_nome','sku',
         'status','log_status','status_operacional',
@@ -319,7 +432,6 @@ module.exports = function registerReturns(app) {
         'motivo','descricao','nfe_numero','nfe_chave',
         'data_compra','recebido_cd','recebido_resp','recebido_em',
         'ml_status_desc','em_mediacao',
-        // extras para inferir logística
         'claim_status','claim_substatus','substatus',
         'logistica_status','status_logistica',
         'created_at','updated_at'
@@ -336,14 +448,12 @@ module.exports = function registerReturns(app) {
       }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-      // coluna de ordenação (fallbacks)
       const allowedOrder = new Set(select);
       let col = allowedOrder.has(String(orderBy)) ? String(orderBy)
               : (cols.created_at ? 'created_at'
               : (cols.updated_at ? 'updated_at' : 'id'));
       const dir = String(orderDir).toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-      // paginação
       const limit  = Math.max(1, Math.min(parseInt(pageSize,10)||15, 100));
       const pageNo = Math.max(1, parseInt(page,10)||1);
       const offset = (pageNo-1)*limit;
@@ -371,7 +481,6 @@ module.exports = function registerReturns(app) {
         const logStatus = resolveLogStatusFromRow(row, lastType);
         const hasMediation = inferHasMediation(row, lastType);
 
-        // monta payload enxuto + campos calculados
         return {
           id: row.id,
           id_venda: row.id_venda,
@@ -402,7 +511,7 @@ module.exports = function registerReturns(app) {
     try {
       const {
         from = '', to = '', q = '',
-        page = '1', pageSize = '15',          // default 15 aqui também
+        page = '1', pageSize = '15',
         orderBy = 'created_at', orderDir = 'desc'
       } = req.query;
 
@@ -414,7 +523,6 @@ module.exports = function registerReturns(app) {
         'motivo','descricao','nfe_numero','nfe_chave',
         'data_compra','recebido_cd','recebido_resp','recebido_em',
         'ml_status_desc','em_mediacao',
-        // extras para inferir logística
         'claim_status','claim_substatus','substatus',
         'logistica_status','status_logistica',
         'created_at','updated_at'
@@ -596,7 +704,7 @@ module.exports = function registerReturns(app) {
     try {
       const id = Number(req.params.id);
       if (!id) return res.status(400).json({ error: 'ID inválido' });
-      const { rowCount } = await query('DELETE FROM devolucoes WHERE id=$1', [id]);
+    const { rowCount } = await query('DELETE FROM devolucoes WHERE id=$1', [id]);
       if (!rowCount) return res.status(404).json({ error: 'Não encontrado' });
       res.json({ ok: true });
     } catch (e) {
@@ -777,6 +885,74 @@ module.exports = function registerReturns(app) {
       res.json(j);
     } catch (e) {
       res.status(502).json({ error: 'Falha ao consultar return-cost no ML', detail: e.message, upstream: e.payload });
+    }
+  });
+
+  /* ---------- ML: RETURNS (open/search/list/import) ---------- */
+  async function handleMlReturnsOpen(req, res) {
+    try {
+      const token = await getMLToken(req);
+      if (!token) return res.status(401).json({ error: 'no_ml_token' });
+
+      const sellerId   = req.get('x-seller-id') || req.query.seller || process.env.ML_SELLER_ID || '';
+      const statuses   = String(req.query.status || 'opened,in_progress');
+      const days       = Math.max(1, Math.min(60, Number(req.query.days || 7)));
+      const fromISO    = new Date(Date.now() - days*24*60*60*1000).toISOString();
+      const wantAll    = String(req.query.all || '0') === '1';
+
+      const results = await mlSearchReturns(token, {
+        sellerId, statuses, fromISO, limit: 50, offset: 0, role: 'seller', all: wantAll
+      });
+
+      res.json({ items: results });
+    } catch (e) {
+      const status = e?.status || 500;
+      res.status(status).json({ error: e?.message || 'ml_error', upstream: e?.payload || null });
+    }
+  }
+  app.get('/api/ml/returns/open',   handleMlReturnsOpen);
+  app.get('/api/ml/returns/search', handleMlReturnsOpen);
+  app.get('/api/ml/returns/list',   handleMlReturnsOpen);
+
+  app.get('/api/ml/returns/import', async (req, res) => {
+    try {
+      const token = await getMLToken(req);
+      if (!token) return res.status(401).json({ error: 'no_ml_token' });
+
+      const sellerId   = req.get('x-seller-id') || req.query.seller || process.env.ML_SELLER_ID || '';
+      const sellerNick = req.get('x-seller-nick') || req.query.seller_nick || '';
+      const statuses   = String(req.query.status || 'opened,in_progress');
+      const days       = Math.max(1, Math.min(60, Number(req.query.days || 7)));
+      const fromISO    = new Date(Date.now() - days*24*60*60*1000).toISOString();
+      const wantAll    = String(req.query.all || '1') === '1';
+      const persist    = String(req.query.persist || '1') === '1'; // padrão: persiste
+
+      const results = await mlSearchReturns(token, {
+        sellerId, statuses, fromISO, limit: 50, offset: 0, role: 'seller', all: wantAll
+      });
+
+      const mapped = results.map(r => mapReturnToRow(r, sellerNick)).filter(Boolean);
+
+      let wrote = 0;
+      const ids = [];
+      if (persist && mapped.length) {
+        for (const row of mapped) {
+          try {
+            const id = await upsertReturnBasic(row);
+            if (id != null) { wrote++; ids.push(id); }
+          } catch (_) { /* segue */ }
+        }
+      }
+
+      res.json({
+        items: results,
+        mapped,
+        persisted: persist ? wrote : 0,
+        ids
+      });
+    } catch (e) {
+      const status = e?.status || 500;
+      res.status(status).json({ error: e?.message || 'ml_error', upstream: e?.payload || null });
     }
   });
 
