@@ -300,19 +300,55 @@ try {
   console.warn('[BOOT] Returns Log opcional:', e?.message || e);
 }
 
-/* Returns principal (registrador em função) */
+/* ========= Returns principal (ROBUSTO) ========= */
 try {
-  const r = require('./routes/returns');
-  if (typeof r === 'function') r(app);
-  else app.use('/api', r);
-  console.log('[BOOT] Returns ok');
-} catch (e) { console.warn('[BOOT] Returns opcional:', e?.message || e); }
+  const candidates = [
+    './routes/returns',
+    './routes/returns.js',
+    './routes/returns/index.js',
+    './routes/Returns',
+    './routes/returns-router.js'
+  ];
+  let mod = null, usedPath = null;
+  for (const p of candidates) {
+    try { mod = require(p); usedPath = p; break; } catch {}
+  }
+  if (!mod) throw new Error('módulo ./routes/returns não encontrado');
 
-/* Chat por devolução */
+  const isFn = (typeof mod === 'function');
+  const isRouter = !!mod && typeof mod === 'object' && (typeof mod.use === 'function' || Array.isArray(mod.stack));
+
+  if (isFn) {
+    mod(app); // registrador (define app.get('/api/returns', ...))
+    console.log(`[BOOT] Returns ok (registrador) via ${usedPath}`);
+  } else if (isRouter) {
+    // Monta nos dois – cobre Router que exporta paths relativos a '/' ou '/returns'
+    app.use('/api', mod);
+    app.use('/api/returns', mod);
+    console.log(`[BOOT] Returns ok (Router) via ${usedPath}`);
+  } else {
+    throw new Error(`export inválido do módulo (${typeof mod}). Esperado função ou Router`);
+  }
+} catch (e) {
+  console.warn('[BOOT] Returns falhou:', e?.message || e);
+}
+
+/* ========= Chat por devolução (ROBUSTO) ========= */
 try {
-  const r = require('./routes/returns-messages');
-  if (typeof r === 'function') r(app); else app.use('/api', r);
-  console.log('[BOOT] Chat por Devolução ok');
+  const chatCandidates = [
+    './routes/returns-messages',
+    './routes/returnsMessages',
+    './routes/returns-messages/index.js'
+  ];
+  let cmod = null, used = null;
+  for (const p of chatCandidates) { try { cmod = require(p); used = p; break; } catch {} }
+  if (cmod) {
+    if (typeof cmod === 'function') cmod(app);
+    else { app.use('/api', cmod); app.use('/api/returns', cmod); }
+    console.log(`[BOOT] Chat por Devolução ok via ${used}`);
+  } else {
+    console.warn('[BOOT] Chat por Devolução não encontrado (routes/returns-messages*)');
+  }
 } catch (e) { console.warn('[BOOT] Chat por Devolução opcional:', e?.message || e); }
 
 /* Uploads */
@@ -364,13 +400,13 @@ try {
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 
-/* === ML RETURNS (NOVO) — registrador em função === */
+/* === ML RETURNS (NOVO) — registrador em função/Router) === */
 try {
   const registerMlReturns = require('./routes/ml-returns'); // <- AQUI
   if (typeof registerMlReturns === 'function') {
     registerMlReturns(app); // monta /api/ml/returns/open|search|list|import
   } else {
-    app.use('/api', registerMlReturns);
+    app.use('/api/ml', registerMlReturns);
   }
   console.log('[BOOT] ML Returns ok (/api/ml/returns/...)');
 } catch (e) {
