@@ -25,6 +25,10 @@ class DevolucoesFeed {
     this.FLOW_TTL_MS = 30 * 60 * 1000;
     this.FLOW_CACHE_PREFIX = "rf:flowCache:";
 
+    // cache de return status (para claim_id)
+    this.RETURN_TTL_MS = 30 * 60 * 1000;
+    this.RETURN_CACHE_PREFIX = "rf:returnCache:";
+
     // ML shipping guard
     this.ML_SHIP_BLOCK_KEY  = "rf:mlShipping:blockUntil";
     this.ML_SHIP_BLOCK_MS   = 2 * 60 * 60 * 1000;
@@ -108,7 +112,7 @@ class DevolucoesFeed {
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
         console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
 
-        if (url.includes('/api/ml/shipping/status')) {
+        if (url.includes('/api/ml/shipping')) {
           if (r.status===401) {
             this.blockMlShip(30*60*1000);
             if (!this._lastSyncErrShown){
@@ -235,6 +239,7 @@ class DevolucoesFeed {
     return [];
   }
 
+  // ===== mapeamento de dados do ML para o item do grid =====
   mapMlReturnToItem(ret){
     try{
       // Tenta achar order_id
@@ -249,14 +254,18 @@ class DevolucoesFeed {
       const buyerName =
         ret.buyer?.nickname || ret.buyer?.name || ret.buyer_name || "—";
 
-      // Status/log
-      const flow =
-        ret.shipping?.substatus || ret.shipping?.status ||
-        ret.return_shipping_status || ret.ml_substatus || ret.ml_status || ret.status || "";
+      // Status/log (shipping/returns brutos)
+      const mlReturnStatus = String(ret.status || ret.return_status || "").toLowerCase();
+      const mlShipStatus   = String(ret.shipping?.status || "").toLowerCase();
+      const mlShipSub      = String(ret.shipping?.substatus || "").toLowerCase();
+      const flowRaw        = mlReturnStatus || mlShipSub || mlShipStatus || ret.ml_status || ret.ml_substatus || "";
 
       // Valores (se existirem)
       const vp = Number(ret.amounts?.sale_amount || ret.amounts?.value || 0);
       const vf = Number(ret.amounts?.shipping_amount || 0);
+
+      // Claim id (para enriquecer depois)
+      const claimId = ret.claim_id || ret.id || ret.ml_claim_id || null;
 
       if (!orderId) return null;
 
@@ -266,7 +275,9 @@ class DevolucoesFeed {
         cliente_nome: String(buyerName),
         loja_nome: this.sellerNick ? `Mercado Livre · ${this.sellerNick}` : "Mercado Livre",
         status: "pendente",
-        log_status: String(flow || "").toLowerCase(),
+        log_status: String(flowRaw || "").toLowerCase(),
+        ml_return_status: mlReturnStatus || "",
+        ml_claim_id: claimId || null,
         valor_produto: vp,
         valor_frete: vf,
         created_at: created || new Date().toISOString(),
@@ -361,23 +372,67 @@ class DevolucoesFeed {
     }
   }
 
+  // ===== Caches =====
+  getCachedFlow(orderId){
+    try{
+      const raw = localStorage.getItem(this.FLOW_CACHE_PREFIX+orderId);
+      if(!raw) return null;
+      const { ts, flow, neg } = JSON.parse(raw);
+      const ttl = neg ? this.ML_NOACCESS_TTL_MS : this.FLOW_TTL_MS;
+      if (!ts || Date.now()-ts > ttl) return null;
+      return flow || null;
+    }catch{ return null; }
+  }
+  setCachedFlow(orderId, flow){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{} }
+  setNoAccess(orderId){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{} }
+
+  getCachedReturn(claimId){
+    try{
+      const raw = localStorage.getItem(this.RETURN_CACHE_PREFIX+claimId);
+      if(!raw) return null;
+      const { ts, status, flow } = JSON.parse(raw);
+      if (!ts || Date.now()-ts > this.RETURN_TTL_MS) return null;
+      return { status, flow };
+    }catch{ return null; }
+  }
+  setCachedReturn(claimId, status, flow){
+    try{ localStorage.setItem(this.RETURN_CACHE_PREFIX+claimId, JSON.stringify({ ts: Date.now(), status, flow })); }catch{}
+  }
+
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
-    await this.fetchQuiet(`/api/ml/returns/${encodeURIComponent(id)}/enrich`); // best-effort
 
-    let sug = null;
+    // 1) Returns state (pega flow e raw_status e já persiste no back)
+    if (claimId){
+      const r = await this.fetchQuiet(`/api/ml/returns/state?claim_id=${encodeURIComponent(claimId)}${orderId?`&order_id=${encodeURIComponent(orderId)}`:""}&silent=1`);
+      if (r.ok) {
+        const flow = String(r.data?.flow || "").toLowerCase();
+        const raw  = String(r.data?.raw_status || "").toLowerCase();
+        const it = this.items.find(x => String(x.id) === String(id));
+        if (it){
+          if (flow) it.log_status = flow;
+          if (raw)  it.ml_return_status = raw;
+        }
+        if (claimId) this.setCachedReturn(claimId, raw || "", flow || "");
+      }
+    }
+
+    // 2) Shipping state (sugestão de fluxo)
     if (orderId && this.mlShipAllowed()) {
       const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
-      if (r.ok) sug = r.data?.suggested_log_status || null;
-      else if (r.status===403) this.setNoAccess(orderId);
+      if (r.ok) {
+        const flow = String(r.data?.flow || r.data?.suggested_log_status || r.data?.ml_substatus || r.data?.ml_status || "").toLowerCase();
+        if (flow) {
+          const it = this.items.find(x => String(x.id) === String(id));
+          if (it) it.log_status = this.normalizeFlow(flow);
+          this.setCachedFlow(orderId, flow);
+        }
+      } else if (r.status===403) {
+        this.setNoAccess(orderId);
+      }
     }
-    if (claimId) await this.fetchQuiet(`/api/ml/claims/${encodeURIComponent(claimId)}`);
 
-    if (sug) {
-      const it = this.items.find(x => String(x.id) === String(id));
-      if (it) it.log_status = sug;
-    }
     this.queueRefresh(250);
     this.toast("Sucesso","Devolução atualizada com o Mercado Livre.","sucesso");
   }
@@ -388,7 +443,7 @@ class DevolucoesFeed {
     let s = pick(d,[
       "log_status","status_log","flow","flow_status","ml_flow",
       "shipping_status","ship_status","ml_shipping_status","return_shipping_status","current_shipping_status","tracking_status",
-      "claim_status","claim_stage"
+      "claim_status","claim_stage","ml_return_status"
     ]) || "";
     if (!s && d.shipping) s = pick(d.shipping,["status","substatus"]);
     if (!s && d.return)   s = pick(d.return,["status"]);
@@ -397,10 +452,13 @@ class DevolucoesFeed {
   }
   computeFlow(d){
     const lower = v => String(v||"").toLowerCase();
+
+    // claim stage
     const cStage = lower(d.claim?.stage || d.claim_stage || d.claim?.status || d.claim_status || d.claim_state);
     if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
     if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
 
+    // shipping
     const sStat = lower(
       d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
       d.current_shipping_status || d.tracking_status ||
@@ -413,9 +471,20 @@ class DevolucoesFeed {
     if (/delivered|entreg|arrived|recebid/.test(ship)) return "recebido_cd";
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
-    const rStat = lower(d.return?.status || d.return_status || d.status_devolucao || d.status_log);
-    if (/closed|fechado|devolvido|finaliz/.test(rStat)) return "fechado";
+    // returns status (v2)
+    const rStat = lower(d.ml_return_status || d.return?.status || d.return_status || d.status_devolucao || d.status_log);
+    if (/^label_generated$|ready_to_ship|etiqueta/.test(rStat)) return "pronto_envio";
+    if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(rStat)) return "pendente";
+    if (/^shipped$|pending_delivered$/.test(rStat)) return "em_transporte";
+    if (/^delivered$/.test(rStat)) return "recebido_cd";
+    if (/^not_delivered$/.test(rStat)) return "pendente";
+    if (/^return_to_buyer$/.test(rStat)) return "retorno_comprador";
+    if (/^scheduled$/.test(rStat)) return "agendado";
+    if (/^expired$/.test(rStat)) return "expirado";
+    if (/^failed$/.test(rStat)) return "pendente";
+    if (/^cancelled$|canceled$/.test(rStat)) return "cancelado";
 
+    // interno
     const log = lower(d.log_status || d.flow || d.flow_status || d.ml_flow);
     return this.normalizeFlow(log);
   }
@@ -438,40 +507,55 @@ class DevolucoesFeed {
     if (/(delivered|entreg|arrived|recebid)/.test(s)) return "recebido_cd";
     return "pendente";
   }
-  getCachedFlow(orderId){
-    try{
-      const raw = localStorage.getItem(this.FLOW_CACHE_PREFIX+orderId);
-      if(!raw) return null;
-      const { ts, flow, neg } = JSON.parse(raw);
-      const ttl = neg ? this.ML_NOACCESS_TTL_MS : this.FLOW_TTL_MS;
-      if (!ts || Date.now()-ts > ttl) return null;
-      return flow || null;
-    }catch{ return null; }
-  }
-  setCachedFlow(orderId, flow){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{} }
-  setNoAccess(orderId){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{} }
 
+  // ===== Shipping flow (backend retorna .flow) =====
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";
     const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
     if (!r.ok) { if (r.status===403) this.setNoAccess(orderId); return ""; }
     const s = r.data || {};
-    return String(s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
+    return String(s.flow || s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
+  // ===== Resolve de fluxo/returns por card =====
   async resolveAndPatchFlow(d){
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
+    const claimId = d?.ml_claim_id;
     if (!id || !orderId) return;
     if (this._flowResolvesThisTick >= this.MAX_FLOW_RES_PER_TICK) return;
     if (!this.shouldTryFlow(orderId)) return;
     this._flowResolvesThisTick++;
 
-    const cached = this.getCachedFlow(orderId);
-    if (cached){
-      if (cached === "__NO_ACCESS__") return;
-      const canon = this.normalizeFlow(cached);
+    // 1) tenta cache de return para mostrar badge ML
+    if (claimId){
+      const cached = this.getCachedReturn(claimId);
+      if (cached){
+        const it = this.items.find(x => String(x.id) === String(id));
+        if (it){
+          if (cached.status) it.ml_return_status = cached.status;
+          if (cached.flow)   it.log_status = cached.flow;
+        }
+      } else {
+        const r = await this.fetchQuiet(`/api/ml/returns/state?claim_id=${encodeURIComponent(claimId)}&order_id=${encodeURIComponent(orderId)}&silent=1`);
+        if (r.ok){
+          const flow = String(r.data?.flow || "").toLowerCase();
+          const raw  = String(r.data?.raw_status || "").toLowerCase();
+          const it = this.items.find(x => String(x.id) === String(id));
+          if (it){
+            if (flow) it.log_status = flow;
+            if (raw)  it.ml_return_status = raw;
+          }
+          this.setCachedReturn(claimId, raw || "", flow || "");
+        }
+      }
+    }
+
+    // 2) shipping para complementar fluxo
+    const cachedFlow = this.getCachedFlow(orderId);
+    if (cachedFlow && cachedFlow !== "__NO_ACCESS__"){
+      const canon = this.normalizeFlow(cachedFlow);
       if (canon && canon !== this.computeFlow(d)){
         await this.patchFlow(id, canon);
         this.queueRefresh(250);
@@ -517,7 +601,7 @@ class DevolucoesFeed {
     const st=(this.filtros.status||"todos").toLowerCase();
 
     const filtrados=(this.items||[]).filter(d=>{
-      const textoMatch=[d.cliente_nome,d.id_venda,d.sku,d.loja_nome,d.status,d.log_status,d.shipping_status,d.ml_shipping_status]
+      const textoMatch=[d.cliente_nome,d.id_venda,d.sku,d.loja_nome,d.status,d.log_status,d.shipping_status,d.ml_shipping_status,d.ml_return_status]
         .map(x=>String(x||"").toLowerCase()).some(s=>s.includes(q));
       const statusMatch = st==="todos" || this.grupoStatus(d.status)===st;
       return textoMatch && statusMatch;
@@ -551,7 +635,7 @@ class DevolucoesFeed {
 
       const flowNow = this.computeFlow(d);
       const oid = d.id_venda || d.order_id;
-      if (flowNow==="pendente" && oid) this.resolveAndPatchFlow(d);
+      if ((flowNow==="pendente" || !d.ml_return_status) && oid) this.resolveAndPatchFlow(d);
     });
 
     this.renderPaginacao(totalPages);
@@ -573,7 +657,91 @@ class DevolucoesFeed {
     nav.innerHTML=html;
   }
 
-  // badges
+  // ===== badges =====
+  badgeNova(d){ return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
+
+  // Badge de status interno (banco)
+  badgeStatus(d){
+    const grp=this.grupoStatus(d.status);
+    const map={
+      pendente:'<div class="badge badge-pendente" title="Status interno">Pendente</div>',
+      aprovado:'<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
+      rejeitado:'<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
+      em_analise:'<div class="badge badge-info" title="Status interno">Em Análise</div>',
+      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
+    };
+    return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status||"—")}</div>`;
+  }
+
+  // Badge do FLUXO canônico (mistura shipping/returns)
+  badgeFluxo(d){
+    const flow = this.computeFlow(d);
+    const labels = {
+      disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação",
+      pronto_envio:"Pronto p/ Envio", em_transporte:"A caminho",
+      recebido_cd:"Recebido no CD", fechado:"Fechado", agendado:"Agendado",
+      expirar:"Expirar", retorno_comprador:"Retorno ao Comprador",
+      cancelado:"Cancelado", pendente:"Fluxo Pendente"
+    };
+    const css    = {
+      disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente",
+      pronto_envio:"badge-aprovado", em_transporte:"badge-info",
+      recebido_cd:"badge-aprovado", fechado:"badge-rejeitado",
+      agendado:"badge-info", expirar:"badge-info", retorno_comprador:"badge-info",
+      cancelado:"badge-rejeitado", pendente:"badge"
+    };
+    const key = flow || "pendente";
+    return `<div class="badge ${css[key]||"badge"}" title="Fluxo da devolução">${labels[key]||"Fluxo"}</div>`;
+  }
+
+  // Badge do STATUS DE DEVOLUÇÃO (ML Returns v2)
+  badgeReturnStatus(d){
+    const raw = String(d.ml_return_status || "").toLowerCase();
+    if (!raw) return "";
+    const label = this.humanReturnStatus(raw);
+    const cls = this.returnStatusClass(raw);
+    return `<div class="badge ${cls}" title="Status da devolução (ML)">${this.esc(label)}</div>`;
+  }
+  humanReturnStatus(s){
+    switch (s){
+      case "label_generated":
+      case "ready_to_ship":        return "Etiqueta pronta";
+      case "pending":
+      case "pending_cancel":
+      case "pending_failure":
+      case "pending_expiration":   return "Pendente";
+      case "scheduled":            return "Agendada p/ retirada";
+      case "shipped":              return "Devolução enviada";
+      case "pending_delivered":    return "A caminho";
+      case "delivered":            return "Recebida pelo vendedor";
+      case "not_delivered":        return "Não entregue";
+      case "return_to_buyer":      return "Retorno ao comprador";
+      case "expired":              return "Expirada";
+      case "failed":               return "Falhou";
+      case "cancelled":
+      case "canceled":             return "Cancelada";
+      default:                     return s;
+    }
+  }
+  returnStatusClass(s){
+    if (/^delivered$/.test(s))          return "badge-aprovado";
+    if (/^shipped$|pending_delivered$/.test(s)) return "badge-info";
+    if (/^ready_to_ship$|label_generated$/.test(s)) return "badge-pendente";
+    if (/^cancel/.test(s))              return "badge-rejeitado";
+    if (/^not_delivered$|failed$/.test(s)) return "badge-rejeitado";
+    if (/^scheduled$|return_to_buyer$/.test(s)) return "badge-info";
+    if (/^expired$/.test(s))            return "badge-rejeitado";
+    return "badge";
+  }
+
+  grupoStatus(st){
+    const s=String(st||"").toLowerCase();
+    for (const [g,set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return g;
+    if (s==="em_analise"||s==="em-analise") return "em_analise";
+    return "pendente";
+  }
+
+  // ===== Card =====
   card(d, index=0){
     const el=document.createElement("div");
     el.className="card-devolucao slide-up";
@@ -597,6 +765,7 @@ class DevolucoesFeed {
         </div>
         <div class="devolucao-acoes">
           ${this.badgeNova(d)}
+          ${this.badgeReturnStatus(d)}
           ${this.badgeFluxo(d)}
           ${this.badgeStatus(d)}
           <button class="botao botao-link" data-action="enrich" title="Forçar atualização no ML">Atualizar ML</button>
@@ -638,32 +807,6 @@ class DevolucoesFeed {
     return el;
   }
 
-  badgeNova(d){ return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
-  badgeStatus(d){
-    const grp=this.grupoStatus(d.status);
-    const map={
-      pendente:'<div class="badge badge-pendente" title="Status interno">Pendente</div>',
-      aprovado:'<div class="badge badge-aprovado" title="Status interno">Aprovado</div>',
-      rejeitado:'<div class="badge badge-rejeitado" title="Status interno">Rejeitado</div>',
-      em_analise:'<div class="badge badge-info" title="Status interno">Em Análise</div>',
-      finalizado:'<div class="badge badge-aprovado" title="Status interno">Finalizado</div>',
-    };
-    return map[grp] || `<div class="badge" title="Status interno">${this.esc(d.status||"—")}</div>`;
-  }
-  badgeFluxo(d){
-    const flow = this.computeFlow(d);
-    const labels = { disputa:"Em Disputa", mediacao:"Mediação", em_preparacao:"Em Preparação", pronto_envio:"Pronto p/ Envio", em_transporte:"A caminho", recebido_cd:"Recebido no CD", fechado:"Fechado", pendente:"Fluxo Pendente" };
-    const css    = { disputa:"badge-info", mediacao:"badge-info", em_preparacao:"badge-pendente", pronto_envio:"badge-aprovado", em_transporte:"badge-info", recebido_cd:"badge-aprovado", fechado:"badge-rejeitado", pendente:"badge" };
-    const key = flow || "pendente";
-    return `<div class="badge ${css[key]||"badge"}" title="Fluxo da devolução">${labels[key]||"Fluxo"}</div>`;
-  }
-  grupoStatus(st){
-    const s=String(st||"").toLowerCase();
-    for (const [g,set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return g;
-    if (s==="em_analise"||s==="em-analise") return "em_analise";
-    return "pendente";
-  }
-
   // ações
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
@@ -671,7 +814,7 @@ class DevolucoesFeed {
     else this.toast("Info",`Abrindo detalhes da devolução #${id}`,"info");
   }
   exportar(){
-    const cols=["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","valor_produto","valor_frete","created_at"];
+    const cols=["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","ml_return_status","valor_produto","valor_frete","created_at"];
     const linhas=[cols.join(",")].concat(this.items.map(d=>cols.map(c=>`"${String(d[c]??"").replace(/"/g,'""')}"`).join(",")));
     const blob=new Blob([linhas.join("\n")],{type:"text/csv;charset=utf-8"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="devolucoes.csv"; a.click(); URL.revokeObjectURL(url);
