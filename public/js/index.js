@@ -1,5 +1,6 @@
-// /public/js/index.js — Feed Geral com resolução de fluxo por card (com guardas p/ 401/403)
-// Anti-"F5": debounce de refresh + throttle por pedido + lock de sync + limite por tick
+// /public/js/index.js — Feed Geral com resolução de fluxo por card (guards 401/403)
+// Agora com auto-descoberta do endpoint de sync de devoluções (GET/POST + cache)
+
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -28,7 +29,7 @@ class DevolucoesFeed {
 
     // bloqueios específicos de ML/shipping
     this.ML_SHIP_BLOCK_KEY  = "rf:mlShipping:blockUntil";
-    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 1000 * 60;  // 2h
+    this.ML_SHIP_BLOCK_MS   = 2 * 60 * 60 * 1000;  // 2h
     this.ML_NOACCESS_TTL_MS = 24 * 60 * 60 * 1000; // 24h (cache negativo por pedido)
     this._ml403BurstCount   = 0;
     this._ml403BurstTimer   = null;
@@ -36,11 +37,16 @@ class DevolucoesFeed {
     // sync de mensagens (desligado por enquanto)
     this._messagesSyncDisabled = true;
 
-    // seller headers p/ /api/ml/*
+    // seller headers p/ /api/ml/* e /api/meli/*
     this.sellerId   = document.querySelector('meta[name="ml-seller-id"]')?.content?.trim()
                    || localStorage.getItem('rf:sellerId') || '';
     this.sellerNick = document.querySelector('meta[name="ml-seller-nick"]')?.content?.trim()
                    || localStorage.getItem('rf:sellerNick') || '';
+
+    // cache do endpoint de returns
+    this.RET_SYNC_URL_KEY    = "rf:returnsSync:url";
+    this.RET_SYNC_METHOD_KEY = "rf:returnsSync:method";
+    this._returnsSyncWarned  = false;
 
     this.STATUS_GRUPOS = {
       aprovado: new Set(["aprovado","autorizado","autorizada"]),
@@ -100,13 +106,18 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.ML_SHIP_BLOCK_KEY, String(Date.now()+ms)); }catch{}
   }
 
+  _headersFor(url){
+    const h = { Accept:"application/json" };
+    if (/^\/api\/ml\//.test(url) || /^\/api\/meli\//.test(url)) {
+      if (this.sellerId)   h['x-seller-id']   = this.sellerId;
+      if (this.sellerNick) h['x-seller-nick'] = this.sellerNick;
+    }
+    return h;
+  }
+
   async fetchQuiet(url){
     try{
-      const headers = { Accept:"application/json" };
-      if (url.startsWith('/api/ml')) {
-        if (this.sellerId)   headers['x-seller-id']   = this.sellerId;
-        if (this.sellerNick) headers['x-seller-nick'] = this.sellerNick;
-      }
+      const headers = this._headersFor(url);
       const r = await fetch(url,{ headers, credentials:"include" });
       const ct = r.headers.get("content-type")||""; let body=null;
       if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
@@ -128,11 +139,9 @@ class DevolucoesFeed {
           } else if (r.status===403) {
             this._ml403BurstCount++;
             if (!this._ml403BurstTimer) {
-              this._ml403BurstTimer = setTimeout(()=>{
-                this._ml403BurstCount = 0; this._ml403BurstTimer=null;
-              }, 60*1000);
+              this._ml403BurstTimer = setTimeout(()=>{ this._ml403BurstCount = 0; this._ml403BurstTimer=null; }, 60*1000);
             }
-            if (this._ml403BurstCount >= 3) { // 3 em 60s → pausa 2h
+            if (this._ml403BurstCount >= 3) {
               this.blockMlShip(); // 2h
               this._ml403BurstCount = 0;
               clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
@@ -146,6 +155,24 @@ class DevolucoesFeed {
       return { ok:true, status:r.status, data:body };
     }catch(e){
       console.info("[sync]", url, "→ falhou", e?.message||String(e));
+      return { ok:false, error:e?.message||String(e) };
+    }
+  }
+
+  async fetchQuietPost(url, jsonBody){
+    try{
+      const headers = { ...this._headersFor(url), "Content-Type":"application/json" };
+      const r = await fetch(url,{ method:"POST", headers, credentials:"include", body: JSON.stringify(jsonBody||{}) });
+      const ct = r.headers.get("content-type")||""; let body=null;
+      if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
+      if (!r.ok){
+        const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
+        console.info("[sync POST]", url, "→", r.status, (detail||"").toString().slice(0,160));
+        return { ok:false, status:r.status, detail, data:body };
+      }
+      return { ok:true, status:r.status, data:body };
+    }catch(e){
+      console.info("[sync POST]", url, "→ falhou", e?.message||String(e));
       return { ok:false, error:e?.message||String(e) };
     }
   }
@@ -171,6 +198,14 @@ class DevolucoesFeed {
     return Date.now()-this.firstSeenTs(key) <= this.NEW_WINDOW_MS;
   }
   purgeOldSeen(){ try{ const now=Date.now(); for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(!k||!k.startsWith(this.NEW_KEY_PREFIX)) continue; const ts=Number(localStorage.getItem(k))||0; if(now-ts>20*this.MAX_NEW_AGE_MS) localStorage.removeItem(k); } }catch{} }
+
+  // ===== carregar =====
+  getMockData(){ return [
+    { id:"4", id_venda:"DEV-2024-004", cliente_nome:"Ana Oliveira", loja_nome:"Loja Matriz", sku:"PROD-004", status:"em_analise", log_status:"em_preparacao", created_at:"2024-01-15T16:45:00Z", valor_produto:599.9, valor_frete:25.0 },
+    { id:"3", id_venda:"DEV-2024-003", cliente_nome:"Pedro Costa", loja_nome:"Loja Online", sku:"PROD-003", status:"rejeitado", log_status:"fechado", created_at:"2024-01-14T09:15:00Z", valor_produto:89.9, valor_frete:8.0 },
+    { id:"2", id_venda:"DEV-2024-002", cliente_nome:"Maria Santos", loja_nome:"Loja Shopping", sku:"PROD-002", status:"aprovado", log_status:"pronto_envio", created_at:"2024-01-13T14:30:00Z", valor_produto:149.9, valor_frete:12.0 },
+    { id:"1", id_venda:"DEV-2024-001", cliente_nome:"João Silva", loja_nome:"Loja Centro", sku:"PROD-001", status:"pendente", log_status:"em_transporte", created_at:"2024-01-12T10:00:00Z", valor_produto:299.9, valor_frete:15.0 },
+  ];}
 
   async carregar(){
     this.toggleSkeleton(true);
@@ -249,35 +284,109 @@ class DevolucoesFeed {
   claimsImportAllowed(){ try{ const until=Number(localStorage.getItem(this.CLAIMS_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
   blockClaimsImport(){ try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+this.CLAIMS_BLOCK_MS)); }catch{} }
 
-  // ===== Sync de devoluções (novo) =====
-  async syncReturnsWithFallback(){
-    const daysList = [3,7,30];
-    for (const d of daysList){
-      const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d) });
+  // ===== Descoberta + sync de devoluções =====
+  _getCachedRetSync(){
+    try {
+      const url = localStorage.getItem(this.RET_SYNC_URL_KEY) || "";
+      const method = localStorage.getItem(this.RET_SYNC_METHOD_KEY) || "";
+      if (url && method) return { url, method };
+    } catch {}
+    return null;
+  }
+  _setCachedRetSync(url, method){
+    try {
+      localStorage.setItem(this.RET_SYNC_URL_KEY, url);
+      localStorage.setItem(this.RET_SYNC_METHOD_KEY, method);
+    } catch {}
+  }
+  _clearCachedRetSync(){
+    try {
+      localStorage.removeItem(this.RET_SYNC_URL_KEY);
+      localStorage.removeItem(this.RET_SYNC_METHOD_KEY);
+    } catch {}
+  }
 
-      // 1) endpoint principal
-      for (const url of [
-        `/api/ml/returns/import?${qs.toString()}`,
-        `/api/ml/returns/sync?${qs.toString()}`,
-        `/api/returns/sync?${qs.toString()}`
-      ]) {
-        console.info("[sync] returns:", url);
-        const r = await this.fetchQuiet(url);
-        if (r.ok) return true;
+  async _tryOneRetEndpoint(base, days){
+    const qs = new URLSearchParams({ silent:"1", all:"1", days:String(days) }).toString();
 
-        if (r.status === 401) {
-          this.toast("Conectar Mercado Livre","Sua sessão do ML expirou. Entre novamente para sincronizar devoluções.","erro");
-          return false;
-        }
-        // 404: endpoint não existe — tenta próximo fallback
-        // 429/5xx: só sai do loop desse d e tenta outro d
-        if ([429,500,502,503,504].includes(r.status)) break;
+    // 1) Tenta GET
+    const getUrl = `${base}?${qs}`;
+    const g = await this.fetchQuiet(getUrl);
+    if (g.ok) return { ok:true, url: base, method:"GET" };
+    if (g.status === 401) return { ok:false, auth:true }; // precisa logar ML
+
+    // 2) Tenta POST
+    const p = await this.fetchQuietPost(base, { silent:1, all:1, days:days });
+    if (p.ok) return { ok:true, url: base, method:"POST" };
+    if (p.status === 401) return { ok:false, auth:true };
+
+    // Se 404/501/405 segue vida; outros erros só registram
+    return { ok:false };
+  }
+
+  async _discoverRetSync(days){
+    const candidates = [
+      // Prováveis
+      "/api/ml/returns/import",
+      "/api/ml/returns/sync",
+      "/api/returns/sync",
+      "/api/returns/import",
+      // Variações comuns
+      "/api/meli/returns/import",
+      "/api/ml/returns/pull",
+      "/api/ml/returns/fetch",
+      "/api/returns/ingest",
+      "/api/returns/ml/sync",
+    ];
+    for (const base of candidates){
+      const r = await this._tryOneRetEndpoint(base, days);
+      if (r.auth) { // falta autenticação ML
+        this.toast("Conectar Mercado Livre","Sua sessão do ML expirou. Entre novamente para sincronizar devoluções.","erro");
+        return null;
       }
+      if (r.ok) {
+        this._setCachedRetSync(r.url, r.method);
+        console.info("[returns] endpoint descoberto:", r.method, r.url);
+        return r;
+      }
+    }
+    return null;
+  }
+
+  async syncReturnsWithFallback(){
+    // Tenta usar o cache primeiro
+    const cached = this._getCachedRetSync();
+    const daysList = [3,7,30];
+
+    // 1) Se tenho cache, tento com ele (3→7→30)
+    if (cached){
+      for (const d of daysList){
+        console.info("[returns] usando cache", cached.method, cached.url, d+"d");
+        const res = (cached.method === "POST")
+          ? await this.fetchQuietPost(cached.url, { silent:1, all:1, days:d })
+          : await this.fetchQuiet(`${cached.url}?${new URLSearchParams({silent:"1",all:"1",days:String(d)})}`);
+        if (res.ok) return true;
+        // Se 404, invalida cache e vai para descoberta
+        if (res.status === 404) { this._clearCachedRetSync(); break; }
+        if (res.status === 401) { this.toast("Conectar Mercado Livre","Sua sessão do ML expirou. Entre novamente para sincronizar devoluções.","erro"); return false; }
+      }
+    }
+
+    // 2) Descobre endpoint (3→7→30)
+    for (const d of daysList){
+      const found = await this._discoverRetSync(d);
+      if (found) return true; // a própria descoberta já fez a call que deu OK
+    }
+
+    // 3) Se nada deu certo, avisa uma vez só
+    if (!this._returnsSyncWarned){
+      this._returnsSyncWarned = true;
+      this.toast("Sem endpoint de devoluções","Não encontrei rota de sync/import no backend. Sigo mostrando o que já está no banco.", "erro");
     }
     return false;
   }
 
-  // ===== Sync principal (curto) =====
+  // ===== Sync de claims (curto) =====
   async syncClaimsWithFallback(){
     if (!this.claimsImportAllowed()) return false;
     for (const d of [3,7,30]){
@@ -296,18 +405,18 @@ class DevolucoesFeed {
   }
 
   async atualizarDados(){
-    if (this._syncInFlight) return;            // lock anti-dobro
+    if (this._syncInFlight) return; // lock anti-dobro
     this._syncInFlight = true;
     try{
       const before=new Set(this.items.map(d=>String(d.id)));
 
-      // 1) puxa novas devoluções do ML (urgente)
+      // 1) puxa novas devoluções do ML (com descoberta)
       await this.syncReturnsWithFallback();
 
       // 2) tenta também claims (movimenta estágios/fluxo)
       await this.syncClaimsWithFallback();
 
-      // 3) recarrega lista e renderiza
+      // 3) recarrega
       await this.carregar();
       const novos=this.items.filter(d=>!before.has(String(d.id))).length;
       if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -447,13 +556,12 @@ class DevolucoesFeed {
     const orderId = d?.id_venda || d?.order_id;
     if (!id || !orderId) return;
 
-    // limite por ciclo de render — conta a tentativa antes do fetch
+    // limite por ciclo de render
     if (this._flowResolvesThisTick >= this.MAX_FLOW_RES_PER_TICK) return;
 
     // throttle
     if (!this.shouldTryFlow(orderId)) return;
 
-    // conta esta tentativa
     this._flowResolvesThisTick++;
 
     // cache
@@ -613,7 +721,7 @@ class DevolucoesFeed {
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0 0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0 0 1 .329.938V10.5a1.5 1.5 0 0 1-1.5 1.5H14a2 2 0 1 1-4 0H5a2 2 0 1 1-3.998-.085A1.5 1.5 0 0 1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorFrete)}</span>
         </div>
@@ -622,7 +730,7 @@ class DevolucoesFeed {
       <div class="devolucao-footer">
         <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
           <button class="botao botao-outline botao-detalhes" data-action="open">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0 0 0-5z"/></svg>
             Ver Detalhes
           </button>
         </a>
