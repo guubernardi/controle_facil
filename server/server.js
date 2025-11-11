@@ -300,19 +300,26 @@ try {
   console.warn('[BOOT] Returns Log opcional:', e?.message || e);
 }
 
-/* Returns principal */
-try { const r = require('./routes/returns'); if (typeof r === 'function') r(app); console.log('[BOOT] Returns ok'); }
-catch (e) { console.warn('[BOOT] Returns opcional:', e?.message || e); }
+/* Returns principal (registrador em função) */
+try {
+  const r = require('./routes/returns');
+  if (typeof r === 'function') r(app);
+  else app.use('/api', r);
+  console.log('[BOOT] Returns ok');
+} catch (e) { console.warn('[BOOT] Returns opcional:', e?.message || e); }
 
+/* Chat por devolução */
 try {
   const r = require('./routes/returns-messages');
   if (typeof r === 'function') r(app); else app.use('/api', r);
   console.log('[BOOT] Chat por Devolução ok');
 } catch (e) { console.warn('[BOOT] Chat por Devolução opcional:', e?.message || e); }
 
+/* Uploads */
 try { app.use('/api/uploads', require('./routes/uploads')); console.log('[BOOT] Uploads ok'); }
 catch (e) { console.warn('[BOOT] Uploads opcional:', e?.message || e); }
 
+/* Webhook / OAuth / API auxiliares do ML */
 try { const r = require('./routes/ml-webhook'); if (typeof r === 'function') r(app); console.log('[BOOT] ML webhook ok'); }
 catch (e) { console.warn('[BOOT] ML webhook opcional:', e?.message || e); }
 
@@ -356,6 +363,19 @@ try {
     console.log('[BOOT] ML Sync ok (/api/ml/claims/import)');
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
+
+/* === ML RETURNS (NOVO) — registrador em função === */
+try {
+  const registerMlReturns = require('./routes/ml-returns'); // <- AQUI
+  if (typeof registerMlReturns === 'function') {
+    registerMlReturns(app); // monta /api/ml/returns/open|search|list|import
+  } else {
+    app.use('/api', registerMlReturns);
+  }
+  console.log('[BOOT] ML Returns ok (/api/ml/returns/...)');
+} catch (e) {
+  console.warn('[BOOT] ML Returns opcional:', e?.message || e);
+}
 
 /* === Rotas auxiliares que não conflitam com /api/returns === */
 try { app.use('/api/ml', require('./routes/ml-reenrich')); console.log('[BOOT] ML Re-enrich ok'); }
