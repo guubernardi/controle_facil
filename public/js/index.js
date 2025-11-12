@@ -132,7 +132,7 @@ class DevolucoesFeed {
               this.blockMlShip();
               this._ml403BurstCount = 0;
               clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
-              this.toast("Pausado por 2h","Muitos 403 do ML (pedido de outra conta). Pausei consultas de shipping.","erro");
+              this.toast("Erro de Acesso, Tente Novamente");
             }
           }
         }
@@ -260,7 +260,7 @@ class DevolucoesFeed {
       const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","ML recusou o import (400 invalid_claim_id). Vou pausar por 6h.","erro"); }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","Erro no Import, Tente novamente.",); }
         return false;
       }
     }
@@ -282,7 +282,7 @@ class DevolucoesFeed {
     }
   }
 
-  // ===== Shipping flow (backend retorna .flow) =====
+  // ===== Shipping flow (backend retorna .flow/.suggested_log_status) =====
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";
@@ -314,11 +314,11 @@ class DevolucoesFeed {
       }
     }
 
-    // 2) Shipping state (sugestão de fluxo) — ignora se 403
+    // 2) Shipping state (usa /status com update=1 para também persistir no back)
     if (orderId && this.mlShipAllowed()) {
-      const r = await this.fetchQuiet(`/api/ml/shipping/sync?order_id=${encodeURIComponent(orderId)}&silent=1`);
+      const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&update=1&silent=1`);
       if (r.ok) {
-        const flow = String(r.data?.flow || r.data?.suggested_log_status || r.data?.ml_substatus || r.data?.ml_status || "").toLowerCase();
+        const flow = String(r.data?.suggested_log_status || r.data?.ml_substatus || r.data?.ml_status || r.data?.flow || "").toLowerCase();
         if (flow) {
           if (it) it.log_status = this.normalizeFlow(flow);
           this.setCachedFlow(orderId, flow);
@@ -353,7 +353,7 @@ class DevolucoesFeed {
     if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
     if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
 
-    // shipping
+    // shipping (NÃO promove delivered para recebido_cd)
     const sStat = lower(
       d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
       d.current_shipping_status || d.tracking_status ||
@@ -363,10 +363,10 @@ class DevolucoesFeed {
     const ship = [sStat, sSub].join("_");
     if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return "em_preparacao";
     if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return "em_transporte";
-    if (/delivered|entreg|arrived|recebid/.test(ship)) return "recebido_cd";
+    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente"; // <<< ajuste
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
-    // returns status (v2)
+    // returns status (v2) — AQUI sim “delivered” vira Recebido no CD
     const rStat = lower(d.ml_return_status || d.return?.status || d.return_status || d.status_devolucao || d.status_log);
     if (/^label_generated$|ready_to_ship|etiqueta/.test(rStat)) return "pronto_envio";
     if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(rStat)) return "pendente";
@@ -399,7 +399,7 @@ class DevolucoesFeed {
     if (/(prepar|prep|ready_to_ship)/.test(s)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(s)) return "pronto_envio";
     if (/(transit|transito|transporte|shipped|out_for_delivery|returning_to_sender)/.test(s)) return "em_transporte";
-    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "recebido_cd";
+    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente"; // <<< ajuste
     return "pendente";
   }
 

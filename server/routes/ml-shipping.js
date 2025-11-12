@@ -26,15 +26,29 @@ async function tableHasColumns(table, cols) {
   return out;
 }
 
+/**
+ * Normalização de fluxo baseada APENAS no shipping do PEDIDO.
+ * Importante: shipping "delivered" NÃO vira "recebido_cd".
+ * Só a DEVOLUÇÃO (ml_return_status === 'delivered') pode marcar recebido no CD.
+ */
 function normalizeFlow(mlStatus, mlSub) {
-  const s = String(mlStatus || '').toLowerCase();
-  const sub = String(mlSub || '').toLowerCase();
+  const s   = String(mlStatus || '').toLowerCase();
+  const sub = String(mlSub    || '').toLowerCase();
 
-  if (/^ready_to_ship|handling|to_be_agreed/.test(s) || /(label|ready|etiq|pronto)/.test(sub)) return 'em_preparacao';
+  if (/^ready_to_ship|handling|to_be_agreed/.test(s) || /(label|ready|etiq|pronto)/.test(sub)) {
+    return 'em_preparacao';
+  }
   if (/^shipped|not_delivered|in_transit|returning|shipping/.test(s) ||
-      /(in_transit|on_the_way|shipping_in_progress|out_for_delivery|a_caminho|em_transito)/.test(sub)) return 'em_transporte';
-  if (/^delivered$/.test(s) || /(delivered|arrived|recebid|entreg)/.test(sub)) return 'recebido_cd';
-  if (/^cancel/.test(s) || /(returned|fechado|devolvido|closed|cancel)/.test(sub)) return 'fechado';
+      /(in_transit|on_the_way|shipping_in_progress|out_for_delivery|a_caminho|em_transito)/.test(sub)) {
+    return 'em_transporte';
+  }
+  // <<< alteração crucial: delivered NÃO promove para recebido_cd
+  if (/^delivered$/.test(s) || /(delivered|arrived|recebid|entreg)/.test(sub)) {
+    return 'pendente';
+  }
+  if (/^cancel/.test(s) || /(returned|fechado|devolvido|closed|cancel)/.test(sub)) {
+    return 'fechado';
+  }
   return 'pendente';
 }
 
@@ -42,7 +56,7 @@ function normalizeFlow(mlStatus, mlSub) {
 async function getActiveMlToken(req) {
   // 1) sessão (suas estruturas possíveis)
   if (req?.session?.user?.ml?.access_token) return req.session.user.ml.access_token;
-  if (req?.user?.ml?.access_token) return req.user.ml.access_token;
+  if (req?.user?.ml?.access_token)         return req.user.ml.access_token;
 
   // 2) Authorization: Bearer
   const hAuth = req.get('authorization') || '';
@@ -50,7 +64,7 @@ async function getActiveMlToken(req) {
   if (m) return m[1];
 
   // 3) Seller headers vindos do front (para filtrar ml_tokens)
-  const sellerId   = req.get('x-seller-id') || null;
+  const sellerId   = req.get('x-seller-id')   || null;
   const sellerNick = req.get('x-seller-nick') || null;
 
   // 4) ml_tokens (mais recente, preferindo is_active)
@@ -61,13 +75,13 @@ async function getActiveMlToken(req) {
     let p = 1;
 
     if (cols.is_active) where.push(`is_active IS TRUE`);
-    if (sellerId)   { where.push(`user_id = $${p++}::bigint`); params.push(sellerId); }
-    if (sellerNick) { where.push(`lower(nickname) = lower($${p++})`); params.push(sellerNick); }
+    if (sellerId)       { where.push(`user_id = $${p++}::bigint`); params.push(sellerId); }
+    if (sellerNick)     { where.push(`lower(nickname) = lower($${p++})`); params.push(sellerNick); }
 
     const sql = `
       SELECT access_token
         FROM ml_tokens
-       ${where.length ? `WHERE ${where.join(' OR ')}` : ``}
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ``}
        ORDER BY updated_at DESC NULLS LAST
        LIMIT 1`;
     const { rows } = await query(sql, params);
@@ -118,7 +132,7 @@ async function fallbackFromDb(orderId) {
     [orderId]
   );
   const r = rows[0] || {};
-  const mlStatus = r.shipping_status || r.ml_shipping_status || null;
+  const mlStatus  = r.shipping_status || r.ml_shipping_status || null;
   const logStatus = r.log_status || normalizeFlow(mlStatus, null);
   return {
     order_id: orderId,
@@ -145,7 +159,7 @@ async function getShippingStatusFromOrder(orderId, token) {
       const ship = await mlFetch(`/shipments/${encodeURIComponent(shipmentId)}`, token);
       return {
         shipmentId,
-        mlStatus: ship?.status || null,
+        mlStatus:    ship?.status    || null,
         mlSubstatus: ship?.substatus || null
       };
     }
@@ -167,18 +181,18 @@ async function getShippingStatusFromOrder(orderId, token) {
       const search = await mlFetch(path, token);
       const first =
         (Array.isArray(search?.results) && search.results[0]) ||
-        (Array.isArray(search?.data) && search.data[0]) ||
+        (Array.isArray(search?.data)    && search.data[0]) ||
         null;
       if (first?.id) {
         const ship = await mlFetch(`/shipments/${encodeURIComponent(first.id)}`, token);
         return {
-          shipmentId: first.id,
-          mlStatus: ship?.status || first.status || null,
+          shipmentId:  first.id,
+          mlStatus:    ship?.status    || first.status    || null,
           mlSubstatus: ship?.substatus || first.substatus || null
         };
       }
     } catch (e) {
-      if (e?.status === 401 || e?.status === 403) throw e; // sem acesso → deixa o caller tratar
+      if (e?.status === 401 || e?.status === 403) throw e; // sem acesso → caller trata
       // 404 aqui significa "não achei" — segue tentando as demais variações
     }
   }
@@ -194,8 +208,14 @@ async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus 
   const params = [];
   let p = 1;
 
-  if (cols.ml_shipping_status) { sets.push(`ml_shipping_status = $${p++}`); params.push(mlSubstatus || mlStatus || null); }
-  if (cols.log_status && logStatus) { sets.push(`log_status = $${p++}`); params.push(logStatus); }
+  if (cols.ml_shipping_status) {
+    sets.push(`ml_shipping_status = $${p++}`);
+    params.push(mlSubstatus || mlStatus || null);
+  }
+  if (cols.log_status && logStatus) {
+    sets.push(`log_status = $${p++}`);
+    params.push(logStatus);
+  }
   if (cols.updated_at) sets.push(`updated_at = now()`);
 
   if (!sets.length) return { updated: false };
@@ -213,9 +233,9 @@ async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus 
 // -------- GET /api/ml/shipping/status --------
 router.get('/shipping/status', async (req, res) => {
   try {
-    const orderId = req.query.order_id || req.query.orderId || null;
-    const shipmentIdQ = req.query.shipment_id || req.query.shipmentId || null;
-    const doUpdate = String(req.query.update ?? '1') !== '0';
+    const orderId    = req.query.order_id  || req.query.orderId  || null;
+    const shipmentIdQ= req.query.shipment_id || req.query.shipmentId || null;
+    const doUpdate   = String(req.query.update ?? '1') !== '0';
 
     if (!orderId && !shipmentIdQ) {
       return res.status(400).json({ error: 'missing_param', detail: 'Informe order_id ou shipment_id' });
@@ -223,7 +243,6 @@ router.get('/shipping/status', async (req, res) => {
 
     const token = await getActiveMlToken(req);
     if (!token) {
-      // sem token → devolve fallback do banco (200 OK) pra não quebrar o front
       if (orderId) {
         const fb = await fallbackFromDb(orderId);
         return res.json({ ok: true, ...fb });
@@ -236,12 +255,12 @@ router.get('/shipping/status', async (req, res) => {
 
     if (shipmentId) {
       const ship = await mlFetch(`/shipments/${encodeURIComponent(shipmentId)}`, token);
-      mlStatus = ship?.status || null;
+      mlStatus    = ship?.status    || null;
       mlSubstatus = ship?.substatus || null;
     } else {
       const s = await getShippingStatusFromOrder(orderId, token);
       shipmentId = s.shipmentId;
-      mlStatus = s.mlStatus;
+      mlStatus    = s.mlStatus;
       mlSubstatus = s.mlSubstatus;
     }
 
@@ -260,7 +279,6 @@ router.get('/shipping/status', async (req, res) => {
       suggested_log_status: suggested
     });
   } catch (e) {
-    // Se for erro do ML, preserve o status (p/ front aplicar pausas/heurísticas)
     const code = e?.status || 500;
 
     // Para 401/403/404, se houver order_id, tente fallback do banco
@@ -284,17 +302,16 @@ router.get('/shipping/status', async (req, res) => {
 router.get('/shipping/sync', async (req, res) => {
   try {
     const orderId = req.query.order_id || req.query.orderId || null;
-    const days = parseInt(req.query.days || req.query.recent_days || '0', 10) || 0;
-    const silent = /^1|true$/i.test(String(req.query.silent || '0'));
+    const days    = parseInt(req.query.days || req.query.recent_days || '0', 10) || 0;
+    const silent  = /^1|true$/i.test(String(req.query.silent || '0'));
 
     const token = await getActiveMlToken(req);
     if (!token) {
-      // sem token: não quebra o front
       return res.status(200).json({ ok: false, warning: 'missing_access_token', updated: 0, total: 0 });
     }
 
     const touched = [];
-    const errs = [];
+    const errs    = [];
 
     const runOne = async (oid) => {
       try {
