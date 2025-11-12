@@ -23,9 +23,13 @@ async function getMLToken(req) {
   } catch { return null; }
 }
 
-async function mlFetch(path, token) {
+async function mlFetch(path, token, opts = {}) {
   const url = `https://api.mercadolibre.com${path}`;
-  const r = await _fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const r = await _fetch(url, {
+    method: opts.method || 'GET',
+    headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) },
+    body: opts.body || undefined
+  });
   let j = null; try { j = await r.json(); } catch {}
   if (!r.ok) {
     const msg = (j && (j.message || j.error))
@@ -37,12 +41,13 @@ async function mlFetch(path, token) {
 }
 
 const norm = s => String(s || '').toLowerCase().trim();
+const yes = v => ['1','true','yes','y','sim'].includes(String(v||'').toLowerCase());
 
 /* =========================================================================
  *  MAPEAMENTO DE STATUS
  * ========================================================================= */
 
-// A) SHIPPING (envios) → fluxo canônico do seu sistema
+// A) SHIPPING (envios) → fluxo canônico do sistema
 function canonFlowFromShipping(status, substatus) {
   const s = norm(status), ss = norm(substatus);
   const t = `${s}_${ss}`;
@@ -62,7 +67,7 @@ function canonFlowFromReturnStatus(returnStatus) {
   const s = norm(returnStatus);
   if (!s) return 'pendente';
 
-  // Novos estados do recurso v2
+  // Estados do recurso v2
   if (/^label_generated$|ready_to_ship|etiqueta/.test(s)) return 'pronto_envio';
   if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(s)) return 'pendente';
   if (/^shipped$|pending_delivered$/.test(s)) return 'em_transporte';
@@ -106,7 +111,6 @@ function canonFlowFromReturnObject(ret) {
  *  PERSISTÊNCIA
  * ========================================================================= */
 
-// Atualiza ambas as colunas para o front ter dado (status e log_status)
 async function persistFlowByOrder(orderId, flow, updatedBy) {
   const { rowCount } = await query(
     `UPDATE devolucoes
@@ -120,7 +124,6 @@ async function persistFlowByOrder(orderId, flow, updatedBy) {
   return rowCount;
 }
 
-// Atualiza por order_id; se não achar, tenta claim_id e por fim return_id
 async function persistFlowSmart({ orderId, claimId, returnId, flow, updatedBy }) {
   let rows = 0;
 
@@ -151,7 +154,7 @@ async function persistFlowSmart({ orderId, claimId, returnId, flow, updatedBy })
         [String(returnId), flow, updatedBy || 'ml-sync']
       );
       rows = r.rowCount || 0;
-    } catch { /* coluna pode não existir; ok */ }
+    } catch { /* coluna pode não existir */ }
   }
 
   return rows;
@@ -163,6 +166,9 @@ async function persistFlowSmart({ orderId, claimId, returnId, flow, updatedBy })
 
 // Resolve estado de shipping via várias fontes
 async function resolveShippingFromML(orderId, token) {
+  // flag para retornar "forbidden" sem quebrar o fluxo
+  let lastError = null;
+
   // 1) /orders/:id/shipments
   try {
     const data = await mlFetch(`/orders/${orderId}/shipments`, token);
@@ -180,7 +186,10 @@ async function resolveShippingFromML(orderId, token) {
         return { status, substatus, shipment_id: ship.id || null, source: 'orders/:id/shipments' };
       }
     }
-  } catch {}
+  } catch (e) {
+    lastError = e;
+    if (e.status === 403 || e.status === 404) return { status:null, substatus:null, shipment_id:null, source:'orders/:id/shipments', forbidden:true, error:e.message };
+  }
 
   // 2) /shipments?order_id=...
   try {
@@ -194,7 +203,10 @@ async function resolveShippingFromML(orderId, token) {
         source: 'shipments?order_id'
       };
     }
-  } catch {}
+  } catch (e) {
+    lastError = e;
+    if (e.status === 403 || e.status === 404) return { status:null, substatus:null, shipment_id:null, source:'shipments?order_id', forbidden:true, error:e.message };
+  }
 
   // 3) /orders/:id + /shipments/:id
   try {
@@ -209,15 +221,74 @@ async function resolveShippingFromML(orderId, token) {
         source: 'orders/:id ⇒ shipments/:id'
       };
     }
-  } catch {}
+  } catch (e) {
+    lastError = e;
+    if (e.status === 403 || e.status === 404) return { status:null, substatus:null, shipment_id:null, source:'orders ⇒ shipments', forbidden:true, error:e.message };
+  }
 
-  return { status: null, substatus: null, shipment_id: null, source: 'not_found' };
+  return { status: null, substatus: null, shipment_id: null, source: 'not_found', error: lastError?.message || null };
 }
 
 // Returns por claim_id (v2)
 async function resolveReturnByClaim(claimId, token) {
   const ret = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`, token);
   return ret; // objeto único
+}
+
+// Busca claim por order_id (ajuda quando a tabela ainda não tem claim salvo)
+async function findClaimByOrderId(orderId, token) {
+  try {
+    const data = await mlFetch(`/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}`, token);
+    const arr = Array.isArray(data?.results) ? data.results
+            : Array.isArray(data?.data)    ? data.data
+            : Array.isArray(data)          ? data : [];
+    return arr[0]?.id || arr[0]?.claim_id || null;
+  } catch { return null; }
+}
+
+/* =========================================================================
+ *  PÍLULA (consolida Claim + Return → rótulo curto)
+ * ========================================================================= */
+
+function computePill({ claim, ret }) {
+  // 1) Mediação (dispute) tem prioridade
+  const stage = norm(claim?.stage);
+  if (stage === 'dispute') {
+    return { code: 'em_mediacao', label: 'Em mediação', tone: 'warning' };
+  }
+
+  // 2) Return + shipments
+  const rStatus = norm(ret?.status);
+  const ships = Array.isArray(ret?.shipments) ? ret.shipments : [];
+  const shipStatuses = new Set(ships.map(s => norm(s?.status)));
+
+  // pronto p/ envio
+  if (rStatus === 'label_generated' || shipStatuses.has('ready_to_ship') || rStatus === 'pending') {
+    return { code: 'pronto_envio', label: 'Pronto p/ envio', tone: 'info' };
+  }
+
+  // em transporte
+  const transitSet = ['shipped', 'in_transit', 'pending_delivered', 'not_delivered'];
+  if (transitSet.some(s => shipStatuses.has(s)) || transitSet.includes(rStatus)) {
+    return { code: 'em_transporte', label: 'Em transporte', tone: 'info' };
+  }
+
+  // entregue (chegou ao destino de devolução)
+  if (rStatus === 'delivered' || shipStatuses.has('delivered')) {
+    const toWh = ships.some(s => norm(s?.destination?.name) === 'warehouse' && norm(s.status) === 'delivered');
+    return toWh
+      ? { code: 'recebido_cd', label: 'Recebido no CD', tone: 'success' }
+      : { code: 'entregue', label: 'Entregue', tone: 'success' };
+  }
+
+  // encerrado/cancelado
+  const closedSet = ['cancelled', 'expired', 'return_to_buyer', 'closed'];
+  if (closedSet.includes(rStatus) || norm(claim?.status) === 'closed') {
+    return { code: 'encerrado', label: 'Encerrado', tone: 'muted' };
+  }
+
+  // fallback
+  return { code: 'pendente', label: 'Pendente', tone: 'muted' };
 }
 
 /* =========================================================================
@@ -227,7 +298,7 @@ async function resolveReturnByClaim(claimId, token) {
 module.exports = function registerMlSync(app) {
   // ===== SHIPPING: estado único por order_id
   app.get('/api/ml/shipping/state', async (req, res) => {
-    const silent = ['1','true','yes'].includes(String(req.query.silent||'').toLowerCase());
+    const silent = yes(req.query.silent);
     try {
       const orderId = String(req.query.order_id || '').trim();
       if (!orderId) return res.status(400).json({ error: 'order_id obrigatório' });
@@ -241,7 +312,8 @@ module.exports = function registerMlSync(app) {
         await persistFlowByOrder(orderId, flow, 'ml-shipping-state');
         return res.json({ ok: true, order_id: orderId, flow, ...info });
       }
-      res.json({ ok: false, order_id: orderId, ...info });
+      // não quebra em 401/403 — devolve ok:false com a razão
+      return res.json({ ok: false, order_id: orderId, ...info });
     } catch (e) {
       if (silent) return res.json({ ok: false, error: e.message, upstream: e.payload || null });
       res.status(502).json({ error: 'Falha na consulta ao ML', detail: e.message, upstream: e.payload || null });
@@ -250,7 +322,7 @@ module.exports = function registerMlSync(app) {
 
   // ===== SHIPPING: varredura (por período) ou one-shot via ?order_id
   app.get('/api/ml/shipping/sync', async (req, res) => {
-    const silent = ['1','true','yes'].includes(String(req.query.silent||'').toLowerCase());
+    const silent = yes(req.query.silent);
     try {
       const token = await getMLToken(req);
       if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
@@ -296,7 +368,7 @@ module.exports = function registerMlSync(app) {
   // ===== RETURNS: estado por claim_id
   // GET /api/ml/returns/state?claim_id=... [&order_id=...] [&silent=1]
   app.get('/api/ml/returns/state', async (req, res) => {
-    const silent = ['1','true','yes'].includes(String(req.query.silent||'').toLowerCase());
+    const silent = yes(req.query.silent);
     try {
       const claimId = String(req.query.claim_id || '').trim();
       const orderId = req.query.order_id ? String(req.query.order_id).trim() : null;
@@ -335,7 +407,7 @@ module.exports = function registerMlSync(app) {
   // ===== RETURNS: varredura por período (usa claim_id salvo na tabela)
   // GET /api/ml/returns/sync?recent_days=7[&silent=1]
   app.get('/api/ml/returns/sync', async (req, res) => {
-    const silent = ['1','true','yes'].includes(String(req.query.silent||'').toLowerCase());
+    const silent = yes(req.query.silent);
     try {
       const token = await getMLToken(req);
       if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
@@ -365,7 +437,7 @@ module.exports = function registerMlSync(app) {
         } catch (e) {
           // ignora 401/403 silenciosamente
           if (!(e.status === 401 || e.status === 403)) {
-            // opcional: console.warn('[returns/sync]', r.claim_id, e.message);
+            // console.warn('[returns/sync]', r.claim_id, e.message);
           }
         }
       }
@@ -373,6 +445,78 @@ module.exports = function registerMlSync(app) {
     } catch (e) {
       if (silent) return res.json({ ok: false, error: e.message });
       res.status(502).json({ error: 'Falha no sync de returns', detail: e.message });
+    }
+  });
+
+  /* ===== PÍLULA: consolida claim+return e devolve rótulo curto ========= */
+
+  // GET /api/ml/returns/:dev_id/pill
+  // dev_id = id da sua tabela "devolucoes". Opcionalmente aceitar ?order_id e/ou ?claim_id.
+  app.get('/api/ml/returns/:dev_id/pill', async (req, res) => {
+    const silent = yes(req.query.silent);
+    try {
+      const devId = Number(req.params.dev_id || 0);
+      const token = await getMLToken(req);
+      if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
+
+      // 1) tenta obter dados da devolução na sua tabela
+      let orderId = null, claimId = null;
+      try {
+        const { rows } = await query(
+          `SELECT id, id_venda::text AS order_id,
+                  COALESCE(ml_claim_id::text, claim_id::text) AS claim_id
+             FROM devolucoes
+            WHERE id = $1
+            LIMIT 1`,
+          [devId]
+        );
+        orderId = rows[0]?.order_id || null;
+        claimId = rows[0]?.claim_id || null;
+      } catch {}
+
+      // overrides por query
+      if (req.query.order_id) orderId = String(req.query.order_id);
+      if (req.query.claim_id) claimId = String(req.query.claim_id);
+
+      // 2) se não tiver claim, tenta descobrir via order_id
+      if (!claimId && orderId) {
+        claimId = await findClaimByOrderId(orderId, token);
+      }
+
+      // 3) coleta claim e return
+      let claimDet = {};
+      if (claimId) {
+        try { claimDet = await mlFetch(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}`, token); }
+        catch (e) { if (!(e.status === 401 || e.status === 403 || e.status === 404)) throw e; }
+      }
+
+      let ret = {};
+      if (claimId) {
+        try { ret = await resolveReturnByClaim(claimId, token); }
+        catch (e) { if (!(e.status === 401 || e.status === 403 || e.status === 404)) throw e; }
+      }
+
+      const pill = computePill({ claim: claimDet, ret });
+      // persistimos o fluxo canônico junto (ajuda o SSR/SQL)
+      try {
+        const flow = canonFlowFromReturnObject(ret);
+        if (flow) await persistFlowSmart({ orderId, claimId, returnId: ret?.id, flow, updatedBy: 'ml-pill' });
+      } catch {}
+
+      return res.json({
+        ok: true,
+        pill,
+        raw: {
+          claim: { id: claimId || null, status: claimDet?.status || null, stage: claimDet?.stage || null },
+          ret:   { id: ret?.id || null, status: ret?.status || null, refund_at: ret?.refund_at || null,
+                   shipments: Array.isArray(ret?.shipments)
+                     ? ret.shipments.map(s => ({ shipment_id: s.shipment_id, status: s.status, type: s.type, dest: s?.destination?.name || null }))
+                     : [] }
+        }
+      });
+    } catch (e) {
+      if (silent) return res.json({ ok: false, error: e.message, upstream: e.payload || null });
+      res.status(502).json({ error: 'Falha ao consolidar pílula', detail: e.message, upstream: e.payload || null });
     }
   });
 

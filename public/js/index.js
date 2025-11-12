@@ -65,6 +65,9 @@ class DevolucoesFeed {
     this.MAX_FLOW_RES_PER_TICK = 10;
     this._flowResolvesThisTick = 0;
 
+    // mensagem de erro genérica
+    this.GENERIC_ERR = "Erro ao importar. Tente novamente";
+
     this.inicializar();
   }
 
@@ -121,7 +124,7 @@ class DevolucoesFeed {
             this.blockMlShip(30*60*1000);
             if (!this._lastSyncErrShown){
               this._lastSyncErrShown = true;
-              this.toast("Conectar Mercado Livre","Sua sessão do ML não está ativa para esse pedido. Pausando 30min.","erro");
+              this.toast("Erro", this.GENERIC_ERR, "erro");
             }
           } else if (r.status===403) {
             this._ml403BurstCount++;
@@ -132,7 +135,7 @@ class DevolucoesFeed {
               this.blockMlShip();
               this._ml403BurstCount = 0;
               clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
-              this.toast("Erro de Acesso, Tente Novamente");
+              this.toast("Erro", this.GENERIC_ERR, "erro");
             }
           }
         }
@@ -191,7 +194,7 @@ class DevolucoesFeed {
       if(!list && !this.items.length && last) throw last;
     }catch(e){
       console.warn("[index] Falha ao carregar", e?.message);
-      this.toast("Aviso","Não consegui carregar as devoluções.","erro");
+      this.toast("Erro", this.GENERIC_ERR, "erro");
     }finally{ this.toggleSkeleton(false); }
   }
 
@@ -260,7 +263,7 @@ class DevolucoesFeed {
       const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Aviso","Erro no Import, Tente novamente.",); }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Erro", this.GENERIC_ERR, "erro"); }
         return false;
       }
     }
@@ -710,7 +713,7 @@ class DevolucoesFeed {
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0  1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(Number(d.valor_frete||0))}</span>
         </div>
