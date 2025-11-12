@@ -3,7 +3,7 @@
 
 /**
  * -------------------------------------------------------------
- *  Controle Facil – Servidor HTTP (Express) 
+ *  Controle Facil – Servidor HTTP (Express)
  * -------------------------------------------------------------
  */
 
@@ -117,7 +117,7 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 
-/* ===== Shim de query para ML (aceitar recent_days como days) ===== */
+/* ===== Shim de query para ML (aceita recent_days como days) ===== */
 app.use('/api/ml', (req, _res, next) => {
   try {
     if (req.query && req.query.recent_days && !req.query.days) req.query.days = req.query.recent_days;
@@ -251,7 +251,7 @@ async function addReturnEvent(args = {}, req) {
     if (String(e?.code) === '23505' && idempKey) {
       const { rows } = await q(
         `SELECT id,return_id AS "returnId",type,title,message,meta,
-                created_by AS "createdBy",created_at AS "CreatedAt",
+                created_by AS "createdBy",created_at AS "createdAt",
                 idemp_key AS "idempotencyKey"
            FROM return_events WHERE idemp_key=$1 LIMIT 1`, [idempKey]
       );
@@ -264,10 +264,10 @@ async function addReturnEvent(args = {}, req) {
 /* ================== Rotas ================== */
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
-/* === NOVAS ROTAS DE RECLAMAÇÕES (messages/attachments/resolutions/evidences) === */
+/* === NOVAS ROTAS DE RECLAMAÇÕES === */
 app.use('/api/ml', require('./routes/ml-claims'));
 
-/* === NOVAS ROTAS DE SHIPPING (status, by-order, sync, etc.) === */
+/* === NOVAS ROTAS DE SHIPPING === */
 try {
   app.use('/api/ml', require('./routes/ml-shipping'));
   console.log('[BOOT] ML Shipping ok');
@@ -335,6 +335,9 @@ if (!__returnsMounted) {
       if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
       else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
 
+      const allowed = new Set([...baseCols, 'ml_return_status', 'ml_shipping_status']);
+      const orderBy = allowed.has(orderByReq) ? orderByReq : 'created_at';
+
       const params = [];
       let whereSql = '';
       if (rangeDays > 0) { params.push(String(rangeDays)); whereSql = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
@@ -344,11 +347,15 @@ if (!__returnsMounted) {
         `SELECT ${selectCols.join(', ')}
            FROM devolucoes
           ${whereSql}
-          ORDER BY ${orderByReq} ${orderDir} NULLS LAST
+          ORDER BY ${orderBy} ${orderDir} NULLS LAST
           LIMIT $${params.length-1} OFFSET $${params.length}`,
         params
       );
-      const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`, whereSql ? [String(rangeDays)] : []);
+
+      const { rows: countRows } = await query(
+        `SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`,
+        whereSql ? [String(rangeDays)] : []
+      );
       const total = countRows[0]?.n || 0;
 
       res.json({
@@ -380,13 +387,10 @@ if (!__returnsMounted) {
   console.log('[BOOT] Returns Fallback ON');
 }
 
-/* ========= Returns Compat Shim ON (sempre) =========
-   Garante /api/returns e /api/returns/search mesmo se o router oficial
-   estiver montado mas não tratar a raiz (evita 404). */
+/* ========= Returns Compat Shim ON (lista/search, sempre) ========= */
 {
   const compat = express.Router();
   const listHandler = async (req, res, next) => {
-    // Só atende GET raiz; se não for GET, passa
     if (req.method !== 'GET') return next();
     try {
       const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
@@ -407,6 +411,9 @@ if (!__returnsMounted) {
       if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
       else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
 
+      const allowed = new Set([...baseCols, 'ml_return_status', 'ml_shipping_status']);
+      const orderBy = allowed.has(orderByReq) ? orderByReq : 'created_at';
+
       const params = [];
       let whereSql = '';
       if (rangeDays > 0) { params.push(String(rangeDays)); whereSql = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
@@ -416,12 +423,15 @@ if (!__returnsMounted) {
         `SELECT ${selectCols.join(', ')}
            FROM devolucoes
           ${whereSql}
-          ORDER BY ${orderByReq} ${orderDir} NULLS LAST
+          ORDER BY ${orderBy} ${orderDir} NULLS LAST
           LIMIT $${params.length-1} OFFSET $${params.length}`,
         params
       );
 
-      const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`, whereSql ? [String(rangeDays)] : []);
+      const { rows: countRows } = await query(
+        `SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`,
+        whereSql ? [String(rangeDays)] : []
+      );
       const total = countRows[0]?.n || 0;
 
       return res.json({
@@ -445,7 +455,6 @@ if (!__returnsMounted) {
         totalPages: Math.max(1, Math.ceil(total / limit))
       });
     } catch (e) {
-      // Se der erro aqui, deixa o router “oficial” tentar
       return next();
     }
   };
@@ -453,6 +462,107 @@ if (!__returnsMounted) {
   compat.get('/search', listHandler);
   app.use('/api/returns', compat);
   console.log('[BOOT] Returns Compat Shim ON');
+}
+
+/* ========= Returns Item Compat Shim (GET/PATCH /api/returns/:id) ========= */
+{
+  const itemCompat = express.Router();
+
+  // GET /api/returns/:id
+  itemCompat.get('/:id', async (req, res, next) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return next();
+    try {
+      const opt = await tableHasColumns('devolucoes', [
+        'ml_claim_id','ml_return_status','ml_shipping_status','shipping_status','status_operacional'
+      ], req);
+
+      const cols = [
+        'id','id_venda','cliente_nome','loja_nome','sku',
+        'status','log_status','status_operacional',
+        'valor_produto','valor_frete','created_at','updated_at'
+      ];
+      if (opt.ml_claim_id)        cols.push('ml_claim_id');
+      if (opt.ml_return_status)   cols.push('ml_return_status');
+      if (opt.ml_shipping_status) cols.push('ml_shipping_status');
+      else if (opt.shipping_status) cols.push('shipping_status AS ml_shipping_status');
+
+      const { rows } = await query(
+        `SELECT ${cols.join(', ')} FROM devolucoes WHERE id=$1 LIMIT 1`, [id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+
+      const r = rows[0];
+      res.json({
+        id: r.id,
+        id_venda: r.id_venda,
+        cliente_nome: r.cliente_nome,
+        loja_nome: r.loja_nome,
+        sku: r.sku,
+        status: r.status,
+        log_status: r.log_status ?? null,
+        status_operacional: r.status_operacional ?? null,
+        ml_claim_id: r.ml_claim_id ?? null,
+        ml_return_status: r.ml_return_status ?? null,
+        ml_shipping_status: r.ml_shipping_status ?? null,
+        valor_produto: r.valor_produto,
+        valor_frete: r.valor_frete,
+        created_at: r.created_at ?? r.updated_at ?? null,
+        updated_at: r.updated_at ?? null
+      });
+    } catch (e) { next(e); }
+  });
+
+  // PATCH /api/returns/:id
+  itemCompat.patch('/:id', async (req, res, next) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return next();
+    try {
+      const body = req.body || {};
+      const opt = await tableHasColumns('devolucoes', [
+        'log_status','status','status_operacional',
+        'ml_return_status','ml_shipping_status','shipping_status','updated_by','updated_at'
+      ], req);
+
+      const sets = [];
+      const params = [];
+      let p = 1;
+
+      const setIf = (cond, sqlCol, val) => {
+        if (!cond) return;
+        sets.push(`${sqlCol} = $${p++}`);
+        params.push(val);
+      };
+
+      setIf(opt.log_status && body.log_status != null,          'log_status',          String(body.log_status));
+      setIf(opt.status && body.status != null,                  'status',              String(body.status));
+      setIf(opt.status_operacional && body.status_operacional != null, 'status_operacional', String(body.status_operacional));
+
+      setIf(opt.ml_return_status && body.ml_return_status != null, 'ml_return_status', String(body.ml_return_status));
+      if (body.ml_shipping_status != null) {
+        if (opt.ml_shipping_status) setIf(true, 'ml_shipping_status', String(body.ml_shipping_status));
+        else if (opt.shipping_status) setIf(true, 'shipping_status', String(body.ml_shipping_status));
+      }
+
+      const who = String(body.updated_by || req.session?.user?.email || 'frontend');
+      setIf(opt.updated_by, 'updated_by', who);
+      if (opt.updated_at) sets.push('updated_at = now()');
+
+      if (!sets.length) return res.status(400).json({ error: 'no_fields_to_update' });
+
+      params.push(id);
+      await query(`UPDATE devolucoes SET ${sets.join(', ')} WHERE id = $${p}`, params);
+
+      const { rows } = await query(
+        `SELECT id, id_venda, log_status, status, updated_at
+           FROM devolucoes WHERE id=$1`, [id]
+      );
+      return res.json({ ok: true, item: rows[0] || { id, log_status: body.log_status ?? null } });
+    } catch (e) { next(e); }
+  });
+
+  app.use('/api/returns', itemCompat);
+  console.log('[BOOT] Returns Item Compat Shim ON (GET/PATCH /api/returns/:id)');
 }
 
 /* ========= Returns LOGS ========= */
@@ -616,17 +726,175 @@ const server = app.listen(port, host, () => {
 });
 
 /* ================== ML AutoSync ================== */
-let _mlAuto_lastRun = null;
+let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
 function setupMlAutoSync() {
-  // ... (mesma implementação que te enviei)
+  if (!_mlSyncRegistered) {
+    console.warn('[ML AUTO] Importador ML não registrado; AutoSync off.');
+    return;
+  }
+  const enabled = String(process.env.ML_AUTO_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
+  if (!enabled) { console.log('[ML AUTO] Desabilitado por env'); return; }
+
+  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_SYNC_INTERVAL_MS || '600000',10) || 600_000);
+  const windowDays = Math.max(1, parseInt(process.env.ML_AUTO_SYNC_WINDOW_DAYS || '14',10) || 14);
+  const runOnStart = String(process.env.ML_AUTO_SYNC_ON_START ?? 'true').toLowerCase() === 'true';
+  const jobToken   = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN || 'dev-job';
+
+  let running = false;
+  const run = async (reason='timer') => {
+    if (running) return; running = true;
+    const t0 = Date.now();
+    const url = `http://127.0.0.1:${port}/api/ml/claims/import?days=${encodeURIComponent(windowDays)}&silent=1`;
+    try {
+      const r = await fetch(url, { headers: { 'x-job-token': jobToken } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || r.statusText || 'Falha no import');
+      _mlAuto_lastRun = { when:new Date().toISOString(), reason, ok:true, tookMs:Date.now()-t0, result:j };
+      console.log(`[ML AUTO] Import OK (${reason}) em ${_mlAuto_lastRun.tookMs}ms`);
+    } catch (e) {
+      _mlAuto_lastRun = { when:new Date().toISOString(), reason, ok:false, tookMs:Date.now()-t0, error:String(e?.message||e) };
+      console.error('[ML AUTO] Falha no import:', _mlAuto_lastRun.error);
+    } finally { running = false; }
+  };
+
+  if (runOnStart) setTimeout(() => run('boot'), 2000);
+  const handle = setInterval(run, intervalMs);
+  process.on('SIGINT',  () => clearInterval(handle));
+  process.on('SIGTERM', () => clearInterval(handle));
+
+  app.get('/api/ml/claims/last-run', (_req, res) => {
+    res.json({ enabled, intervalMs, windowDays, runOnStart, registered: _mlSyncRegistered, lastRun:_mlAuto_lastRun });
+  });
+
+  console.log(`[BOOT] ML AutoSync ON: intervalo=${intervalMs}ms, janela=${windowDays}d`);
 }
 
 /* ================== ML AutoRefresh de Tokens ================== */
-let _mlRefresh_lastRun = null;
+let _mlRefresh_lastRun = null; // exposto em /api/ml/refresh/last-run
 function setupMlAutoRefresh() {
-  // ... (mesma implementação que te enviei)
+  const enabled = String(process.env.ML_AUTO_REFRESH_ENABLED ?? 'true').toLowerCase() === 'true';
+  if (!enabled) { console.log('[ML REFRESH] Desabilitado por env'); return; }
+
+  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_REFRESH_INTERVAL_MS || '900000',10) || 900_000); // 15min
+  const aheadSec   = Math.max(60, parseInt(process.env.ML_REFRESH_AHEAD_SEC || '900',10) || 900); // 15min
+  const runOnStart = String(process.env.ML_AUTO_REFRESH_ON_START ?? 'true').toLowerCase() === 'true';
+
+  const tokenUrl   = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
+  const clientId   = process.env.ML_CLIENT_ID || '';
+  const clientSecret = process.env.ML_CLIENT_SECRET || '';
+
+  if (!clientId || !clientSecret) {
+    console.warn('[ML REFRESH] CLIENT_ID/CLIENT_SECRET ausentes; AutoRefresh off.');
+    return;
+  }
+
+  let running = false;
+  const run = async (reason='timer') => {
+    if (running) return; running = true;
+    const t0 = Date.now();
+    const summary = { refreshed:0, skipped:0, errors:0, details:[] };
+
+    try {
+      const sql = `
+        SELECT user_id, nickname, refresh_token, expires_at
+          FROM public.ml_tokens
+         WHERE coalesce(refresh_token, '') <> ''
+           AND (
+             expires_at IS NULL OR expires_at < now() + INTERVAL '${aheadSec} seconds'
+           )
+      `;
+      const { rows } = await query(sql);
+
+      for (const row of rows) {
+        const userId = row.user_id;
+        const refresh_token = row.refresh_token;
+        if (!refresh_token) { summary.skipped++; continue; }
+
+        try {
+          const body = new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token
+          });
+
+          const resp = await fetch(tokenUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body
+          });
+
+          const j = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(j?.error || j?.message || `HTTP ${resp.status}`);
+
+          const expires_in = Math.max(60, (j.expires_in || 600) - 300); // margem 5min
+          const expiresAt = new Date(Date.now() + expires_in*1000).toISOString();
+
+          await query(`
+            UPDATE public.ml_tokens
+               SET access_token = $1,
+                   refresh_token = COALESCE($2, refresh_token),
+                   scope        = COALESCE($3, scope),
+                   token_type   = COALESCE($4, token_type),
+                   expires_at   = $5,
+                   raw          = $6,
+                   updated_at   = now()
+             WHERE user_id = $7
+          `, [
+            j.access_token || null,
+            j.refresh_token || null,
+            j.scope || null,
+            j.token_type || null,
+            expiresAt,
+            JSON.stringify(j || {}),
+            userId
+          ]);
+
+          summary.refreshed++;
+          summary.details.push({ user_id:String(userId), ok:true });
+        } catch (e) {
+          summary.errors++;
+          summary.details.push({ user_id:String(row.user_id), ok:false, error:String(e?.message||e) });
+        }
+      }
+
+      _mlRefresh_lastRun = {
+        when: new Date().toISOString(),
+        reason,
+        ok: true,
+        tookMs: Date.now() - t0,
+        ...summary
+      };
+      if (rows.length) {
+        console.log(`[ML REFRESH] ${summary.refreshed} renovado(s), ${summary.skipped} ignorado(s), ${summary.errors} erro(s) em ${_mlRefresh_lastRun.tookMs}ms`);
+      }
+    } catch (e) {
+      _mlRefresh_lastRun = {
+        when: new Date().toISOString(),
+        reason,
+        ok: false,
+        tookMs: Date.now() - t0,
+        error: String(e?.message||e)
+      };
+      console.error('[ML REFRESH] Falha geral:', _mlRefresh_lastRun.error);
+    } finally {
+      running = false;
+    }
+  };
+
+  if (runOnStart) setTimeout(() => run('boot'), 2500);
+  const handle = setInterval(run, intervalMs);
+  process.on('SIGINT',  () => clearInterval(handle));
+  process.on('SIGTERM', () => clearInterval(handle));
+
+  app.get('/api/ml/refresh/last-run', (_req, res) => {
+    res.json({ enabled, intervalMs, aheadSec, runOnStart, lastRun:_mlRefresh_lastRun });
+  });
+
+  console.log(`[BOOT] ML AutoRefresh ON: intervalo=${intervalMs}ms, ahead=${aheadSec}s`);
 }
 
+/* ================== Unhandled ================== */
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
 process.on('uncaughtException',  err => console.error('[uncaughtException]', err));
 
