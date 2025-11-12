@@ -5,14 +5,20 @@ const express = require('express');
 const router  = express.Router();
 const { query } = require('../db');
 
+// ---- fetch helper (Node 18+ tem fetch nativo; senão cai no node-fetch) ----
+const _fetch = (typeof fetch === 'function')
+  ? (...a) => fetch(...a)
+  : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+
 // -------- Helpers de coluna (cache simples) --------
 const _colsCache = {};
 async function tableHasColumns(table, cols) {
   const key = `${table}:${cols.join(',')}`;
   if (_colsCache[key]) return _colsCache[key];
   const { rows } = await query(
-    `SELECT column_name FROM information_schema.columns
-       WHERE table_schema='public' AND table_name=$1`,
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema='public' AND table_name=$1`,
     [table]
   );
   const set = new Set(rows.map(r => r.column_name));
@@ -21,15 +27,24 @@ async function tableHasColumns(table, cols) {
   return out;
 }
 
+// -------- Canon do fluxo a partir do status/substatus do shipping --------
 function normalizeFlow(mlStatus, mlSub) {
-  const s = String(mlStatus || '').toLowerCase();
-  const sub = String(mlSub || '').toLowerCase();
+  const s   = String(mlStatus || '').toLowerCase();
+  const sub = String(mlSub     || '').toLowerCase();
 
-  if (/^ready_to_ship|handling|to_be_agreed/.test(s) || /(label|ready)/.test(sub)) return 'em_preparacao';
-  if (/^shipped|not_delivered|in_transit|returning|shipping/.test(s) ||
-      /(in_transit|on_the_way|shipping_in_progress|out_for_delivery)/.test(sub)) return 'em_transporte';
-  if (/^delivered$/.test(s) || /(delivered|arrived|recebid)/.test(sub)) return 'recebido_cd';
-  if (/^cancel/.test(s) || /(returned|fechado|devolvido|closed)/.test(sub)) return 'fechado';
+  if (/^(ready_to_ship|handling|to_be_agreed)$/.test(s) || /(label|ready)/.test(sub)) {
+    return 'em_preparacao';
+  }
+  if (/^(shipped|not_delivered|in_transit|returning|shipping)$/.test(s) ||
+      /(in_transit|on_the_way|shipping_in_progress|out_for_delivery|returning_to_sender)/.test(sub)) {
+    return 'em_transporte';
+  }
+  if (/^delivered$/.test(s) || /(delivered|arrived|recebid)/.test(sub)) {
+    return 'recebido_cd';
+  }
+  if (/^cancel/.test(s) || /(returned|fechado|devolvido|closed)/.test(sub)) {
+    return 'fechado';
+  }
   return 'pendente';
 }
 
@@ -44,29 +59,35 @@ async function getActiveMlToken(req) {
   if (m) return m[1];
 
   // 3) Seller headers vindos do front
-  const sellerId   = req.get('x-seller-id') || null;
+  const sellerId   = req.get('x-seller-id')   || null;
   const sellerNick = req.get('x-seller-nick') || null;
 
-  // 4) ml_tokens por user_id e/ou nickname (pega o mais recente)
+  // 4) ml_tokens por seller_id/user_id e/ou nickname (pega o mais recente)
   try {
-    // tenta usar is_active se existir
-    const cols = await tableHasColumns('ml_tokens', ['is_active','user_id','nickname','access_token','updated_at']);
-    const whereParts = [];
+    const cols = await tableHasColumns('ml_tokens', [
+      'is_active','seller_id','user_id','seller_nick','nickname','access_token','updated_at'
+    ]);
+
+    const where = [];
     const params = [];
     let p = 1;
 
-    if (cols.is_active) whereParts.push(`is_active IS TRUE`);
+    if (cols.is_active) where.push(`is_active IS TRUE`);
 
-    if (sellerId) { whereParts.push(`user_id = $${p++}::bigint`); params.push(sellerId); }
-    if (sellerNick) { whereParts.push(`lower(nickname) = lower($${p++})`); params.push(sellerNick); }
+    const who = [];
+    if (sellerId && cols.seller_id)  { who.push(`seller_id::text = $${p++}`);   params.push(String(sellerId)); }
+    if (sellerId && cols.user_id)    { who.push(`user_id::text   = $${p++}`);   params.push(String(sellerId)); }
+    if (sellerNick && cols.seller_nick) { who.push(`LOWER(seller_nick)=LOWER($${p++})`); params.push(sellerNick); }
+    if (sellerNick && cols.nickname) { who.push(`LOWER(nickname)  =LOWER($${p++})`);     params.push(sellerNick); }
 
-    const where = whereParts.length ? `WHERE ${whereParts.join(' OR ')}` : ``;
+    if (who.length) where.push(`(${who.join(' OR ')})`);
+
     const { rows } = await query(
       `SELECT access_token
          FROM ml_tokens
-       ${where}
-       ORDER BY updated_at DESC NULLS LAST
-       LIMIT 1`,
+        ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+        ORDER BY updated_at DESC NULLS LAST
+        LIMIT 1`,
       params
     );
     if (rows[0]?.access_token) return rows[0].access_token;
@@ -80,7 +101,7 @@ async function getActiveMlToken(req) {
 // -------- HTTP helper --------
 async function mlFetch(path, token, opts = {}) {
   const base = 'https://api.mercadolibre.com';
-  const res = await fetch(base + path, {
+  const res = await _fetch(base + path, {
     method: opts.method || 'GET',
     headers: {
       'Accept': 'application/json',
@@ -90,7 +111,10 @@ async function mlFetch(path, token, opts = {}) {
     body: opts.body || null
   });
   const ct = res.headers.get('content-type') || '';
-  const data = ct.includes('application/json') ? await res.json().catch(() => ({})) : await res.text().catch(() => '');
+  const data = ct.includes('application/json')
+    ? await res.json().catch(() => ({}))
+    : await res.text().catch(() => '');
+
   if (!res.ok) {
     const msg = data?.message || data?.error || `HTTP ${res.status}`;
     const err = new Error(msg); err.status = res.status; err.data = data;
@@ -101,18 +125,44 @@ async function mlFetch(path, token, opts = {}) {
 
 // -------- Status a partir de order_id --------
 async function getShippingStatusFromOrder(orderId, token) {
+  // 0) /orders/:id/shipments (algumas contas retornam direto aqui)
+  try {
+    const oShips = await mlFetch(`/orders/${encodeURIComponent(orderId)}/shipments`, token);
+    const ship0  = Array.isArray(oShips) ? oShips[0] : oShips;
+    if (ship0) {
+      let st = ship0.status || null;
+      let ss = ship0.substatus || null;
+      const sid = ship0.id || ship0.shipment_id || null;
+      if ((!st || !ss) && sid) {
+        const d = await mlFetch(`/shipments/${encodeURIComponent(sid)}`, token).catch(() => null);
+        if (d) { st = d.status || st; ss = d.substatus || ss; }
+      }
+      if (st || ss || sid) return { shipmentId: sid || null, mlStatus: st || null, mlSubstatus: ss || null };
+    }
+  } catch (_) { /* continua */ }
+
   // 1) /orders/{id} => pega shipment_id
-  const order = await mlFetch(`/orders/${encodeURIComponent(orderId)}`, token);
-  const shipmentId = order?.shipping?.id || order?.shipping_id || order?.shipping?.id_shipping || null;
+  let shipmentId = null;
+  try {
+    const order = await mlFetch(`/orders/${encodeURIComponent(orderId)}`, token);
+    shipmentId = order?.shipping?.id || order?.shipping_id || order?.shipping?.id_shipping || null;
+  } catch (_) {}
+
+  // 2) se não achou, tenta buscas alternativas
   if (!shipmentId) {
-    // algumas contas usam "pack_id" => /shipments/search?pack=id
-    const search = await mlFetch(`/shipments/search?order=${encodeURIComponent(orderId)}`, token).catch(() => null);
+    const search =
+        await mlFetch(`/shipments/search?order=${encodeURIComponent(orderId)}`, token).catch(() => null)
+     || await mlFetch(`/shipments/search?order_id=${encodeURIComponent(orderId)}`, token).catch(() => null)
+     || await mlFetch(`/shipments/search?pack=${encodeURIComponent(orderId)}`, token).catch(() => null);
+
     const first = search?.results?.[0];
-    if (first?.id) return { shipmentId: first.id, mlStatus: first.status || null, mlSubstatus: first.substatus || null };
+    if (first?.id) {
+      return { shipmentId: first.id, mlStatus: first.status || null, mlSubstatus: first.substatus || null };
+    }
     return { shipmentId: null, mlStatus: null, mlSubstatus: null };
   }
 
-  // 2) /shipments/{id}
+  // 3) /shipments/{id}
   const ship = await mlFetch(`/shipments/${encodeURIComponent(shipmentId)}`, token);
   return {
     shipmentId,
@@ -123,13 +173,16 @@ async function getShippingStatusFromOrder(orderId, token) {
 
 // -------- Atualiza DB com segurança de colunas --------
 async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus }) {
-  const cols = await tableHasColumns('devolucoes', ['ml_shipping_status','log_status','updated_at','id_venda']);
+  const cols = await tableHasColumns('devolucoes', [
+    'ml_shipping_status','log_status','updated_at','id_venda','updated_by'
+  ]);
   const sets = [];
   const params = [];
   let p = 1;
 
   if (cols.ml_shipping_status) { sets.push(`ml_shipping_status = $${p++}`); params.push(mlSubstatus || mlStatus || null); }
   if (cols.log_status && logStatus) { sets.push(`log_status = $${p++}`); params.push(logStatus); }
+  if (cols.updated_by) { sets.push(`updated_by = 'ml-shipping'`); }
   if (cols.updated_at) sets.push(`updated_at = now()`);
 
   if (!sets.length) return { updated: false };
@@ -168,9 +221,9 @@ async function fallbackFromDb(orderId) {
 // -------- GET /api/ml/shipping/status --------
 router.get('/shipping/status', async (req, res) => {
   try {
-    const orderId = req.query.order_id || req.query.orderId;
+    const orderId    = req.query.order_id || req.query.orderId;
     const shipmentIdQ = req.query.shipment_id || req.query.shipmentId || null;
-    const doUpdate = String(req.query.update ?? '1') !== '0';
+    const doUpdate   = String(req.query.update ?? '1') !== '0';
 
     if (!orderId && !shipmentIdQ) {
       return res.status(400).json({ error: 'missing_param', detail: 'Informe order_id ou shipment_id' });
@@ -178,11 +231,10 @@ router.get('/shipping/status', async (req, res) => {
 
     const token = await getActiveMlToken(req);
     if (!token) {
-      // Sem token: tenta fallback do DB para não quebrar o front
       if (orderId) {
         const fb = await fallbackFromDb(orderId);
-        return res.json({
-          ok: true,
+        return res.status(401).json({ // importante para o front acionar o breaker
+          error: 'missing_access_token',
           order_id: orderId,
           shipment_id: null,
           ml_status: fb.ml_status || null,
@@ -204,8 +256,8 @@ router.get('/shipping/status', async (req, res) => {
     } else {
       const s = await getShippingStatusFromOrder(orderId, token);
       shipmentId = s.shipmentId;
-      mlStatus = s.mlStatus;
-      mlSubstatus = s.mlSubstatus;
+      mlStatus   = s.mlStatus;
+      mlSubstatus= s.mlSubstatus;
     }
 
     const suggested = normalizeFlow(mlStatus, mlSubstatus);
@@ -234,13 +286,12 @@ router.get('/shipping/status', async (req, res) => {
 router.get('/shipping/sync', async (req, res) => {
   try {
     const orderId = req.query.order_id || req.query.orderId || null;
-    const days = parseInt(req.query.days || req.query.recent_days || '0', 10) || 0;
-    const silent = /^1|true$/i.test(String(req.query.silent || '0'));
+    const days    = parseInt(req.query.days || req.query.recent_days || '0', 10) || 0;
+    const silent  = /^1|true$/i.test(String(req.query.silent || '0'));
 
     const token = await getActiveMlToken(req);
     if (!token) {
-      // Se não há token, retorna 200 com mensagem amigável; o front já faz fallback
-      return res.status(200).json({ ok: false, warning: 'missing_access_token', updated: 0, total: 0 });
+      return res.status(401).json({ error: 'missing_access_token', updated: 0, total: 0 });
     }
 
     const touched = [];
@@ -250,8 +301,19 @@ router.get('/shipping/sync', async (req, res) => {
       try {
         const s = await getShippingStatusFromOrder(oid, token);
         const suggested = normalizeFlow(s.mlStatus, s.mlSubstatus);
-        await updateReturnShipping({ orderId: oid, mlStatus: s.mlStatus, mlSubstatus: s.mlSubstatus, logStatus: suggested });
-        touched.push({ order_id: oid, shipment_id: s.shipmentId, ml_status: s.mlStatus, ml_substatus: s.mlSubstatus, suggested_log_status: suggested });
+        await updateReturnShipping({
+          orderId: oid,
+          mlStatus: s.mlStatus,
+          mlSubstatus: s.mlSubstatus,
+          logStatus: suggested
+        });
+        touched.push({
+          order_id: oid,
+          shipment_id: s.shipmentId,
+          ml_status: s.mlStatus,
+          ml_substatus: s.mlSubstatus,
+          suggested_log_status: suggested
+        });
       } catch (e) {
         errs.push({ order_id: oid, error: String(e?.message || e) });
       }
@@ -260,7 +322,6 @@ router.get('/shipping/sync', async (req, res) => {
     if (orderId) {
       await runOne(orderId);
     } else if (days > 0) {
-      // ATENÇÃO: usa id_venda (não "order_id") — corrige o 500
       const { rows } = await query(
         `SELECT DISTINCT id_venda
            FROM devolucoes
@@ -269,7 +330,6 @@ router.get('/shipping/sync', async (req, res) => {
           LIMIT 400`,
         [String(days)]
       );
-      // processa em pequenos lotes
       const ids = rows.map(r => String(r.id_venda)).filter(Boolean);
       const chunk = 25;
       for (let i = 0; i < ids.length; i += chunk) {
