@@ -2,19 +2,26 @@
 'use strict';
 
 /**
- * Proxy de rotas oficiais do Mercado Livre (Claims):
- * - messages (GET)
- * - details da claim (GET)
- * - open-dispute, expected-resolutions (GET/POST), partial-refund (GET/POST),
- *   refund total, allow-return
- * - evidences (GET/POST) e attachments-evidences (POST/GET/download)
- * - charges/return-cost (GET)
+ * Proxy Mercado Livre (Claims)
+ * Inclui:
+ *  - GET /claims/:id
+ *  - GET /claims/:id/messages
+ *  - GET /claims/:id/expected-resolutions
+ *  - GET /claims/:id/partial-refund/available-offers
+ *  - POST /claims/:id/expected-resolutions/partial-refund
+ *  - POST /claims/:id/expected-resolutions/refund
+ *  - POST /claims/:id/expected-resolutions/allow-return
+ *  - GET /claims/:id/evidences
+ *  - POST /claims/:id/actions/evidences
+ *  - POST /claims/:id/attachments-evidences (upload)
+ *  - GET  /claims/:id/attachments-evidences/:attachmentId
+ *  - GET  /claims/:id/attachments-evidences/:attachmentId/download
+ *  - GET  /claims/:id/charges/return-cost
  *
- * Token:
- * - Header preferencial: x-seller-token: <ACCESS_TOKEN>
- * - Ou, se vier x-seller-id, busca token no banco e faz AUTO-REFRESH quando necessário
- * - Ou fallback: req.session.ml.access_token
- * - Ou último recurso: process.env.MELI_OWNER_TOKEN
+ *  **NOVO** (compat com teu front):
+ *  - GET /claims/search?order_id=...
+ *  - GET /claims/of-order/:orderId
+ *  - GET /claims?order_id=...   (alias p/ search)
  */
 
 const express = require('express');
@@ -23,14 +30,13 @@ const path    = require('path');
 const multer  = require('multer');
 const { query } = require('../db');
 
-const router  = express.Router();
-const ML_BASE = 'https://api.mercadolibre.com/post-purchase/v1';
-const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
-const AHEAD_SEC = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600; // renova 10min antes
+const router      = express.Router();
+const ML_BASE     = 'https://api.mercadolibre.com/post-purchase/v1';
+const ML_TOKEN_URL= process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
+const AHEAD_SEC   = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600;
 
-/* ============================== Helpers de token ============================== */
+// ============================== Helpers de token ==============================
 
-/** Lê o registro mais recente da tabela pública ml_tokens */
 async function loadTokenRowFromDb(sellerId, q = query) {
   const sql = `
     SELECT user_id, nickname, access_token, refresh_token, expires_at
@@ -49,7 +55,6 @@ function isExpiringSoon(expiresAtIso, aheadSec = AHEAD_SEC) {
   return (exp - Date.now()) <= aheadSec * 1000;
 }
 
-/** Faz refresh no OAuth do ML e persiste no DB */
 async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
   if (!refreshToken) return null;
 
@@ -81,7 +86,6 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
   const { access_token, refresh_token, token_type, scope, expires_in } = body || {};
   const expiresAt = new Date(Date.now() + (Math.max(60, Number(expires_in) || 600)) * 1000).toISOString();
 
-  // UPSERT no DB
   await q(`
     INSERT INTO public.ml_tokens
       (user_id, access_token, refresh_token, token_type, scope, expires_at, raw, updated_at)
@@ -99,13 +103,10 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
   return { access_token, refresh_token, expires_at: expiresAt };
 }
 
-/** Resolve o access_token: header -> DB (com auto-refresh) -> sessão -> env */
 async function resolveSellerAccessToken(req) {
-  // 1) Header direto (debug/forçado)
   const direct = req.get('x-seller-token');
   if (direct) return direct;
 
-  // 2) Seller id: header, query ou sessão
   const sellerId = String(
     req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || ''
   ).replace(/\D/g, '');
@@ -113,10 +114,7 @@ async function resolveSellerAccessToken(req) {
   if (sellerId) {
     const row = await loadTokenRowFromDb(sellerId, req.q || query);
     if (row?.access_token) {
-      if (!isExpiringSoon(row.expires_at)) {
-        return row.access_token;
-      }
-      // vai expirar: tenta refresh
+      if (!isExpiringSoon(row.expires_at)) return row.access_token;
       try {
         const refreshed = await refreshAccessToken({
           sellerId,
@@ -125,21 +123,27 @@ async function resolveSellerAccessToken(req) {
         });
         if (refreshed?.access_token) return refreshed.access_token;
       } catch (e) {
-        // Se falhar o refresh, ainda tenta usar o token atual (pode estar válido por poucos minutos)
-        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) {
-          return row.access_token;
-        }
-        // Se realmente não der, propaga o erro
+        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) return row.access_token;
         throw e;
       }
     }
   }
 
-  // 3) Sessão (se você coloca access_token aí ao logar)
   if (req.session?.ml?.access_token) return req.session.ml.access_token;
-
-  // 4) Fallback owner (ENV)
   return process.env.MELI_OWNER_TOKEN || '';
+}
+
+// seller_id p/ /claims/search
+async function resolveSellerId(req) {
+  const hdr = String(req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || '').replace(/\D/g, '');
+  if (hdr) return hdr;
+  try {
+    const me = await mlFetch(req, 'https://api.mercadolibre.com/users/me');
+    const id = me?.id || me?.user_id;
+    return id ? String(id) : '';
+  } catch {
+    return '';
+  }
 }
 
 function pick(obj, keys) {
@@ -148,7 +152,7 @@ function pick(obj, keys) {
   return out;
 }
 
-/** Fetch JSON/text (levanta erro com .status e .body) */
+// fetch JSON/text com erro enriquecido
 async function mlFetch(req, url, opts = {}) {
   const token = await resolveSellerAccessToken(req);
   if (!token) {
@@ -171,35 +175,24 @@ async function mlFetch(req, url, opts = {}) {
     const err = new Error((body && (body.message || body.error)) || r.statusText);
     err.status = r.status;
     err.body = body;
-    err.metadata = r.headers.get('metadata') || null; // header especial do ML
+    err.metadata = r.headers.get('metadata') || null;
     throw err;
   }
   return body;
 }
 
-/** Fetch bruto (para download/stream) */
 async function mlFetchRaw(req, url, opts = {}) {
   const token = await resolveSellerAccessToken(req);
   if (!token) {
-    const e = new Error('missing_access_token');
-    e.status = 401;
-    throw e;
+    const e = new Error('missing_access_token'); e.status = 401; throw e;
   }
-  const r = await fetch(url, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(opts.headers || {})
-    }
-  });
+  const r = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
   if (!r.ok) {
     const ct = r.headers.get('content-type') || '';
     const body = ct.includes('application/json') ? await r.json().catch(() => null)
                                                  : await r.text().catch(() => '');
     const err = new Error((body && (body.message || body.error)) || r.statusText);
-    err.status = r.status;
-    err.body = body;
-    err.metadata = r.headers.get('metadata') || null;
+    err.status = r.status; err.body = body; err.metadata = r.headers.get('metadata') || null;
     throw err;
   }
   return r;
@@ -207,98 +200,70 @@ async function mlFetchRaw(req, url, opts = {}) {
 
 const ok = (res, data = {}) => res.json({ ok: true, ...data });
 
-/* =========================================================================
- *  0) MENSAGENS E DETALHES DA RECLAMAÇÃO
- * ========================================================================= */
+// ======================= 0) Detalhes e mensagens =======================
 
-/** Detalhes da claim (usado pelo front para enriquecer UI) */
 router.get('/claims/:id', async (req, res) => {
   try {
     const claimId = String(req.params.id || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
-
     const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}`;
     const data = await mlFetch(req, url);
-    // Normaliza leve mantendo compat com front (data|claim)
     return res.json({ data: data || {} });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Obter todas as mensagens da claim */
 router.get('/claims/:id/messages', async (req, res) => {
   try {
     const claimId = String(req.params.id || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
-
     const url = `${ML_BASE}/claims/${encodeURIComponent(claimId)}/messages`;
     const data = await mlFetch(req, url);
-
-    // Normaliza sempre para { messages: [...] }
     const messages = Array.isArray(data) ? data : (data?.messages ?? []);
     return res.json({ messages });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/* =========================================================================
- *  1) MEDIAÇÃO
- * ========================================================================= */
+// ======================= 1) Mediação & Expected Resolutions =======================
 
-/** Abrir disputa (mediação) */
 router.post('/claims/:id/actions/open-dispute', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/actions/open-dispute`, {
-      method: 'POST'
-    });
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
+    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/actions/open-dispute`, { method: 'POST' });
     return res.status(200).json(out);
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/* =========================================================================
- *  2) EXPECTED RESOLUTIONS
- * ========================================================================= */
-
-/** Listar resoluções esperadas da claim */
 router.get('/claims/:id/expected-resolutions', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions`);
     return res.json(Array.isArray(out) ? out : (out || []));
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Ofertas disponíveis para reembolso parcial */
 router.get('/claims/:id/partial-refund/available-offers', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/partial-refund/available-offers`);
     return res.json(out || {});
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Criar expected-resolution: partial_refund (percentage obrigatório) */
 router.post('/claims/:id/expected-resolutions/partial-refund', express.json(), async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const body = pick(req.body || {}, ['percentage']);
-    if (typeof body.percentage !== 'number') {
-      return res.status(400).json({ error: 'percentage numérico é obrigatório' });
-    }
+    if (typeof body.percentage !== 'number') return res.status(400).json({ error: 'percentage numérico é obrigatório' });
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/partial-refund`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -306,59 +271,45 @@ router.post('/claims/:id/expected-resolutions/partial-refund', express.json(), a
     });
     return res.json(out || { ok: true });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Criar expected-resolution: refund (devolução total) */
 router.post('/claims/:id/expected-resolutions/refund', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/refund`, {
-      method: 'POST'
-    });
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
+    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/refund`, { method: 'POST' });
     return res.json(out || { ok: true });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Criar expected-resolution: allow-return (devolução do produto) */
 router.post('/claims/:id/expected-resolutions/allow-return', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/allow-return`, {
-      method: 'POST'
-    });
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
+    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/allow-return`, { method: 'POST' });
     return res.json(out || { ok: true });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/* =========================================================================
- *  3) EVIDENCES
- * ========================================================================= */
+// ======================= 2) Evidences & Attachments =======================
 
-/** Listar evidences da claim */
 router.get('/claims/:id/evidences', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/evidences`);
     return res.json(Array.isArray(out) ? out : (out || []));
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Enviar evidences (shipping_evidence / handling_shipping_evidence, etc) */
 router.post('/claims/:id/actions/evidences', express.json(), async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const body = req.body || {};
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/actions/evidences`, {
       method: 'POST',
@@ -367,22 +318,16 @@ router.post('/claims/:id/actions/evidences', express.json(), async (req, res) =>
     });
     return res.json(out || { ok: true });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
-
-/* =========================================================================
- *  4) ATTACHMENTS - EVIDENCES (upload/info/download)
- * ========================================================================= */
 
 const TMP_DIR = path.join(__dirname, '..', '..', 'tmp-upload');
 fs.mkdirSync(TMP_DIR, { recursive: true });
 const upload = multer({ dest: TMP_DIR });
 
-/** Upload de anexo para evidences */
 router.post('/claims/:id/attachments-evidences', upload.single('file'), async (req, res) => {
-  const claimId = encodeURIComponent(req.params.id);
+  const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
   if (!req.file) return res.status(400).json({ error: 'file é obrigatório (multipart/form-data)' });
 
   try {
@@ -391,7 +336,6 @@ router.post('/claims/:id/attachments-evidences', upload.single('file'), async (r
     const form = new FormData();
     form.append('file', blob, req.file.originalname || req.file.filename);
 
-    // opcional: o ML aceita x-public: true; repassa se vier do cliente
     const extraHeaders = {};
     const xPublic = req.get('x-public');
     if (xPublic) extraHeaders['x-public'] = xPublic;
@@ -403,36 +347,30 @@ router.post('/claims/:id/attachments-evidences', upload.single('file'), async (r
     });
 
     fs.unlink(req.file.path, () => {});
-    // Resposta: { user_id, file_name }
     const file_name = out?.file_name || out?.filename;
     return ok(res, { file_name });
   } catch (e) {
     fs.unlink(req.file?.path || '', () => {});
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Info do anexo de evidences */
 router.get('/claims/:id/attachments-evidences/:attachmentId', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const att = encodeURIComponent(req.params.attachmentId);
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/attachments-evidences/${att}`);
     return res.json(out || {});
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/** Download do anexo de evidences */
 router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (req, res) => {
   try {
-    const claimId = encodeURIComponent(req.params.id);
+    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const att = encodeURIComponent(req.params.attachmentId);
     const r = await mlFetchRaw(req, `${ML_BASE}/claims/${claimId}/attachments-evidences/${att}/download`);
-    // Propaga headers principais
     const ct = r.headers.get('content-type') || 'application/octet-stream';
     const disp = r.headers.get('content-disposition') || `inline; filename="${att}"`;
     res.set('Content-Type', ct);
@@ -440,23 +378,12 @@ router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (re
     const ab = await r.arrayBuffer();
     return res.send(Buffer.from(ab));
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-/* =========================================================================
- *  5) CUSTO DE DEVOLUÇÃO (return-cost)
- * ========================================================================= */
+// ======================= 3) Return Cost =======================
 
-/**
- * GET /api/ml/claims/:id/charges/return-cost
- * Query opcional:
- *   ?usd=true  -> repassa calculate_amount_usd=true
- *
- * Retorno (top-level), compatível com o front:
- *   { amount: number, currency_id: string, amount_usd?: number|null }
- */
 router.get('/claims/:id/charges/return-cost', async (req, res) => {
   try {
     const claimId = String(req.params.id || '').replace(/\D/g, '');
@@ -473,9 +400,54 @@ router.get('/claims/:id/charges/return-cost', async (req, res) => {
       amount_usd: (out?.amount_usd != null ? Number(out.amount_usd) : null)
     });
   } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
+});
+
+// ======================= 4) Search (compat com teu front) =======================
+
+function coerceList(x) {
+  if (Array.isArray(x)) return x;
+  if (!x || typeof x !== 'object') return [];
+  return x.results || x.items || x.claims || x.data || [];
+}
+
+// GET /api/ml/claims/search?order_id=...
+router.get('/claims/search', async (req, res) => {
+  try {
+    const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
+    if (!orderId) return res.status(400).json({ error: 'missing_param', detail: 'order_id é obrigatório' });
+
+    const sellerId = await resolveSellerId(req); // tenta descobrir
+    const base = `${ML_BASE}/claims/search`;
+    const url = sellerId
+      ? `${base}?seller_id=${encodeURIComponent(sellerId)}&order_id=${encodeURIComponent(orderId)}`
+      : `${base}?order_id=${encodeURIComponent(orderId)}`;
+
+    const out = await mlFetch(req, url).catch(e => {
+      if (e.status === 404) return { results: [] }; // compat
+      throw e;
+    });
+
+    return res.json({ items: coerceList(out) });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
+
+// GET /api/ml/claims/of-order/:orderId  (alias p/ cima)
+router.get('/claims/of-order/:orderId', async (req, res) => {
+  req.query.order_id = req.params.orderId;
+  return router.handle({ ...req, url: '/claims/search', method: 'GET' }, res);
+});
+
+// GET /api/ml/claims?order_id=...  (alias p/ cima)
+router.get('/claims', async (req, res, next) => {
+  if (req.query.order_id || req.query.orderId) {
+    req.url = '/claims/search?' + new URLSearchParams({ order_id: req.query.order_id || req.query.orderId }).toString();
+    return router.handle(req, res);
+  }
+  return res.status(400).json({ error: 'missing_param', detail: 'use ?order_id=...' });
 });
 
 module.exports = router;
