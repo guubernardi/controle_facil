@@ -1,577 +1,621 @@
 // server/routes/ml-sync.js
 'use strict';
 
+const express = require('express');
+const dayjs = require('dayjs');
 const { query } = require('../db');
+const { getAuthedAxios } = require('../mlClient');
 
-// ---- fetch helper (Node 18+ tem fetch nativo; senão cai no node-fetch)
-const _fetch = (typeof fetch === 'function')
-  ? fetch
-  : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+const isTrue = (v) => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
+const qOf = (req) => (req?.q || query);
+// formato aceito pelo ML nos filtros de range: 2025-10-22T12:34:56.789-0300
+const fmtML = (d) => dayjs(d).format('YYYY-MM-DDTHH:mm:ss.SSSZZ');
 
-async function getMLToken(req) {
-  if (req?.user?.ml?.access_token) return req.user.ml.access_token;
-  if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
-  try {
-    const { rows } = await query(
-      `SELECT access_token
-         FROM ml_tokens
-        WHERE is_active IS TRUE
-        ORDER BY updated_at DESC NULLS LAST
-        LIMIT 1`
+module.exports = function registerMlSync(app, opts = {}) {
+  const router = express.Router();
+  const externalAddReturnEvent = opts.addReturnEvent;
+
+  // tenta descobrir todas as contas do ML disponíveis
+  async function resolveMlAccounts(req) {
+    if (typeof opts.listMlAccounts === 'function') {
+      // esperado: retorna [{ http, account }, ...]
+      return await opts.listMlAccounts(req);
+    }
+    if (typeof getAuthedAxios.listAccounts === 'function') {
+      return await getAuthedAxios.listAccounts(req);
+    }
+    // fallback: conta atual apenas
+    const one = await getAuthedAxios(req);
+    return [one];
+  }
+
+  /* ----------------------------- helpers ----------------------------- */
+
+  function normalizeOrderId(v) {
+    if (v == null) return null;
+    if (typeof v === 'number' || typeof v === 'string') return String(v);
+    if (typeof v === 'object') {
+      if (v.id != null)          return String(v.id);
+      if (v.number != null)      return String(v.number);
+      if (v.order_id != null)    return String(v.order_id);
+      if (v.resource_id != null) return String(v.resource_id);
+      return null;
+    }
+    return null;
+  }
+
+  function normalizeSku(it, det) {
+    return (
+      det?.item?.seller_sku ||
+      det?.item?.sku ||
+      it?.seller_sku ||
+      it?.item?.seller_sku ||
+      null
     );
-    return rows[0]?.access_token || null;
-  } catch { return null; }
-}
-
-async function mlFetch(path, token, opts = {}) {
-  const url = `https://api.mercadolibre.com${path}`;
-  const r = await _fetch(url, {
-    method: opts.method || 'GET',
-    headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) },
-    body: opts.body || undefined
-  });
-  let j = null; try { j = await r.json(); } catch {}
-  if (!r.ok) {
-    const msg = (j && (j.message || j.error))
-      ? `${j.error || ''} ${j.message || ''}`.trim()
-      : `ML HTTP ${r.status}`;
-    const e = new Error(msg); e.status = r.status; e.payload = j; throw e;
-  }
-  return j;
-}
-
-const norm = s => String(s || '').toLowerCase().trim();
-const yes = v => ['1','true','yes','y','sim'].includes(String(v||'').toLowerCase());
-
-/* =========================================================================
- *  MAPEAMENTO DE STATUS
- * ========================================================================= */
-
-// A) SHIPPING (envios) → fluxo canônico do sistema
-function canonFlowFromShipping(status, substatus) {
-  const s = norm(status), ss = norm(substatus);
-  const t = `${s}_${ss}`;
-
-  if (/(mediat|dispute)/.test(t)) return 'mediacao';
-  if (/(prep|prepar|embal|label|etiq|ready|pronto)/.test(t)) return 'em_preparacao';
-  if (/(in[_-]?transit|transito|transporte|shipped|out[_-]?for[_-]?delivery|returning|to[_-]?be[_-]?received)/.test(t)) return 'em_transporte';
-  if (/(delivered|entreg|arrived|recebid)/.test(t)) return 'recebido_cd';
-  if (/(not[_-]?delivered)/.test(t)) return 'nao_entregue';
-  if (/(cancelled|canceled)/.test(t)) return 'cancelado';
-  if (/(closed|fechado|finaliz)/.test(t)) return 'fechado';
-  return 'pendente';
-}
-
-// B) RETURNS v2 (claims/:id/returns) → fluxo canônico
-function canonFlowFromReturnStatus(returnStatus) {
-  const s = norm(returnStatus);
-  if (!s) return 'pendente';
-
-  // Estados do recurso v2
-  if (/^label_generated$|ready_to_ship|etiqueta/.test(s)) return 'pronto_envio';
-  if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(s)) return 'pendente';
-  if (/^shipped$|pending_delivered$/.test(s)) return 'em_transporte';
-  if (/^delivered$/.test(s)) return 'recebido_cd';
-  if (/^not_delivered$/.test(s)) return 'nao_entregue';
-  if (/^return_to_buyer$/.test(s)) return 'retorno_comprador';
-  if (/^scheduled$/.test(s)) return 'agendado';
-  if (/^expired$/.test(s)) return 'expirado';
-  if (/^failed$/.test(s)) return 'falha';
-  if (/^cancelled$|canceled$/.test(s)) return 'cancelado';
-
-  // Legado (fallback)
-  if (['to_be_sent', 'to_be_received', 'in_transit'].includes(s)) return 'em_transporte';
-  if (['received', 'arrived'].includes(s)) return 'recebido_cd';
-  if (['in_review', 'under_review', 'inspection'].includes(s)) return 'em_inspecao';
-  if (['refunded', 'closed'].includes(s)) return 'encerrado';
-
-  return 'pendente';
-}
-
-// Se o status geral do retorno for inconclusivo, deduz pelos shipments
-function canonFlowFromReturnObject(ret) {
-  const base = canonFlowFromReturnStatus(ret?.status);
-  if (base !== 'pendente') return base;
-
-  const ships = Array.isArray(ret?.shipments) ? ret.shipments : [];
-  let strong = null;
-
-  for (const sh of ships) {
-    const st = norm(sh?.status);
-    if (st === 'delivered') return 'recebido_cd';
-    if (st === 'shipped' || st === 'pending_delivered') strong = strong || 'em_transporte';
-    if (st === 'label_generated' || st === 'ready_to_ship') strong = strong || 'pronto_envio';
-    if (st === 'not_delivered') strong = strong || 'nao_entregue';
-    if (st === 'cancelled') strong = strong || 'cancelado';
-  }
-  return strong || 'pendente';
-}
-
-/* =========================================================================
- *  PERSISTÊNCIA
- * ========================================================================= */
-
-async function persistFlowByOrder(orderId, flow, updatedBy) {
-  const { rowCount } = await query(
-    `UPDATE devolucoes
-        SET status     = $2,
-            log_status = $2,
-            updated_at = now(),
-            updated_by = $3
-      WHERE id_venda  = $1`,
-    [String(orderId), flow, updatedBy || 'ml-sync']
-  );
-  return rowCount;
-}
-
-async function persistFlowSmart({ orderId, claimId, returnId, flow, updatedBy }) {
-  let rows = 0;
-
-  if (orderId) rows = await persistFlowByOrder(orderId, flow, updatedBy);
-
-  if (!rows && claimId) {
-    const r = await query(
-      `UPDATE devolucoes
-          SET status     = $2,
-              log_status = $2,
-              updated_at = now(),
-              updated_by = $3
-        WHERE ml_claim_id = $1 OR claim_id = $1`,
-      [String(claimId), flow, updatedBy || 'ml-sync']
-    );
-    rows = r.rowCount || 0;
   }
 
-  if (!rows && returnId) {
-    try {
-      const r = await query(
-        `UPDATE devolucoes
-            SET status     = $2,
-                log_status = $2,
-                updated_at = now(),
-                updated_by = $3
-          WHERE ml_return_id = $1 OR return_id = $1`,
-        [String(returnId), flow, updatedBy || 'ml-sync']
-      );
-      rows = r.rowCount || 0;
-    } catch { /* coluna pode não existir */ }
+  function mapReturnStatus(ret) {
+    const s = String(ret?.status || '').toLowerCase();
+    if (['to_be_sent','shipped','to_be_received','in_transit'].includes(s)) return 'a_caminho';
+    if (['received','arrived','delivered'].includes(s)) return 'recebido_cd';
+    if (['in_review','under_review','inspection'].includes(s)) return 'em_inspecao';
+    if (['cancelled','refunded','closed','not_delivered','returned_to_sender'].includes(s)) return 'encerrado';
+    return 'pendente';
   }
 
-  return rows;
-}
+  // pega um claimId seguro (somente numérico > 0)
+  function selectClaimId(it) {
+    const candidates = [
+      it?.id,
+      it?.claim_id,
+      it?.claim?.id,
+      // às vezes vem como string; strip não-dígitos:
+      typeof it?.id === 'string' ? it.id.replace(/\D/g, '') : null,
+      typeof it?.claim_id === 'string' ? it.claim_id.replace(/\D/g, '') : null,
+    ].filter(Boolean);
 
-/* =========================================================================
- *  COLETAS ML
- * ========================================================================= */
-
-// Resolve estado de shipping via várias fontes
-async function resolveShippingFromML(orderId, token) {
-  // flag para retornar "forbidden" sem quebrar o fluxo
-  let lastError = null;
-
-  // 1) /orders/:id/shipments
-  try {
-    const data = await mlFetch(`/orders/${orderId}/shipments`, token);
-    const ship = Array.isArray(data) ? data[0] : data;
-    if (ship) {
-      let status = ship.status || null;
-      let substatus = ship.substatus || null;
-
-      if ((!status || !substatus) && ship.id) {
-        const d = await mlFetch(`/shipments/${ship.id}`, token).catch(() => null);
-        if (d) { status = d.status || status; substatus = d.substatus || substatus; }
-      }
-
-      if (status || substatus) {
-        return { status, substatus, shipment_id: ship.id || null, source: 'orders/:id/shipments' };
-      }
+    for (const c of candidates) {
+      const n = Number(String(c));
+      if (Number.isFinite(n) && n > 0) return String(n);
     }
-  } catch (e) {
-    lastError = e;
-    if (e.status === 403 || e.status === 404) return { status:null, substatus:null, shipment_id:null, source:'orders/:id/shipments', forbidden:true, error:e.message };
+    return null;
   }
 
-  // 2) /shipments?order_id=...
-  try {
-    const list = await mlFetch(`/shipments?order_id=${orderId}`, token);
-    const ship = Array.isArray(list) ? list[0] : (list?.results?.[0] || null);
-    if (ship) {
-      return {
-        status: ship.status || null,
-        substatus: ship.substatus || null,
-        shipment_id: ship.id || null,
-        source: 'shipments?order_id'
-      };
-    }
-  } catch (e) {
-    lastError = e;
-    if (e.status === 403 || e.status === 404) return { status:null, substatus:null, shipment_id:null, source:'shipments?order_id', forbidden:true, error:e.message };
+  function isInvalidClaimIdError(err) {
+    const data = err?.response?.data;
+    const msg = (data && (data.error || data.message)) || err?.message || '';
+    return /invalid[_-]?claim[_-]?id/i.test(String(msg));
   }
 
-  // 3) /orders/:id + /shipments/:id
-  try {
-    const ord = await mlFetch(`/orders/${orderId}`, token);
-    const sid = ord?.shipping?.id;
-    if (sid) {
-      const ship = await mlFetch(`/shipments/${sid}`, token);
-      return {
-        status: ship.status || null,
-        substatus: ship.substatus || null,
-        shipment_id: sid,
-        source: 'orders/:id ⇒ shipments/:id'
-      };
-    }
-  } catch (e) {
-    lastError = e;
-    if (e.status === 403 || e.status === 404) return { status:null, substatus:null, shipment_id:null, source:'orders ⇒ shipments', forbidden:true, error:e.message };
-  }
-
-  return { status: null, substatus: null, shipment_id: null, source: 'not_found', error: lastError?.message || null };
-}
-
-// Returns por claim_id (v2)
-async function resolveReturnByClaim(claimId, token) {
-  const ret = await mlFetch(`/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`, token);
-  return ret; // objeto único
-}
-
-// Busca claim por order_id (ajuda quando a tabela ainda não tem claim salvo)
-async function findClaimByOrderId(orderId, token) {
-  try {
-    const data = await mlFetch(`/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}`, token);
-    const arr = Array.isArray(data?.results) ? data.results
-            : Array.isArray(data?.data)    ? data.data
-            : Array.isArray(data)          ? data : [];
-    return arr[0]?.id || arr[0]?.claim_id || null;
-  } catch { return null; }
-}
-
-/* =========================================================================
- *  PÍLULA (consolida Claim + Return → rótulo curto)
- * ========================================================================= */
-
-function computePill({ claim, ret }) {
-  // 1) Mediação (dispute) tem prioridade
-  const stage = norm(claim?.stage);
-  if (stage === 'dispute') {
-    return { code: 'em_mediacao', label: 'Em mediação', tone: 'warning' };
-  }
-
-  // 2) Return + shipments
-  const rStatus = norm(ret?.status);
-  const ships = Array.isArray(ret?.shipments) ? ret.shipments : [];
-  const shipStatuses = new Set(ships.map(s => norm(s?.status)));
-
-  // pronto p/ envio
-  if (rStatus === 'label_generated' || shipStatuses.has('ready_to_ship') || rStatus === 'pending') {
-    return { code: 'pronto_envio', label: 'Pronto p/ envio', tone: 'info' };
-  }
-
-  // em transporte
-  const transitSet = ['shipped', 'in_transit', 'pending_delivered', 'not_delivered'];
-  if (transitSet.some(s => shipStatuses.has(s)) || transitSet.includes(rStatus)) {
-    return { code: 'em_transporte', label: 'Em transporte', tone: 'info' };
-  }
-
-  // entregue (chegou ao destino de devolução)
-  if (rStatus === 'delivered' || shipStatuses.has('delivered')) {
-    const toWh = ships.some(s => norm(s?.destination?.name) === 'warehouse' && norm(s.status) === 'delivered');
-    return toWh
-      ? { code: 'recebido_cd', label: 'Recebido no CD', tone: 'success' }
-      : { code: 'entregue', label: 'Entregue', tone: 'success' };
-  }
-
-  // encerrado/cancelado
-  const closedSet = ['cancelled', 'expired', 'return_to_buyer', 'closed'];
-  if (closedSet.includes(rStatus) || norm(claim?.status) === 'closed') {
-    return { code: 'encerrado', label: 'Encerrado', tone: 'muted' };
-  }
-
-  // fallback
-  return { code: 'pendente', label: 'Pendente', tone: 'muted' };
-}
-
-/* =========================================================================
- *  ROTAS
- * ========================================================================= */
-
-module.exports = function registerMlSync(app) {
-  // ===== SHIPPING: estado único por order_id
-  app.get('/api/ml/shipping/state', async (req, res) => {
-    const silent = yes(req.query.silent);
-    try {
-      const orderId = String(req.query.order_id || '').trim();
-      if (!orderId) return res.status(400).json({ error: 'order_id obrigatório' });
-
-      const token = await getMLToken(req);
-      if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
-
-      const info = await resolveShippingFromML(orderId, token);
-      if (info.status || info.substatus) {
-        const flow = canonFlowFromShipping(info.status, info.substatus);
-        await persistFlowByOrder(orderId, flow, 'ml-shipping-state');
-        return res.json({ ok: true, order_id: orderId, flow, ...info });
-      }
-      // não quebra em 401/403 — devolve ok:false com a razão
-      return res.json({ ok: false, order_id: orderId, ...info });
-    } catch (e) {
-      if (silent) return res.json({ ok: false, error: e.message, upstream: e.payload || null });
-      res.status(502).json({ error: 'Falha na consulta ao ML', detail: e.message, upstream: e.payload || null });
-    }
-  });
-
-  // ===== SHIPPING: varredura (por período) ou one-shot via ?order_id
-  app.get('/api/ml/shipping/sync', async (req, res) => {
-    const silent = yes(req.query.silent);
-    try {
-      const token = await getMLToken(req);
-      if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
-
-      // one-shot
-      const orderId = req.query.order_id && String(req.query.order_id).trim();
-      if (orderId) {
-        const info = await resolveShippingFromML(orderId, token);
-        let flow = null;
-        if (info.status || info.substatus) {
-          flow = canonFlowFromShipping(info.status, info.substatus);
-          await persistFlowByOrder(orderId, flow, 'ml-sync(one)');
-        }
-        return res.json({ ok: true, order_id: orderId, flow, ...info });
-      }
-
-      // scan por período
-      const days = Math.max(1, Math.min(90, Number(req.query.recent_days || 7)));
-      const { rows } = await query(
-        `SELECT id_venda
-           FROM devolucoes
-          WHERE id_venda IS NOT NULL
-            AND created_at >= now() - ($1 || ' days')::interval`,
-        [days]
-      );
-
-      let updated = 0;
-      for (const r of rows) {
-        const info = await resolveShippingFromML(r.id_venda, token);
-        if (info.status || info.substatus) {
-          const flow = canonFlowFromShipping(info.status, info.substatus);
-          await persistFlowByOrder(r.id_venda, flow, 'ml-sync(scan)');
-          updated++;
-        }
-      }
-      res.json({ ok: true, updated, scanned: rows.length });
-    } catch (e) {
-      if (silent) return res.json({ ok: false, error: e.message });
-      res.status(502).json({ error: 'Falha no sync de shipping', detail: e.message });
-    }
-  });
-
-  // ===== RETURNS: estado por claim_id
-  // GET /api/ml/returns/state?claim_id=... [&order_id=...] [&silent=1]
-  app.get('/api/ml/returns/state', async (req, res) => {
-    const silent = yes(req.query.silent);
-    try {
-      const claimId = String(req.query.claim_id || '').trim();
-      const orderId = req.query.order_id ? String(req.query.order_id).trim() : null;
-      if (!claimId) return res.status(400).json({ error: 'claim_id obrigatório' });
-
-      const token = await getMLToken(req);
-      if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
-
-      const ret = await resolveReturnByClaim(claimId, token);
-      const flow = canonFlowFromReturnObject(ret);
-      const persistedRows = await persistFlowSmart({
-        orderId, claimId, returnId: ret?.id, flow, updatedBy: 'ml-returns-state'
+  async function addReturnEvent(req, {
+    returnId, type, title = null, message = null, meta = null,
+    created_by = 'ml-sync', idemp_key = null
+  }) {
+    if (typeof externalAddReturnEvent === 'function') {
+      return externalAddReturnEvent({
+        returnId, type, title, message, meta,
+        createdBy: created_by, idempKey: idemp_key
       });
+    }
+    const q = qOf(req);
+    const metaStr = meta ? JSON.stringify(meta) : null;
+    try {
+      await q(`
+        INSERT INTO return_events
+          (return_id, type, title, message, meta, created_by, created_at, idemp_key)
+        VALUES ($1,$2,$3,$4,$5,$6, now(), $7)
+      `, [returnId, type, title, message, metaStr, created_by, idemp_key]);
+    } catch (e) {
+      if (String(e?.code) !== '23505') throw e; // ignora idempotência
+    }
+  }
 
+  async function ensureReturnByOrder(req, { order_id, sku = null, loja_nome = null, created_by = 'ml-sync' }) {
+    const q = qOf(req);
+    const { rows } = await q(
+      `SELECT id FROM devolucoes WHERE id_venda::text = $1 LIMIT 1`,
+      [String(order_id)]
+    );
+    if (rows[0]?.id) return rows[0].id;
+
+    const ins = await q(`
+      INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id
+    `, [String(order_id), sku || null, loja_nome || 'Mercado Livre', created_by]);
+
+    const id = ins.rows[0].id;
+
+    await addReturnEvent(req, {
+      returnId: id,
+      type: 'ml-sync',
+      title: 'Criação por ML Sync',
+      message: `Stub criado a partir da API do Mercado Livre (order ${order_id})`,
+      meta: { order_id, loja_nome: loja_nome || 'Mercado Livre' },
+      idemp_key: `ml-sync:create:${order_id}`
+    });
+
+    return id;
+  }
+
+  // -------- Claims Search robusto (com fallback + paginação) ----------
+  async function fetchClaimsPaged(http, account, {
+    fromIso, toIso, status, siteId, limitPerPage = 200, max = 2000
+  }) {
+    const used = [];
+    const collect = [];
+    let totalFetched = 0;
+
+    const strategies = [
+      {
+        label: 'v1:new/date_created',
+        path: '/post-purchase/v1/claims/search',
+        makeParams: (off) => ({
+          player_role: 'seller',
+          player_user_id: account.user_id,
+          status,
+          site_id: siteId || undefined,
+          sort: 'date_created:desc',
+          range: `date_created:after:${fmtML(fromIso)}:before:${fmtML(toIso)}`,
+          limit: Math.min(limitPerPage, 200),
+          offset: off
+        })
+      },
+      {
+        label: 'v1:old/date_created',
+        path: '/post-purchase/v1/claims/search',
+        makeParams: (off) => ({
+          'seller.id': account.user_id,
+          'date_created.from': fmtML(fromIso),
+          'date_created.to': fmtML(toIso),
+          status,
+          site_id: siteId || undefined,
+          sort: 'date_created:desc',
+          limit: Math.min(limitPerPage, 200),
+          offset: off
+        })
+      },
+      {
+        label: 'v1:new/last_updated',
+        path: '/post-purchase/v1/claims/search',
+        makeParams: (off) => ({
+          player_role: 'seller',
+          player_user_id: account.user_id,
+          status,
+          site_id: siteId || undefined,
+          sort: 'last_updated:desc',
+          range: `last_updated:after:${fmtML(fromIso)}:before:${fmtML(toIso)}`,
+          limit: Math.min(limitPerPage, 200),
+          offset: off
+        })
+      }
+    ];
+
+    for (const strat of strategies) {
+      let offset = 0;
+      let page = 0;
+      let anyThisStrategy = false;
+      try {
+        while (totalFetched < max) {
+          const params = strat.makeParams(offset);
+          const { data } = await http.get(strat.path, { params });
+          const arr = Array.isArray(data?.data) ? data.data : [];
+          used.push({ status, page: page + 1, used: { path: strat.path, label: strat.label, params } });
+
+          if (!arr.length) break;
+
+          for (const it of arr) {
+            // só aceita entrada com claimId sólido
+            const cid = selectClaimId(it);
+            if (!cid) continue;
+            // dedupe por claimId
+            if (!collect.find(c => c.__cid === cid)) {
+              const copy = { ...it, __cid: cid };
+              collect.push(copy);
+              totalFetched++;
+              if (totalFetched >= max) break;
+            }
+          }
+
+          anyThisStrategy = true;
+          page++;
+          offset += params.limit || arr.length;
+        }
+      } catch (e) {
+        used.push({ status, page: page + 1, used: { path: strat.path, label: strat.label }, error: e?.response?.data || e?.message || String(e) });
+      }
+
+      if (anyThisStrategy && collect.length) break;
+    }
+
+    return { items: collect, used };
+  }
+
+  // Detalhe do claim
+  async function getClaimDetail(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
+    return data;
+  }
+
+  // Return (v2) vinculado ao claim
+  async function getReturnV2ByClaim(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
+    return data; // { id, status, resource_id, ... }
+  }
+
+  // -------- Order detail (para enriquecer devolução) ----------
+  async function getOrderDetail(http, orderId) {
+    const { data } = await http.get(`/orders/${orderId}`);
+    return data;
+  }
+
+  async function enrichReturnFromML(req, returnId) {
+    const q = qOf(req);
+
+    const { rows } = await q(
+      `SELECT id, id_venda, loja_nome FROM devolucoes WHERE id = $1 LIMIT 1`,
+      [returnId]
+    );
+    if (!rows[0]) throw new Error('Devolução não encontrada');
+
+    const orderId = normalizeOrderId(rows[0].id_venda);
+    if (!orderId) throw new Error('Devolução não possui número do pedido');
+
+    const { http } = await getAuthedAxios(req);
+    const order = await getOrderDetail(http, orderId);
+
+    const buyer = order?.buyer || {};
+    const buyerName =
+      [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim() ||
+      buyer.nickname || null;
+
+    const dataCompraIso = order?.date_created ? dayjs(order.date_created).toISOString() : null;
+
+    let sku = null;
+    const items = Array.isArray(order?.order_items) ? order.order_items : [];
+    for (const it of items) {
+      sku = normalizeSku(it, { item: it?.item }) || sku;
+      if (sku) break;
+    }
+
+    await q(`
+      UPDATE devolucoes
+         SET cliente_nome = COALESCE($1, cliente_nome),
+             data_compra  = COALESCE($2, data_compra),
+             loja_nome    = COALESCE($3, loja_nome),
+             sku          = COALESCE($4, sku),
+             updated_at   = now()
+       WHERE id = $5
+    `, [buyerName, dataCompraIso, 'Mercado Livre', sku, returnId]);
+
+    await addReturnEvent(req, {
+      returnId,
+      type: 'ml-sync',
+      title: 'Enriquecido via ML',
+      message: `Dados trazidos do pedido ${orderId}`,
+      meta: { order_id: orderId },
+      idemp_key: `ml-enrich:${returnId}:${orderId}`
+    });
+
+    return { ok: true, order_id: orderId };
+  }
+
+  /* ------------------------------- rotas ------------------------------ */
+
+  router.get('/api/ml/ping', async (req, res) => {
+    try {
+      const { http, account } = await getAuthedAxios(req);
+      const { data: me } = await http.get('/users/me');
       return res.json({
         ok: true,
-        claim_id: claimId,
-        order_id: orderId || null,
-        return_id: ret?.id || null,
-        flow,
-        persisted_rows: persistedRows,
-        raw_status: ret?.status || null,
-        shipments: Array.isArray(ret?.shipments) ? ret.shipments : [],
-        status_money: ret?.status_money || null,
-        refund_at: ret?.refund_at || null,
-        resource_type: ret?.resource_type || null
+        account: { user_id: account.user_id, nickname: account.nickname, site_id: account.site_id, expires_at: account.expires_at },
+        me
       });
     } catch (e) {
-      if (silent || e.status === 401 || e.status === 403) {
-        return res.json({ ok: false, error: e.message, upstream: e.payload || null });
-      }
-      res.status(502).json({ error: 'Falha ao consultar returns', detail: e.message, upstream: e.payload || null });
+      const detail = e?.response?.data || e?.message || String(e);
+      return res.status(500).json({ ok: false, error: detail });
     }
   });
 
-  // ===== RETURNS: varredura por período (usa claim_id salvo na tabela)
-  // GET /api/ml/returns/sync?recent_days=7[&silent=1]
-  app.get('/api/ml/returns/sync', async (req, res) => {
-    const silent = yes(req.query.silent);
+  // DEBUG — claims (amostra + params usados)
+  router.get('/api/ml/claims/search-debug', async (req, res) => {
     try {
-      const token = await getMLToken(req);
-      if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
+      const now = dayjs();
+      const days = Math.max(1, parseInt(req.query.days || '7', 10) || 7);
+      const fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(days, 'day').toISOString();
+      const toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
+      const status  = (req.query.status || 'opened').toLowerCase();
+      const limit   = Math.min(parseInt(req.query.limit || '5', 10) || 5, 200);
 
-      const days = Math.max(1, Math.min(90, Number(req.query.recent_days || 7)));
-      const { rows } = await query(
-        `SELECT COALESCE(ml_claim_id::text, claim_id::text) AS claim_id,
-                id_venda::text AS order_id
-           FROM devolucoes
-          WHERE (ml_claim_id IS NOT NULL OR claim_id IS NOT NULL)
-            AND created_at >= now() - ($1 || ' days')::interval`,
-        [days]
-      );
+      const accounts = await resolveMlAccounts(req);
+      const { http, account } = accounts[0];
 
-      let updated = 0, scanned = 0;
-      for (const r of rows) {
-        scanned++;
-        if (!r.claim_id) continue;
-        try {
-          const ret = await resolveReturnByClaim(r.claim_id, token);
-          const flow = canonFlowFromReturnObject(ret);
-          await persistFlowSmart({
-            orderId: r.order_id, claimId: r.claim_id, returnId: ret?.id,
-            flow, updatedBy: 'ml-returns-sync'
+      const r = await fetchClaimsPaged(http, account, {
+        fromIso, toIso, status, siteId: account.site_id, limitPerPage: limit, max: limit
+      });
+
+      res.json({
+        ok: true,
+        account: { user_id: account.user_id },
+        status,
+        limit,
+        paging: { total: r.items.length, offset: 0, limit },
+        used: r.used,
+        sample: r.items.slice(0, limit)
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: (e?.response?.data || e?.message || String(e)) });
+    }
+  });
+
+  // DEBUG — returns/search não existe
+  router.get('/api/ml/returns/search-debug', (req, res) => {
+    res.status(501).json({ ok: false, error: 'returns search is not provided by ML; use claims/search + /v2/claims/{claim_id}/returns' });
+    return;
+  });
+
+  /**
+   * Importa devoluções por meio dos claims (com fallback e paginação)
+   * Query:
+   *  - statuses=opened,in_progress   (padrão)
+   *  - days=90  ou  from=YYYY-MM-DD&to=YYYY-MM-DD
+   *  - max=2000
+   *  - dry=1, silent=1, debug=1
+   *  - all=1  ← roda para todas as contas disponíveis
+   *
+   * Nunca retorna 400 em erro de claim — contabiliza em errors_detail e segue.
+   */
+  router.get('/api/ml/claims/import', async (req, res) => {
+    const debug = isTrue(req.query.debug);
+    try {
+      const dry = isTrue(req.query.dry);
+      const silent = isTrue(req.query.silent);
+      const max = Math.max(1, parseInt(req.query.max || '2000', 10) || 2000);
+      const wantAll = isTrue(req.query.all) || String(req.query.scope || 'all') === 'all';
+
+      const now = dayjs();
+      let fromIso, toIso;
+      if (req.query.from || req.query.to) {
+        fromIso = req.query.from ? dayjs(req.query.from).toISOString() : now.subtract(7, 'day').toISOString();
+        toIso   = req.query.to   ? dayjs(req.query.to).toISOString()   : now.toISOString();
+      } else if (req.query.days) {
+        const days = Math.max(1, parseInt(req.query.days, 10) || 7);
+        fromIso = now.subtract(days, 'day').toISOString();
+        toIso   = now.toISOString();
+      } else {
+        fromIso = now.subtract(7, 'day').toISOString();
+        toIso   = now.toISOString();
+      }
+
+      const statusList = String(req.query.statuses || req.query.status || 'opened,in_progress')
+        .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+      const accounts = wantAll ? await resolveMlAccounts(req) : [await getAuthedAxios(req)];
+
+      let processed = 0, created = 0, updated = 0, events = 0, errors = 0, skipped = 0;
+      const paramsUsed = [];
+      const errors_detail = [];
+
+      for (const acc of accounts) {
+        const { http, account } = acc;
+        const lojaNome = account?.nickname ? `Mercado Livre · ${account.nickname}` : 'Mercado Livre';
+
+        // ---- busca claims paginada por status
+        const claimMap = new Map();
+        for (const st of statusList) {
+          const r = await fetchClaimsPaged(http, account, {
+            fromIso, toIso, status: st, siteId: account.site_id, limitPerPage: 200, max
           });
-          updated++;
-        } catch (e) {
-          // ignora 401/403 silenciosamente
-          if (!(e.status === 401 || e.status === 403)) {
-            // console.warn('[returns/sync]', r.claim_id, e.message);
+          paramsUsed.push(...r.used.map(u => ({ ...u, account: account.user_id })));
+          for (const it of r.items) {
+            const id = it.__cid || selectClaimId(it);
+            if (id && !claimMap.has(id)) claimMap.set(id, it);
+            if (claimMap.size >= max) break;
+          }
+          if (claimMap.size >= max) break;
+        }
+
+        for (const [claimId, it] of claimMap.entries()) {
+          const orderFromList = normalizeOrderId(it?.resource_id) || normalizeOrderId(it?.order_id);
+          try {
+            // se por algum motivo o claimId veio inválido, não tenta abrir detalhe
+            const cidNum = Number(claimId);
+            if (!Number.isFinite(cidNum) || cidNum <= 0) {
+              skipped++;
+              // mas se temos order_id, já garante a devolução por ele
+              if (orderFromList) {
+                const returnId = await ensureReturnByOrder(req, {
+                  order_id: orderFromList,
+                  sku: normalizeSku(it),
+                  loja_nome: lojaNome,
+                  created_by: 'ml-sync'
+                });
+                created++;
+                await addReturnEvent(req, {
+                  returnId,
+                  type: 'ml-claim',
+                  title: `Claim inválido (skipped)`,
+                  message: 'Claim sem ID numérico; criado via order_id da listagem',
+                  meta: { claim_id: claimId, order_id: orderFromList },
+                  idemp_key: `ml-claim-skip:${account.user_id}:${orderFromList}`
+                });
+                events++;
+              }
+              continue;
+            }
+
+            let claimDet = null;
+            try {
+              claimDet = await getClaimDetail(http, claimId);
+            } catch (e) {
+              if (isInvalidClaimIdError(e)) {
+                errors++;
+                errors_detail.push({ account: account.user_id, kind: 'claim_detail', claim_id: claimId, error: 'invalid_claim_id' });
+                // fallback: se temos order_id da listagem, garante a devolução mesmo assim
+                if (orderFromList) {
+                  const returnId = await ensureReturnByOrder(req, {
+                    order_id: orderFromList,
+                    sku: normalizeSku(it),
+                    loja_nome: lojaNome,
+                    created_by: 'ml-sync'
+                  });
+                  created++;
+                  await addReturnEvent(req, {
+                    returnId,
+                    type: 'ml-claim',
+                    title: `Claim inválido (fallback)`,
+                    message: 'Não foi possível abrir o claim no ML; criado/atualizado pelo order_id',
+                    meta: { claim_id: claimId, order_id: orderFromList },
+                    idemp_key: `ml-claim-fallback:${account.user_id}:${orderFromList}`
+                  });
+                  events++;
+                }
+                continue; // não interrompe o import
+              } else {
+                // erro diferente → registra e segue
+                errors++;
+                errors_detail.push({ account: account.user_id, kind: 'claim_detail', claim_id: claimId, error: e?.response?.data || e?.message || String(e) });
+                continue;
+              }
+            }
+
+            // tenta achar return v2
+            let ret = null;
+            try {
+              ret = await getReturnV2ByClaim(http, claimId);
+            } catch (e) {
+              errors++;
+              errors_detail.push({ account: account.user_id, kind: 'return_v2', claim_id: claimId, error: e?.response?.data || e?.message || String(e) });
+            }
+
+            const order_id =
+              normalizeOrderId(ret?.resource_id) ||
+              normalizeOrderId(claimDet?.resource_id) ||
+              orderFromList ||
+              normalizeOrderId(it?.order_id);
+
+            if (!order_id) {
+              // sem order_id não há como criar devolução
+              errors++;
+              errors_detail.push({ account: account.user_id, kind: 'no_order_id', claim_id: claimId, error: 'missing order_id' });
+              continue;
+            }
+
+            const status = mapReturnStatus(ret);
+            const sku = normalizeSku(it, claimDet);
+
+            const returnId = await ensureReturnByOrder(req, {
+              order_id,
+              sku,
+              loja_nome: lojaNome,
+              created_by: 'ml-sync'
+            });
+
+            if (!dry) {
+              await qOf(req)(
+                `UPDATE devolucoes
+                   SET status = COALESCE($1, status),
+                       sku    = COALESCE($2, sku),
+                       loja_nome = CASE
+                         WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
+                           THEN COALESCE($3, loja_nome)
+                         ELSE loja_nome
+                       END,
+                       updated_at = now()
+                 WHERE id = $4`,
+                [status, sku, lojaNome, returnId]
+              );
+              updated++;
+            }
+
+            const idemp = `ml-claim:${account.user_id}:${claimId}:${order_id}`;
+            if (!dry) {
+              await addReturnEvent(req, {
+                returnId,
+                type: 'ml-claim',
+                title: `Claim ${claimId} (${status})`,
+                message: 'Sincronizado pelo import',
+                meta: {
+                  account_id: account.user_id,
+                  nickname: account.nickname,
+                  claim_id: claimId,
+                  order_id,
+                  return_id: ret?.id || null,
+                  return_status: String(ret?.status || ''),
+                  loja_nome: lojaNome
+                },
+                idemp_key: idemp
+              });
+              events++;
+            }
+
+            processed++;
+          } catch (e) {
+            errors++;
+            errors_detail.push({
+              account: acc?.account?.user_id,
+              kind: 'loop',
+              claim_id: claimId,
+              error: String(e?.response?.data || e?.message || e)
+            });
           }
         }
       }
-      res.json({ ok: true, updated, scanned });
-    } catch (e) {
-      if (silent) return res.json({ ok: false, error: e.message });
-      res.status(502).json({ error: 'Falha no sync de returns', detail: e.message });
-    }
-  });
 
-  /* ===== PÍLULA: consolida claim+return e devolve rótulo curto ========= */
-
-  // GET /api/ml/returns/:dev_id/pill
-  // dev_id = id da sua tabela "devolucoes". Opcionalmente aceitar ?order_id e/ou ?claim_id.
-  app.get('/api/ml/returns/:dev_id/pill', async (req, res) => {
-    const silent = yes(req.query.silent);
-    try {
-      const devId = Number(req.params.dev_id || 0);
-      const token = await getMLToken(req);
-      if (!token) return res.status(501).json({ error: 'Token do ML ausente' });
-
-      // 1) tenta obter dados da devolução na sua tabela
-      let orderId = null, claimId = null;
-      try {
-        const { rows } = await query(
-          `SELECT id, id_venda::text AS order_id,
-                  COALESCE(ml_claim_id::text, claim_id::text) AS claim_id
-             FROM devolucoes
-            WHERE id = $1
-            LIMIT 1`,
-          [devId]
-        );
-        orderId = rows[0]?.order_id || null;
-        claimId = rows[0]?.claim_id || null;
-      } catch {}
-
-      // overrides por query
-      if (req.query.order_id) orderId = String(req.query.order_id);
-      if (req.query.claim_id) claimId = String(req.query.claim_id);
-
-      // 2) se não tiver claim, tenta descobrir via order_id
-      if (!claimId && orderId) {
-        claimId = await findClaimByOrderId(orderId, token);
+      if (!silent) {
+        console.log('[ml-sync] import', {
+          from: fromIso, to: toIso, statuses: statusList, processed, created, updated, events, errors, skipped
+        });
       }
 
-      // 3) coleta claim e return
-      let claimDet = {};
-      if (claimId) {
-        try { claimDet = await mlFetch(`/post-purchase/v1/claims/${encodeURIComponent(claimId)}`, token); }
-        catch (e) { if (!(e.status === 401 || e.status === 403 || e.status === 404)) throw e; }
-      }
-
-      let ret = {};
-      if (claimId) {
-        try { ret = await resolveReturnByClaim(claimId, token); }
-        catch (e) { if (!(e.status === 401 || e.status === 403 || e.status === 404)) throw e; }
-      }
-
-      const pill = computePill({ claim: claimDet, ret });
-      // persistimos o fluxo canônico junto (ajuda o SSR/SQL)
-      try {
-        const flow = canonFlowFromReturnObject(ret);
-        if (flow) await persistFlowSmart({ orderId, claimId, returnId: ret?.id, flow, updatedBy: 'ml-pill' });
-      } catch {}
-
+      // Importante: nunca devolve 400 por causa de claim inválido.
       return res.json({
         ok: true,
-        pill,
-        raw: {
-          claim: { id: claimId || null, status: claimDet?.status || null, stage: claimDet?.stage || null },
-          ret:   { id: ret?.id || null, status: ret?.status || null, refund_at: ret?.refund_at || null,
-                   shipments: Array.isArray(ret?.shipments)
-                     ? ret.shipments.map(s => ({ shipment_id: s.shipment_id, status: s.status, type: s.type, dest: s?.destination?.name || null }))
-                     : [] }
-        }
+        from: fromIso,
+        to: toIso,
+        statuses: statusList,
+        processed, created, updated, events, errors, skipped,
+        paramsUsed,
+        errors_detail
       });
+
     } catch (e) {
-      if (silent) return res.json({ ok: false, error: e.message, upstream: e.payload || null });
-      res.status(502).json({ error: 'Falha ao consolidar pílula', detail: e.message, upstream: e.payload || null });
+      const detail = e?.response?.data || e?.message || String(e);
+      // Mesmo em falha geral, evita 400 para não quebrar o front polling.
+      return res.status(200).json({ ok: false, error: detail });
     }
   });
 
-  /* ===== COMPATIBILIDADE: endpoints antigos para não gerar 404 no front ===== */
-
-  app.get('/api/ml/shipping/status', async (req, res) => {
-    const orderId = String(req.query.order_id || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'order_id obrigatório' });
+  // Enriquecer uma devolução específica com dados do pedido do ML
+  router.post('/api/ml/returns/:id/enrich', async (req, res) => {
     try {
-      const token = await getMLToken(req);
-      const info = token ? await resolveShippingFromML(orderId, token)
-                         : { status:null, substatus:null, source:'no_token' };
-      if (info.status || info.substatus) {
-        const flow = canonFlowFromShipping(info.status, info.substatus);
-        await persistFlowByOrder(orderId, flow, 'ml-shipping-status');
-        return res.json({ ok: true, order_id: orderId, flow, ...info });
-      }
-      res.json({ ok: false, order_id: orderId, ...info });
+      const { id } = req.params;
+      const out = await enrichReturnFromML(req, id);
+      return res.json({ ok: true, ...out });
     } catch (e) {
-      res.json({ ok: false, order_id: orderId, error: e.message }); // não 404
+      const detail = e?.response?.data || e?.message || String(e);
+      return res.status(500).json({ ok: false, error: detail });
     }
   });
 
-  app.get('/api/ml/shipping/by-order/:order_id', async (req, res) => {
-    const orderId = String(req.params.order_id || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'order_id obrigatório' });
+  // Backfill simples para usar no pós-login (últimos N dias, padrão 7)
+  router.post('/api/ml/claims/backfill-on-login', async (req, res) => {
     try {
-      const token = await getMLToken(req);
-      const info = token ? await resolveShippingFromML(orderId, token)
-                         : { status:null, substatus:null, source:'no_token' };
-      if (info.status || info.substatus) {
-        const flow = canonFlowFromShipping(info.status, info.substatus);
-        await persistFlowByOrder(orderId, flow, 'ml-by-order');
-        return res.json({ ok: true, order_id: orderId, flow, ...info });
-      }
-      res.json({ ok: false, order_id: orderId, ...info });
+      const days = Math.max(1, parseInt(req.body?.days || '7', 10) || 7);
+      // reutiliza a própria rota via HTTP? aqui chamamos a lógica indiretamente:
+      req.query.days = String(days);
+      req.query.statuses = 'opened,in_progress';
+      req.query.silent = '1';
+      req.query.all = '1';
+      // Encaminha para o import
+      // NOTA: numa arquitetura ideal, fatoraríamos a lógica para uma função reutilizável
+      // mas aqui simulamos fazendo uma requisição interna simplificada (ou reaproveitando o handler).
+      // Para simplicidade, apenas devolvemos instrução de chamar /api/ml/claims/import do front.
+      return res.json({ ok: true, hint: `chame GET /api/ml/claims/import?days=${days}&statuses=opened,in_progress&silent=1&all=1` });
     } catch (e) {
-      res.json({ ok: false, order_id: orderId, error: e.message });
+      return res.status(200).json({ ok: false, error: e?.message || String(e) });
     }
   });
 
-  // Aliases que o front tentou usar em versões antigas
-  app.get('/api/ml/orders/:order_id/shipping', (req, res) =>
-    app._router.handle(
-      { ...req, url: `/api/ml/shipping/by-order/${encodeURIComponent(req.params.order_id)}`, method: 'GET' },
-      res, () => {}
-    )
-  );
-
-  app.get('/api/ml/shipments', (req, res) => {
-    const orderId = String(req.query.order_id || '').trim();
-    if (!orderId) return res.status(400).json({ error: 'order_id obrigatório' });
-    app._router.handle(
-      { ...req, url: `/api/ml/shipping/by-order/${encodeURIComponent(orderId)}`, method: 'GET' },
-      res, () => {}
-    );
-  });
+  app.use(router);
 };
