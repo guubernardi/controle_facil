@@ -42,7 +42,7 @@ function normalizeFlow(mlStatus, mlSub) {
       /(in_transit|on_the_way|shipping_in_progress|out_for_delivery|a_caminho|em_transito)/.test(sub)) {
     return 'em_transporte';
   }
-  // <<< alteração crucial: delivered NÃO promove para recebido_cd
+  // delivered de shipping NÃO promove
   if (/^delivered$/.test(s) || /(delivered|arrived|recebid|entreg)/.test(sub)) {
     return 'pendente';
   }
@@ -64,8 +64,9 @@ async function getActiveMlToken(req) {
   if (m) return m[1];
 
   // 3) Seller headers vindos do front (para filtrar ml_tokens)
-  const sellerId   = req.get('x-seller-id')   || null;
-  const sellerNick = req.get('x-seller-nick') || null;
+  const sellerIdRaw   = req.get('x-seller-id')   || null;
+  const sellerNick    = req.get('x-seller-nick') || null;
+  const sellerId      = sellerIdRaw && /^\d+$/.test(sellerIdRaw) ? sellerIdRaw : null; // sanitize
 
   // 4) ml_tokens (mais recente, preferindo is_active)
   try {
@@ -123,22 +124,46 @@ async function mlFetch(path, token, opts = {}) {
 
 // -------- Fallback sem token/sem acesso: consulta do próprio banco --------
 async function fallbackFromDb(orderId) {
-  const { rows } = await query(
-    `SELECT log_status, ml_shipping_status, shipping_status
-       FROM devolucoes
-      WHERE id_venda = $1
-      ORDER BY updated_at DESC NULLS LAST
-      LIMIT 1`,
-    [orderId]
-  );
+  const cols = await tableHasColumns('devolucoes', ['ml_shipping_status','shipping_status','log_status','updated_at','id_venda']);
+
+  // Monta SELECT apenas com colunas existentes
+  const fields = [];
+  if (cols.log_status)         fields.push('log_status');
+  if (cols.ml_shipping_status) fields.push('ml_shipping_status');
+  if (cols.shipping_status)    fields.push('shipping_status');
+
+  if (!fields.length) {
+    return {
+      order_id: orderId,
+      shipment_id: null,
+      ml_status: null,
+      ml_substatus: null,
+      suggested_log_status: 'pendente',
+      fallback: true
+    };
+  }
+
+  const sql = `
+    SELECT ${fields.join(', ')}
+      FROM devolucoes
+     WHERE id_venda = $1
+     ORDER BY updated_at DESC NULLS LAST
+     LIMIT 1`;
+  const { rows } = await query(sql, [orderId]);
   const r = rows[0] || {};
-  const mlStatus  = r.shipping_status || r.ml_shipping_status || null;
-  const logStatus = r.log_status || normalizeFlow(mlStatus, null);
+
+  const mlStatus    = cols.shipping_status    ? (r.shipping_status ?? null)    : null;
+  const mlSubstatus = cols.ml_shipping_status ? (r.ml_shipping_status ?? null) : null;
+
+  const logStatus = cols.log_status && r.log_status
+    ? r.log_status
+    : normalizeFlow(mlStatus, mlSubstatus);
+
   return {
     order_id: orderId,
     shipment_id: null,
-    ml_status: r.shipping_status || null,
-    ml_substatus: r.ml_shipping_status || null,
+    ml_status: mlStatus,
+    ml_substatus: mlSubstatus,
     suggested_log_status: logStatus,
     fallback: true
   };
@@ -203,15 +228,22 @@ async function getShippingStatusFromOrder(orderId, token) {
 
 // -------- Atualiza DB com segurança de colunas --------
 async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus }) {
-  const cols = await tableHasColumns('devolucoes', ['ml_shipping_status','log_status','updated_at','id_venda']);
+  const cols = await tableHasColumns('devolucoes', ['ml_shipping_status','shipping_status','log_status','updated_at','id_venda']);
   const sets = [];
   const params = [];
   let p = 1;
 
+  // substatus/status do ML
   if (cols.ml_shipping_status) {
     sets.push(`ml_shipping_status = $${p++}`);
     params.push(mlSubstatus || mlStatus || null);
   }
+  if (cols.shipping_status) {
+    sets.push(`shipping_status = $${p++}`);
+    params.push(mlStatus || null);
+  }
+
+  // fluxo sugerido interno
   if (cols.log_status && logStatus) {
     sets.push(`log_status = $${p++}`);
     params.push(logStatus);
