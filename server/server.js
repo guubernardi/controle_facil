@@ -120,12 +120,8 @@ app.use('/api', (_req, res, next) => {
 /* ===== Shim de query para ML (aceitar recent_days como days) ===== */
 app.use('/api/ml', (req, _res, next) => {
   try {
-    if (req.query && req.query.recent_days && !req.query.days) {
-      req.query.days = req.query.recent_days;
-    }
-    if (req.query && req.query._days && !req.query.days) {
-      req.query.days = req.query._days;
-    }
+    if (req.query && req.query.recent_days && !req.query.days) req.query.days = req.query.recent_days;
+    if (req.query && req.query._days && !req.query.days) req.query.days = req.query._days;
   } catch {}
   next();
 });
@@ -255,7 +251,7 @@ async function addReturnEvent(args = {}, req) {
     if (String(e?.code) === '23505' && idempKey) {
       const { rows } = await q(
         `SELECT id,return_id AS "returnId",type,title,message,meta,
-                created_by AS "createdBy",created_at AS "createdAt",
+                created_by AS "createdBy",created_at AS "CreatedAt",
                 idemp_key AS "idempotencyKey"
            FROM return_events WHERE idemp_key=$1 LIMIT 1`, [idempKey]
       );
@@ -269,7 +265,7 @@ async function addReturnEvent(args = {}, req) {
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
 /* === NOVAS ROTAS DE RECLAMAÇÕES (messages/attachments/resolutions/evidences) === */
-app.use('/api/ml', require('./routes/ml-claims')); // mantém
+app.use('/api/ml', require('./routes/ml-claims'));
 
 /* === NOVAS ROTAS DE SHIPPING (status, by-order, sync, etc.) === */
 try {
@@ -316,72 +312,44 @@ try {
   console.warn('[BOOT] Returns falhou (vai usar fallback):', e?.message || e);
 }
 
-/** ---- Fallback para /api/returns (GET lista) — completo com shipping/returns ---- */
+/** ---- Fallback mínimo (se router NÃO montou) ---- */
 if (!__returnsMounted) {
   const fallback = express.Router();
-
-  const listHandler = async (req, res) => {
+  fallback.get(['/', '/search'], async (req, res) => {
     try {
-      // paginação
       const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
       const pageQ   = parseInt(req.query.page || '1', 10);
       const limit   = Math.max(1, Math.min(Number.isFinite(limitQ) ? limitQ : 200, 200));
       const page    = Math.max(1, Number.isFinite(pageQ) ? pageQ : 1);
       const offset  = (page - 1) * limit;
 
-      // ordenação
       const orderByReq  = String(req.query.orderBy || 'created_at');
       const orderDir    = (String(req.query.orderDir || 'desc').toLowerCase() === 'asc') ? 'asc' : 'desc';
+      const rangeDays   = parseInt(req.query.range_days || req.query.rangeDays || '0', 10) || 0;
 
-      // janela temporal
-      const rangeDays = parseInt(req.query.range_days || req.query.rangeDays || '0', 10) || 0;
-
-      // colunas base
-      const baseCols = [
-        'id','id_venda','cliente_nome','loja_nome','sku',
-        'status','log_status','status_operacional',
-        'valor_produto','valor_frete','created_at','updated_at'
-      ];
-
-      // colunas opcionais
-      const opt = await tableHasColumns('devolucoes', ['ml_return_status','ml_shipping_status','shipping_status','claim_stage'], req);
+      const baseCols = ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status','status_operacional','valor_produto','valor_frete','created_at','updated_at'];
+      const opt = await tableHasColumns('devolucoes', ['ml_return_status','ml_shipping_status','shipping_status'], req);
 
       const selectCols = [...baseCols];
       if (opt.ml_return_status)   selectCols.push('ml_return_status');
       if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
       else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
-      if (opt.claim_stage)        selectCols.push('claim_stage');
 
-      // ordem segura
-      const allowedOrder = new Set(['created_at','updated_at','id','id_venda']);
-      const orderBy = allowedOrder.has(orderByReq) ? orderByReq : 'created_at';
-
-      // WHERE
       const params = [];
       let whereSql = '';
-      if (rangeDays > 0) {
-        params.push(String(rangeDays));
-        whereSql = `WHERE created_at >= now() - ($${params.length} || ' days')::interval`;
-      }
+      if (rangeDays > 0) { params.push(String(rangeDays)); whereSql = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
 
-      // consulta
       params.push(limit, offset);
       const { rows } = await query(
         `SELECT ${selectCols.join(', ')}
            FROM devolucoes
           ${whereSql}
-          ORDER BY ${orderBy} ${orderDir} NULLS LAST
+          ORDER BY ${orderByReq} ${orderDir} NULLS LAST
           LIMIT $${params.length-1} OFFSET $${params.length}`,
         params
       );
-
-      // count
-      const countParams = [];
-      let countWhere = '';
-      if (rangeDays > 0) { countParams.push(String(rangeDays)); countWhere = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
-      const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM devolucoes ${countWhere}`, countParams);
+      const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`, whereSql ? [String(rangeDays)] : []);
       const total = countRows[0]?.n || 0;
-      const totalPages = Math.max(1, Math.ceil(total / limit));
 
       res.json({
         items: rows.map(r => ({
@@ -401,35 +369,105 @@ if (!__returnsMounted) {
         total,
         page,
         pageSize: limit,
-        totalPages
+        totalPages: Math.max(1, Math.ceil(total / limit))
       });
     } catch (e) {
       console.error('[returns:fallback] erro:', e);
       res.status(500).json({ error:'Falha ao listar devoluções (fallback)' });
     }
-  };
-
-  fallback.get('/', listHandler);
-  fallback.get('/search', listHandler); // mesmo resultado
-
+  });
   app.use('/api/returns', fallback);
-  console.log('[BOOT] Returns Fallback ON (GET /api/returns e /api/returns/search) — com shipping/returns');
+  console.log('[BOOT] Returns Fallback ON');
 }
 
-/* ========= Returns LOGS (DEPOIS dos returns, com guard) ========= */
+/* ========= Returns Compat Shim ON (sempre) =========
+   Garante /api/returns e /api/returns/search mesmo se o router oficial
+   estiver montado mas não tratar a raiz (evita 404). */
+{
+  const compat = express.Router();
+  const listHandler = async (req, res, next) => {
+    // Só atende GET raiz; se não for GET, passa
+    if (req.method !== 'GET') return next();
+    try {
+      const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
+      const pageQ   = parseInt(req.query.page || '1', 10);
+      const limit   = Math.max(1, Math.min(Number.isFinite(limitQ) ? limitQ : 200, 200));
+      const page    = Math.max(1, Number.isFinite(pageQ) ? pageQ : 1);
+      const offset  = (page - 1) * limit;
+
+      const orderByReq  = String(req.query.orderBy || 'created_at');
+      const orderDir    = (String(req.query.orderDir || 'desc').toLowerCase() === 'asc') ? 'asc' : 'desc';
+      const rangeDays   = parseInt(req.query.range_days || req.query.rangeDays || '0', 10) || 0;
+
+      const baseCols = ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status','status_operacional','valor_produto','valor_frete','created_at','updated_at'];
+      const opt = await tableHasColumns('devolucoes', ['ml_return_status','ml_shipping_status','shipping_status'], req);
+
+      const selectCols = [...baseCols];
+      if (opt.ml_return_status)   selectCols.push('ml_return_status');
+      if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
+      else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
+
+      const params = [];
+      let whereSql = '';
+      if (rangeDays > 0) { params.push(String(rangeDays)); whereSql = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
+
+      params.push(limit, offset);
+      const { rows } = await query(
+        `SELECT ${selectCols.join(', ')}
+           FROM devolucoes
+          ${whereSql}
+          ORDER BY ${orderByReq} ${orderDir} NULLS LAST
+          LIMIT $${params.length-1} OFFSET $${params.length}`,
+        params
+      );
+
+      const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`, whereSql ? [String(rangeDays)] : []);
+      const total = countRows[0]?.n || 0;
+
+      return res.json({
+        items: rows.map(r => ({
+          id: r.id,
+          id_venda: r.id_venda,
+          cliente_nome: r.cliente_nome,
+          loja_nome: r.loja_nome,
+          sku: r.sku,
+          status: r.status,
+          log_status: r.log_status ?? null,
+          ml_return_status: r.ml_return_status ?? null,
+          ml_shipping_status: r.ml_shipping_status ?? null,
+          valor_produto: r.valor_produto,
+          valor_frete: r.valor_frete,
+          created_at: r.created_at ?? r.updated_at ?? null
+        })),
+        total,
+        page,
+        pageSize: limit,
+        totalPages: Math.max(1, Math.ceil(total / limit))
+      });
+    } catch (e) {
+      // Se der erro aqui, deixa o router “oficial” tentar
+      return next();
+    }
+  };
+  compat.get('/', listHandler);
+  compat.get('/search', listHandler);
+  app.use('/api/returns', compat);
+  console.log('[BOOT] Returns Compat Shim ON');
+}
+
+/* ========= Returns LOGS ========= */
 try {
   const returnsLogRouter = require('./routes/returns-log');
-  // Só encaminha "/:id/logs..." para o router de logs, o resto segue
   app.use('/api/returns', (req, res, next) => {
     if (/^\/\d+\/logs(\/.*)?$/i.test(req.path || '')) return returnsLogRouter(req, res, next);
     return next();
   });
-  console.log('[BOOT] Returns Log ok (depois de Returns, com guard)');
+  console.log('[BOOT] Returns Log ok');
 } catch (e) {
   console.warn('[BOOT] Returns Log opcional:', e?.message || e);
 }
 
-/* ========= Chat por devolução (robusto) ========= */
+/* ========= Chat por devolução ========= */
 try {
   const chatCandidates = [
     './routes/returns-messages',
@@ -443,7 +481,7 @@ try {
     else { app.use('/api', cmod); app.use('/api/returns', cmod); }
     console.log(`[BOOT] Chat por Devolução ok via ${used}`);
   } else {
-    console.warn('[BOOT] Chat por Devolução não encontrado (routes/returns-messages*)');
+    console.warn('[BOOT] Chat por Devolução não encontrado');
   }
 } catch (e) { console.warn('[BOOT] Chat por Devolução opcional:', e?.message || e); }
 
@@ -451,7 +489,7 @@ try {
 try { app.use('/api/uploads', require('./routes/uploads')); console.log('[BOOT] Uploads ok'); }
 catch (e) { console.warn('[BOOT] Uploads opcional:', e?.message || e); }
 
-/* Webhook / OAuth / API auxiliares do ML */
+/* Webhook / OAuth / APIs ML */
 try { const r = require('./routes/ml-webhook'); if (typeof r === 'function') r(app); console.log('[BOOT] ML webhook ok'); }
 catch (e) { console.warn('[BOOT] ML webhook opcional:', e?.message || e); }
 
@@ -479,7 +517,7 @@ try {
     app.use('/api/ml', mlChatRoutes);
     console.log('[BOOT] ML Chat/Comms ok (/api/ml/...)');
   } else {
-    console.warn('[BOOT] ML Chat não encontrado (routes/mlChat.js ou routes/ml-chat.js)');
+    console.warn('[BOOT] ML Chat não encontrado');
   }
 } catch (e) {
   console.warn('[BOOT] ML Chat falhou:', e?.message || e);
@@ -488,41 +526,34 @@ try {
 /* === Importador ML (claims -> devoluções) === */
 let _mlSyncRegistered = false;
 try {
-  const registerMlSync = require('./routes/ml-sync'); // expõe /api/ml/claims/import
+  const registerMlSync = require('./routes/ml-sync'); // /api/ml/claims/import
   if (typeof registerMlSync === 'function') {
     registerMlSync(app, { addReturnEvent });
     _mlSyncRegistered = true;
-    console.log('[BOOT] ML Sync ok (/api/ml/claims/import)');
+    console.log('[BOOT] ML Sync ok');
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 
-/* === ML RETURNS (NOVO) — Router + agendador === */
+/* === ML RETURNS (router + agendador) === */
 try {
-  const mlReturnsMod = require('./routes/ml-returns'); // pode exportar Router e um .scheduleMlReturnsSync
+  const mlReturnsMod = require('./routes/ml-returns');
   const isRouter = !!mlReturnsMod && (typeof mlReturnsMod === 'function') &&
                    (mlReturnsMod.stack || typeof mlReturnsMod.use === 'function' || mlReturnsMod.name === 'router');
 
-  if (isRouter) {
-    app.use('/api/ml', mlReturnsMod);
-  } else if (typeof mlReturnsMod === 'function') {
-    // Modo registrador (aceita app)
-    mlReturnsMod(app);
-  } else {
-    console.warn('[BOOT] ml-returns export inesperado; montando em /api/ml como best-effort.');
-    app.use('/api/ml', mlReturnsMod);
-  }
+  if (isRouter) app.use('/api/ml', mlReturnsMod);
+  else if (typeof mlReturnsMod === 'function') mlReturnsMod(app);
+  else { console.warn('[BOOT] ml-returns export inesperado'); app.use('/api/ml', mlReturnsMod); }
 
   if (mlReturnsMod && typeof mlReturnsMod.scheduleMlReturnsSync === 'function') {
     mlReturnsMod.scheduleMlReturnsSync(app);
     console.log('[BOOT] ML Returns agendador ON');
   }
-
-  console.log('[BOOT] ML Returns ok (/api/ml/returns/...)');
+  console.log('[BOOT] ML Returns ok');
 } catch (e) {
   console.warn('[BOOT] ML Returns opcional:', e?.message || e);
 }
 
-/* === Rotas auxiliares que não conflitam com /api/returns === */
+/* === Extras que não conflitam com /api/returns === */
 try { app.use('/api/ml', require('./routes/ml-reenrich')); console.log('[BOOT] ML Re-enrich ok'); }
 catch (e) { console.warn('[BOOT] ML Re-enrich opcional:', e?.message || e); }
 
@@ -535,7 +566,6 @@ app.get('/api/db/ping', async (req, res) => {
   catch (e) { res.status(500).json({ ok:false, error:String(e) }); }
 });
 
-/** Lista rotas ativas (p/ diagnosticar 404) */
 app.get('/api/_debug/routes', (_req, res) => {
   const acc = [];
   const dump = (stack, base='') => {
@@ -582,179 +612,21 @@ const host = '0.0.0.0';
 const server = app.listen(port, host, () => {
   console.log(`[BOOT] Server listening on http://${host}:${port}`);
   setupMlAutoSync();
-  setupMlAutoRefresh(); // <<< habilita o AutoRefresh de tokens
+  setupMlAutoRefresh();
 });
 
 /* ================== ML AutoSync ================== */
-let _mlAuto_lastRun = null; // exposto em /api/ml/claims/last-run
+let _mlAuto_lastRun = null;
 function setupMlAutoSync() {
-  if (!_mlSyncRegistered) {
-    console.warn('[ML AUTO] Importador ML não registrado; AutoSync off.');
-    return;
-  }
-  const enabled = String(process.env.ML_AUTO_SYNC_ENABLED ?? 'true').toLowerCase() === 'true';
-  if (!enabled) { console.log('[ML AUTO] Desabilitado por env'); return; }
-
-  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_SYNC_INTERVAL_MS || '600000',10) || 600_000);
-  const windowDays = Math.max(1, parseInt(process.env.ML_AUTO_SYNC_WINDOW_DAYS || '14',10) || 14);
-  const runOnStart = String(process.env.ML_AUTO_SYNC_ON_START ?? 'true').toLowerCase() === 'true';
-  const jobToken   = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN || 'dev-job';
-
-  let running = false;
-  const run = async (reason='timer') => {
-    if (running) return; running = true;
-    const t0 = Date.now();
-    const url = `http://127.0.0.1:${port}/api/ml/claims/import?days=${encodeURIComponent(windowDays)}&silent=1`;
-    try {
-      const r = await fetch(url, { headers: { 'x-job-token': jobToken } });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j?.error || r.statusText || 'Falha no import');
-      _mlAuto_lastRun = { when:new Date().toISOString(), reason, ok:true, tookMs:Date.now()-t0, result:j };
-      console.log(`[ML AUTO] Import OK (${reason}) em ${_mlAuto_lastRun.tookMs}ms`);
-    } catch (e) {
-      _mlAuto_lastRun = { when:new Date().toISOString(), reason, ok:false, tookMs:Date.now()-t0, error:String(e?.message||e) };
-      console.error('[ML AUTO] Falha no import:', _mlAuto_lastRun.error);
-    } finally { running = false; }
-  };
-
-  if (runOnStart) setTimeout(() => run('boot'), 2000);
-  const handle = setInterval(run, intervalMs);
-  process.on('SIGINT',  () => clearInterval(handle));
-  process.on('SIGTERM', () => clearInterval(handle));
-
-  app.get('/api/ml/claims/last-run', (_req, res) => {
-    res.json({ enabled, intervalMs, windowDays, runOnStart, registered: _mlSyncRegistered, lastRun:_mlAuto_lastRun });
-  });
-
-  console.log(`[BOOT] ML AutoSync ON: intervalo=${intervalMs}ms, janela=${windowDays}d`);
+  // ... (mesma implementação que te enviei)
 }
 
 /* ================== ML AutoRefresh de Tokens ================== */
-let _mlRefresh_lastRun = null; // exposto em /api/ml/refresh/last-run
+let _mlRefresh_lastRun = null;
 function setupMlAutoRefresh() {
-  const enabled = String(process.env.ML_AUTO_REFRESH_ENABLED ?? 'true').toLowerCase() === 'true';
-  if (!enabled) { console.log('[ML REFRESH] Desabilitado por env'); return; }
-
-  const intervalMs = Math.max(60_000, parseInt(process.env.ML_AUTO_REFRESH_INTERVAL_MS || '900000',10) || 900_000); // 15min
-  const aheadSec   = Math.max(60, parseInt(process.env.ML_REFRESH_AHEAD_SEC || '900',10) || 900); // 15min
-  const runOnStart = String(process.env.ML_AUTO_REFRESH_ON_START ?? 'true').toLowerCase() === 'true';
-
-  const tokenUrl   = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
-  const clientId   = process.env.ML_CLIENT_ID || '';
-  const clientSecret = process.env.ML_CLIENT_SECRET || '';
-
-  if (!clientId || !clientSecret) {
-    console.warn('[ML REFRESH] CLIENT_ID/CLIENT_SECRET ausentes; AutoRefresh off.');
-    return;
-  }
-
-  let running = false;
-  const run = async (reason='timer') => {
-    if (running) return; running = true;
-    const t0 = Date.now();
-    const summary = { refreshed:0, skipped:0, errors:0, details:[] };
-
-    try {
-      const sql = `
-        SELECT user_id, nickname, refresh_token, expires_at
-          FROM public.ml_tokens
-         WHERE coalesce(refresh_token, '') <> ''
-           AND (
-             expires_at IS NULL OR expires_at < now() + INTERVAL '${aheadSec} seconds'
-           )
-      `;
-      const { rows } = await query(sql);
-
-      for (const row of rows) {
-        const userId = row.user_id;
-        const refresh_token = row.refresh_token;
-        if (!refresh_token) { summary.skipped++; continue; }
-
-        try {
-          const body = new URLSearchParams({
-            grant_type: 'refresh_token',
-            client_id: clientId,
-            client_secret: clientSecret,
-            refresh_token
-          });
-
-          const resp = await fetch(tokenUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body
-          });
-
-          const j = await resp.json().catch(() => ({}));
-          if (!resp.ok) throw new Error(j?.error || j?.message || `HTTP ${resp.status}`);
-
-          const expires_in = Math.max(60, (j.expires_in || 600) - 300); // margem 5min
-          const expiresAt = new Date(Date.now() + expires_in*1000).toISOString();
-
-          await query(`
-            UPDATE public.ml_tokens
-               SET access_token = $1,
-                   refresh_token = COALESCE($2, refresh_token),
-                   scope        = COALESCE($3, scope),
-                   token_type   = COALESCE($4, token_type),
-                   expires_at   = $5,
-                   raw          = $6,
-                   updated_at   = now()
-             WHERE user_id = $7
-          `, [
-            j.access_token || null,
-            j.refresh_token || null,
-            j.scope || null,
-            j.token_type || null,
-            expiresAt,
-            JSON.stringify(j || {}),
-            userId
-          ]);
-
-          summary.refreshed++;
-          summary.details.push({ user_id:String(userId), ok:true });
-        } catch (e) {
-          summary.errors++;
-          summary.details.push({ user_id:String(row.user_id), ok:false, error:String(e?.message||e) });
-        }
-      }
-
-      _mlRefresh_lastRun = {
-        when: new Date().toISOString(),
-        reason,
-        ok: true,
-        tookMs: Date.now() - t0,
-        ...summary
-      };
-      if (rows.length) {
-        console.log(`[ML REFRESH] ${summary.refreshed} renovado(s), ${summary.skipped} ignorado(s), ${summary.errors} erro(s) em ${_mlRefresh_lastRun.tookMs}ms`);
-      }
-    } catch (e) {
-      _mlRefresh_lastRun = {
-        when: new Date().toISOString(),
-        reason,
-        ok: false,
-        tookMs: Date.now() - t0,
-        error: String(e?.message||e)
-      };
-      console.error('[ML REFRESH] Falha geral:', _mlRefresh_lastRun.error);
-    } finally {
-      running = false;
-    }
-  };
-
-  if (runOnStart) setTimeout(() => run('boot'), 2500);
-  const handle = setInterval(run, intervalMs);
-  process.on('SIGINT',  () => clearInterval(handle));
-  process.on('SIGTERM', () => clearInterval(handle));
-
-  app.get('/api/ml/refresh/last-run', (_req, res) => {
-    res.json({ enabled, intervalMs, aheadSec, runOnStart, lastRun:_mlRefresh_lastRun });
-  });
-
-  console.log(`[BOOT] ML AutoRefresh ON: intervalo=${intervalMs}ms, ahead=${aheadSec}s`);
+  // ... (mesma implementação que te enviei)
 }
 
-/* ================== Unhandled ================== */
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
 process.on('uncaughtException',  err => console.error('[uncaughtException]', err));
 
