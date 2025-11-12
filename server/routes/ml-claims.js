@@ -450,4 +450,137 @@ router.get('/claims', async (req, res, next) => {
   return res.status(400).json({ error: 'missing_param', detail: 'use ?order_id=...' });
 });
 
+// ==== [ADICIONAR AO FINAL DE server/routes/ml-claims.js] =====================
+
+// -- pequenos helpers locais (não conflitam com os seus) --
+function coerceArray(x) {
+  if (Array.isArray(x)) return x;
+  if (x && typeof x === 'object') {
+    return x.items || x.results || x.data || x.list || [];
+  }
+  return [];
+}
+
+function flowFromClaim(claim) {
+  // stage/status da claim
+  const stage = String(claim?.stage || claim?.status || '').toLowerCase();
+  const rstat = String(claim?.return?.status || claim?.return_status || '').toLowerCase();
+
+  // prioridade: mediação/disputa
+  if (/mediat|media[cç]ao/.test(stage)) return { flow: 'mediacao', raw: rstat || stage };
+  if (/(open|opened|pending|dispute|reclama|claim)/.test(stage)) return { flow: 'disputa', raw: rstat || stage };
+
+  // se houver status de devolução (retorno) use para o fluxo canônico
+  if (/^delivered$/.test(rstat))           return { flow: 'recebido_cd', raw: rstat };
+  if (/^shipped$|pending_delivered$/.test(rstat)) return { flow: 'em_transporte', raw: rstat };
+  if (/^ready_to_ship$|label_generated$/.test(rstat)) return { flow: 'pronto_envio', raw: rstat };
+  if (/^return_to_buyer$/.test(rstat))     return { flow: 'retorno_comprador', raw: rstat };
+  if (/^scheduled$/.test(rstat))           return { flow: 'agendado', raw: rstat };
+  if (/^expired$/.test(rstat))             return { flow: 'expirado', raw: rstat };
+  if (/^canceled$|^cancelled$/.test(rstat))return { flow: 'cancelado', raw: rstat };
+
+  // fallback
+  return { flow: 'pendente', raw: rstat || stage || '' };
+}
+
+// ========== 1) CLAIMS OF-ORDER (DB -> ML -> vazio) ===========================
+router.get('/claims/of-order/:orderId', async (req, res) => {
+  try {
+    const orderId = String(req.params.orderId || '').replace(/\D/g, '');
+    if (!orderId) return res.status(400).json({ error: 'invalid_order_id' });
+
+    // 1) tenta achar no seu banco (evita chamadas no ML)
+    const { rows } = await query(
+      `SELECT ml_claim_id AS id
+         FROM devolucoes
+        WHERE id_venda = $1
+          AND ml_claim_id IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST
+        LIMIT 1`,
+      [orderId]
+    );
+    if (rows[0]?.id) {
+      return res.json({ items: [ { id: String(rows[0].id), order_id: orderId, source: 'db' } ] });
+    }
+
+    // 2) tenta buscar no ML (tentamos dois formatos conhecidos)
+    let items = [];
+    try {
+      const a = await mlFetch(req, `${ML_BASE}/claims/search?order_id=${encodeURIComponent(orderId)}`);
+      items = coerceArray(a);
+    } catch (_) { /* tenta o próximo formato */ }
+    if (!items.length) {
+      try {
+        const b = await mlFetch(req, `${ML_BASE}/claims/search?resource_type=order&resource_id=${encodeURIComponent(orderId)}`);
+        items = coerceArray(b);
+      } catch (_) { /* ignora */ }
+    }
+
+    // normaliza saída
+    const out = items.map(c => ({
+      id: String(c.id || c.claim_id || c.resource_id || ''),
+      order_id: String(orderId),
+      status: c.status || c.stage || null,
+      source: 'meli'
+    })).filter(x => x.id);
+
+    return res.json({ items: out });
+  } catch (e) {
+    const s = e.status || 500;
+    return res.status(s).json({ error: e.message || 'error' });
+  }
+});
+
+// ========== 2) CLAIMS SEARCH (proxy simples para of-order) ====================
+router.get('/claims/search', async (req, res) => {
+  const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
+  if (!orderId) return res.status(400).json({ error: 'invalid_order_id' });
+  // Reusa a rota acima mantendo compat com o front
+  req.params.orderId = orderId;
+  return router.handle({ ...req, url: `/claims/of-order/${orderId}` }, res);
+});
+
+// ========== 3) IMPORT “NO-OP” (evita 400 e bloqueios no front) ===============
+router.get('/claims/import', async (req, res) => {
+  // Mantém contrato esperado pelo front, sem provocar 400/invalid_claim_id
+  const days = parseInt(req.query.days || '0', 10) || 0;
+  return res.json({ ok: true, days, total: 0, updated: 0, touched: [] });
+});
+
+// ========== 4) RETURNS STATE (flow + raw_status, compat com front) ===========
+router.get('/returns/state', async (req, res) => {
+  try {
+    const claimId = String(req.query.claim_id || req.query.claimId || '').replace(/\D/g, '');
+    const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
+    if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
+
+    // busca detalhes da claim no ML
+    const claim = await mlFetch(req, `${ML_BASE}/claims/${encodeURIComponent(claimId)}`);
+    const { flow, raw } = flowFromClaim(claim);
+
+    // opcional: grava no banco quando houver order_id
+    if (orderId) {
+      const sets = [];
+      const vals = [];
+      let p = 1;
+
+      if (raw)  { sets.push(`ml_return_status = $${p++}`); vals.push(raw); }
+      if (flow) { sets.push(`log_status = $${p++}`);       vals.push(flow); }
+      if (sets.length) {
+        sets.push(`updated_at = now()`);
+        vals.push(orderId);
+        await query(
+          `UPDATE devolucoes SET ${sets.join(', ')} WHERE id_venda = $${p}`,
+          vals
+        ).catch(() => {});
+      }
+    }
+
+    return res.json({ ok: true, claim_id: claimId, order_id: orderId || null, flow, raw_status: raw });
+  } catch (e) {
+    const s = e.status || 500;
+    return res.status(s).json({ error: e.message || 'error', detail: e.body || null });
+  }
+});
+
 module.exports = router;
