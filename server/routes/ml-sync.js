@@ -54,15 +54,6 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
-  function mapReturnStatus(ret) {
-    const s = String(ret?.status || '').toLowerCase();
-    if (['to_be_sent','shipped','to_be_received','in_transit'].includes(s)) return 'a_caminho';
-    if (['received','arrived','delivered'].includes(s)) return 'recebido_cd';
-    if (['in_review','under_review','inspection'].includes(s)) return 'em_inspecao';
-    if (['cancelled','refunded','closed','not_delivered','returned_to_sender'].includes(s)) return 'encerrado';
-    return 'pendente';
-  }
-
   // pega um claimId seguro (somente numérico > 0)
   function selectClaimId(it) {
     const candidates = [
@@ -136,6 +127,36 @@ module.exports = function registerMlSync(app, opts = {}) {
     });
 
     return id;
+  }
+
+  // ===== Mapeamentos compatíveis com a UI =====
+  // Status do "return v2" → token do fluxo reconhecido pelo front
+  function mapFlowFromReturn(retStatusRaw) {
+    const s = String(retStatusRaw || '').toLowerCase();
+
+    // to_be_sent → etiqueta emitida aguardando postagem
+    if (s === 'to_be_sent') return 'aguardando_postagem';
+
+    // shipped / in_transit / to_be_received → em trânsito
+    if (s === 'shipped' || s === 'in_transit' || s === 'to_be_received') return 'em_transito';
+
+    // received / arrived / delivered → recebido no CD (fim logístico)
+    if (s === 'received' || s === 'arrived' || s === 'delivered') return 'recebido_cd';
+
+    // cancelled / refunded / closed / not_delivered / returned_to_sender → fluxo encerrado
+    if (s === 'cancelled' || s === 'refunded' || s === 'closed' || s === 'not_delivered' || s === 'returned_to_sender') return 'fechado';
+
+    // inspeção / revisão não mapeiam diretamente no pipeline logístico
+    if (s === 'in_review' || s === 'under_review' || s === 'inspection') return 'aguardando_postagem';
+
+    return 'pendente';
+  }
+
+  // Deriva um "status" interno a partir do fluxo (coerente com badges internas)
+  function mapInternalStatusFromFlow(flow) {
+    if (flow === 'fechado' || flow === 'recebido_cd') return 'finalizado';
+    if (flow === 'em_transito' || flow === 'aguardando_postagem') return 'aprovado';
+    return 'pendente';
   }
 
   // -------- Claims Search robusto (com fallback + paginação) ----------
@@ -501,7 +522,9 @@ module.exports = function registerMlSync(app, opts = {}) {
               continue;
             }
 
-            const status = mapReturnStatus(ret);
+            // ----- NOVO: mapeia fluxo compatível + status interno coerente
+            const flow = mapFlowFromReturn(ret?.status);
+            const internal = mapInternalStatusFromFlow(flow);
             const sku = normalizeSku(it, claimDet);
 
             const returnId = await ensureReturnByOrder(req, {
@@ -514,16 +537,18 @@ module.exports = function registerMlSync(app, opts = {}) {
             if (!dry) {
               await qOf(req)(
                 `UPDATE devolucoes
-                   SET status = COALESCE($1, status),
-                       sku    = COALESCE($2, sku),
-                       loja_nome = CASE
-                         WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
-                           THEN COALESCE($3, loja_nome)
-                         ELSE loja_nome
-                       END,
-                       updated_at = now()
-                 WHERE id = $4`,
-                [status, sku, lojaNome, returnId]
+                    SET log_status   = COALESCE($1, log_status),
+                        claim_status = COALESCE($2, claim_status),
+                        status       = COALESCE($3, status),
+                        sku          = COALESCE($4, sku),
+                        loja_nome    = CASE
+                          WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
+                            THEN COALESCE($5, loja_nome)
+                          ELSE loja_nome
+                        END,
+                        updated_at   = now()
+                  WHERE id = $6`,
+                [flow, String(ret?.status || ''), internal, sku, lojaNome, returnId]
               );
               updated++;
             }
@@ -533,7 +558,7 @@ module.exports = function registerMlSync(app, opts = {}) {
               await addReturnEvent(req, {
                 returnId,
                 type: 'ml-claim',
-                title: `Claim ${claimId} (${status})`,
+                title: `Claim ${claimId} (${internal})`,
                 message: 'Sincronizado pelo import',
                 meta: {
                   account_id: account.user_id,
@@ -542,6 +567,7 @@ module.exports = function registerMlSync(app, opts = {}) {
                   order_id,
                   return_id: ret?.id || null,
                   return_status: String(ret?.status || ''),
+                  flow,
                   loja_nome: lojaNome
                 },
                 idemp_key: idemp
@@ -602,16 +628,8 @@ module.exports = function registerMlSync(app, opts = {}) {
   router.post('/api/ml/claims/backfill-on-login', async (req, res) => {
     try {
       const days = Math.max(1, parseInt(req.body?.days || '7', 10) || 7);
-      // reutiliza a própria rota via HTTP? aqui chamamos a lógica indiretamente:
-      req.query.days = String(days);
-      req.query.statuses = 'opened,in_progress';
-      req.query.silent = '1';
-      req.query.all = '1';
-      // Encaminha para o import
-      // NOTA: numa arquitetura ideal, fatoraríamos a lógica para uma função reutilizável
-      // mas aqui simulamos fazendo uma requisição interna simplificada (ou reaproveitando o handler).
-      // Para simplicidade, apenas devolvemos instrução de chamar /api/ml/claims/import do front.
-      return res.json({ ok: true, hint: `chame GET /api/ml/claims/import?days=${days}&statuses=opened,in_progress&silent=1&all=1` });
+      // dica: chame a rota GET de import pelo front, sem bloquear a navegação
+      return res.json({ ok: true, hint: `GET /api/ml/claims/import?days=${days}&statuses=opened,in_progress&silent=1&all=1` });
     } catch (e) {
       return res.status(200).json({ ok: false, error: e?.message || String(e) });
     }

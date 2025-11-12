@@ -97,9 +97,19 @@ class DevolucoesFeed {
     this.startAutoSync();
   }
 
-  safeJson(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.status===204?{}:res.json(); }
-  mlShipAllowed(){ try{ const until=Number(localStorage.getItem(this.ML_SHIP_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
-  blockMlShip(ms=this.ML_SHIP_BLOCK_MS){ try{ localStorage.setItem(this.ML_SHIP_BLOCK_KEY, String(Date.now()+ms)); }catch{} }
+  safeJson(res){
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    return res.status===204?{}:res.json();
+  }
+  mlShipAllowed(){
+    try{
+      const until=Number(localStorage.getItem(this.ML_SHIP_BLOCK_KEY)||0);
+      return Date.now()>until;
+    }catch{ return true; }
+  }
+  blockMlShip(ms=this.ML_SHIP_BLOCK_MS){
+    try{ localStorage.setItem(this.ML_SHIP_BLOCK_KEY, String(Date.now()+ms)); }catch{}
+  }
   _headersFor(url){
     const h = { Accept:"application/json" };
     if (/^\/api\/ml\//.test(url) || /^\/api\/meli\//.test(url)) {
@@ -112,8 +122,17 @@ class DevolucoesFeed {
     try{
       const headers = this._headersFor(url);
       const r = await fetch(url,{ headers, credentials:"include" });
-      const ct = r.headers.get("content-type")||""; let body=null;
-      if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} } else { try{ body = await r.text(); }catch{} }
+      const ct = r.headers.get("content-type")||"";
+      let body=null;
+      if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} }
+      else { try{ body = await r.text(); }catch{} }
+
+      // Trata payloads { ok:false } como erro lógico, mesmo em HTTP 200
+      if (r.ok && body && typeof body === "object" && body.ok === false) {
+        const detail = (body.error || body.message || "").toString();
+        console.info("[sync]", url, "→ 200 (app-error)", detail.slice(0,160));
+        return { ok:false, status:r.status, detail, data:body };
+      }
 
       if(!r.ok){
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
@@ -129,7 +148,9 @@ class DevolucoesFeed {
           } else if (r.status===403) {
             this._ml403BurstCount++;
             if (!this._ml403BurstTimer) {
-              this._ml403BurstTimer = setTimeout(()=>{ this._ml403BurstCount = 0; this._ml403BurstTimer=null; }, 60*1000);
+              this._ml403BurstTimer = setTimeout(()=>{
+                this._ml403BurstCount = 0; this._ml403BurstTimer=null;
+              }, 60*1000);
             }
             if (this._ml403BurstCount >= 3) {
               this.blockMlShip();
@@ -160,14 +181,33 @@ class DevolucoesFeed {
 
   // ===== “Nova” =====
   stableKey(d){ return d?.id_venda || d?.ml_claim_id || d?.order_id || d?.resource_id || d?.id; }
-  firstSeenTs(key){ try{ const k=this.NEW_KEY_PREFIX+key; const v=localStorage.getItem(k); if(v) return Number(v)||0; const now=Date.now(); localStorage.setItem(k,String(now)); return now; }catch{ return 0; } }
+  firstSeenTs(key){
+    try{
+      const k=this.NEW_KEY_PREFIX+key;
+      const v=localStorage.getItem(k);
+      if(v) return Number(v)||0;
+      const now=Date.now();
+      localStorage.setItem(k,String(now));
+      return now;
+    }catch{ return 0; }
+  }
   isNova(d){
     const key=this.stableKey(d); if(!key) return false;
     const created=this.getDateMs(d);
     if (created && Date.now()-created > this.MAX_NEW_AGE_MS) return false;
     return Date.now()-this.firstSeenTs(key) <= this.NEW_WINDOW_MS;
   }
-  purgeOldSeen(){ try{ const now=Date.now(); for(let i=localStorage.length-1;i>=0;i--){ const k=localStorage.key(i); if(!k||!k.startsWith(this.NEW_KEY_PREFIX)) continue; const ts=Number(localStorage.getItem(k))||0; if(now-ts>20*this.MAX_NEW_AGE_MS) localStorage.removeItem(k); } }catch{} }
+  purgeOldSeen(){
+    try{
+      const now=Date.now();
+      for(let i=localStorage.length-1;i>=0;i--){
+        const k=localStorage.key(i);
+        if(!k||!k.startsWith(this.NEW_KEY_PREFIX)) continue;
+        const ts=Number(localStorage.getItem(k))||0;
+        if(now-ts>20*this.MAX_NEW_AGE_MS) localStorage.removeItem(k);
+      }
+    }catch{}
+  }
 
   // ===== carregar =====
   getMockData(){ return []; } // sem mock p/ não confundir datas
@@ -213,8 +253,12 @@ class DevolucoesFeed {
       return flow || null;
     }catch{ return null; }
   }
-  setCachedFlow(orderId, flow){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{} }
-  setNoAccess(orderId){ try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{} }
+  setCachedFlow(orderId, flow){
+    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow, neg:false })); }catch{}
+  }
+  setNoAccess(orderId){
+    try{ localStorage.setItem(this.FLOW_CACHE_PREFIX+orderId, JSON.stringify({ ts: Date.now(), flow:"__NO_ACCESS__", neg:true })); }catch{}
+  }
 
   getCachedReturn(claimId){
     try{
@@ -255,15 +299,30 @@ class DevolucoesFeed {
   // ===== Syncs curtos =====
   async syncClaimsWithFallback(){
     if (!this.claimsImportAllowed()) return false;
+
+    // tenta janelas curtas → médias → longas
     for (const d of [3,7,30]){
-      console.info("[sync] claims/import:", `${d}d in_progress`);
-      const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), status:"in_progress" });
+      const qs = new URLSearchParams({
+        silent:"1",
+        all:"1",
+        days:String(d),
+        // usa "statuses" explicitamente; o back também aceita "status"
+        statuses:"opened,in_progress"
+      });
+      console.info("[sync] claims/import:", `${d}d opened,in_progress`);
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
-      if (r.ok) return true;
-      const bad = (r.status===400) || (r.detail||"").toString().toLowerCase().includes("invalid_claim_id");
+
+      if (r.ok) return true; // sucesso lógico
+      const detail = (r.detail || "").toString().toLowerCase();
+
+      // Se o back ainda devolver erro do ML, bloqueia por um tempo
+      const bad = (r.status===400) || detail.includes("invalid_claim_id");
       if (bad){
         this.blockClaimsImport();
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Erro", this.GENERIC_ERR, "erro"); }
+        if (!this._lastSyncErrShown){
+          this._lastSyncErrShown=true;
+          this.toast("Erro", this.GENERIC_ERR, "erro");
+        }
         return false;
       }
     }
@@ -303,7 +362,7 @@ class DevolucoesFeed {
     const it = this.items.find(x => String(x.id) === String(id));
     if (it && !claimId) claimId = await this.ensureClaimIdOnItem(it);
 
-    // 1) Returns state (pega flow e raw_status e já persiste no back)
+    // 1) Returns state (se existir no back; se não, ignora 404)
     if (claimId){
       const r = await this.fetchQuiet(`/api/ml/returns/state?claim_id=${encodeURIComponent(claimId)}${orderId?`&order_id=${encodeURIComponent(orderId)}`:""}&silent=1`);
       if (r.ok) {
@@ -365,8 +424,8 @@ class DevolucoesFeed {
     const sSub  = lower(d.ml_substatus || d.shipping?.substatus || d.ml_shipping?.substatus);
     const ship = [sStat, sSub].join("_");
     if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return "em_preparacao";
-    if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return "em_transporte";
-    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente"; // <<< ajuste
+    if (/(in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito)/.test(ship)) return "em_transporte";
+    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente"; // não marcamos recebido via shipping
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
     // returns status (v2) — AQUI sim “delivered” vira Recebido no CD
@@ -392,7 +451,7 @@ class DevolucoesFeed {
     if (/(mediat|media[cç]ao)/.test(s)) return "mediacao";
     if (/(disputa|reclama|claim_open|claim)/.test(s)) return "disputa";
     if (s.includes("preparacao")) return "em_preparacao";
-    if (s === "transporte") return "em_transporte";
+    if (s === "transporte" || s === "em_transito" || s.includes("a_caminho")) return "em_transporte";
     if (s.includes("recebido_cd")) return "recebido_cd";
     if (s.includes("aguardando_postagem")) return "em_preparacao";
     if (s.includes("postado")) return "em_transporte";
@@ -402,7 +461,7 @@ class DevolucoesFeed {
     if (/(prepar|prep|ready_to_ship)/.test(s)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(s)) return "pronto_envio";
     if (/(transit|transito|transporte|shipped|out_for_delivery|returning_to_sender)/.test(s)) return "em_transporte";
-    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente"; // <<< ajuste
+    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente"; // não promovemos aqui
     return "pendente";
   }
 
@@ -416,7 +475,7 @@ class DevolucoesFeed {
     if (!this.shouldTryFlow(orderId)) return;
     this._flowResolvesThisTick++;
 
-    // 1) ensure claim_id e tenta returns/state primeiro
+    // 1) ensure claim_id e tenta returns/state primeiro (se existir)
     if (!claimId) claimId = await this.ensureClaimIdOnItem(d);
     if (claimId){
       const cached = this.getCachedReturn(claimId);
@@ -703,17 +762,17 @@ class DevolucoesFeed {
           <span class="campo-valor">${this.esc(d.loja_nome || "—")}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0  0 1 1 0V1h1a2 2 0  0 1 2 2v11a2 2 0  0 1-2 2H2a2 2 0  0 1-2-2V3a2 2 0  0 1 2-2h1V.5a.5.5 0  0 1 .5-.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5z"/></svg>
           <span class="campo-label">Data</span>
           <span class="campo-valor">${data}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0  0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0  0 1 8 1zm3.5 3v-.5a3.5 3.5 0  1 0-7 0V4H1v10a2 2 0  0 0 2 2h10a2 2 0  0 0 2-2V4h-3.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0  1 0-7 0V4H1v10a2 2 0  0 0 2 2h10a2 2 0  0 0 2-2V4h-3.5z"/></svg>
           <span class="campo-label">Produto</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0  1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(Number(d.valor_frete||0))}</span>
         </div>
@@ -741,7 +800,9 @@ class DevolucoesFeed {
     const cols=["id","id_venda","cliente_nome","loja_nome","sku","status","log_status","ml_return_status","valor_produto","valor_frete","created_at"];
     const linhas=[cols.join(",")].concat(this.items.map(d=>cols.map(c=>`"${String(d[c]??"").replace(/"/g,'""')}"`).join(",")));
     const blob=new Blob([linhas.join("\n")],{type:"text/csv;charset=utf-8"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="devolucoes.csv"; a.click(); URL.revokeObjectURL(url);
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download="devolucoes.csv"; a.click();
+    URL.revokeObjectURL(url);
     this.toast("Sucesso","Relatório exportado.","sucesso");
   }
   toast(titulo,descricao,_tipo="info"){
