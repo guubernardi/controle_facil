@@ -3,7 +3,7 @@
 
 /**
  * -------------------------------------------------------------
- *  Retorno Fácil – Servidor HTTP (Express)
+ *  Controle Facil – Servidor HTTP (Express) 
  * -------------------------------------------------------------
  */
 
@@ -307,11 +307,11 @@ try {
   if (!mod) throw new Error('módulo ./routes/returns não encontrado');
 
   const isFn = (typeof mod === 'function');
-  const isRouter = !!mod && typeof mod === 'object' && (typeof mod.use === 'function' || Array.isArray(mod.stack));
+  const isRouterLike = !!mod && (mod.stack || typeof mod.use === 'function' || mod.name === 'router');
 
-  if (isFn) { mod(app); __returnsMounted = true; console.log(`[BOOT] Returns ok (registrador) via ${usedPath}`); }
-  else if (isRouter) { app.use('/api', mod); app.use('/api/returns', mod); __returnsMounted = true; console.log(`[BOOT] Returns ok (Router) via ${usedPath}`); }
-  else { throw new Error(`export inválido do módulo (${typeof mod}). Esperado função ou Router`); }
+  if (isRouterLike) { app.use('/api', mod); app.use('/api/returns', mod); __returnsMounted = true; console.log(`[BOOT] Returns ok (Router) via ${usedPath}`); }
+  else if (isFn)    { mod(app); __returnsMounted = true; console.log(`[BOOT] Returns ok (registrador) via ${usedPath}`); }
+  else              { throw new Error(`export inválido do módulo (${typeof mod}). Esperado função ou Router`); }
 } catch (e) {
   console.warn('[BOOT] Returns falhou (vai usar fallback):', e?.message || e);
 }
@@ -462,14 +462,27 @@ try {
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 
-/* === ML RETURNS (NOVO) — registrador em função/Router) === */
+/* === ML RETURNS (NOVO) — Router + agendador === */
 try {
-  const registerMlReturns = require('./routes/ml-returns'); // <- AQUI
-  if (typeof registerMlReturns === 'function') {
-    registerMlReturns(app); // monta /api/ml/returns/open|search|list|import
+  const mlReturnsMod = require('./routes/ml-returns'); // pode exportar Router e um .scheduleMlReturnsSync
+  const isRouter = !!mlReturnsMod && (typeof mlReturnsMod === 'function') &&
+                   (mlReturnsMod.stack || typeof mlReturnsMod.use === 'function' || mlReturnsMod.name === 'router');
+
+  if (isRouter) {
+    app.use('/api/ml', mlReturnsMod);
+  } else if (typeof mlReturnsMod === 'function') {
+    // Modo registrador (aceita app)
+    mlReturnsMod(app);
   } else {
-    app.use('/api/ml', registerMlReturns);
+    console.warn('[BOOT] ml-returns export inesperado; montando em /api/ml como best-effort.');
+    app.use('/api/ml', mlReturnsMod);
   }
+
+  if (mlReturnsMod && typeof mlReturnsMod.scheduleMlReturnsSync === 'function') {
+    mlReturnsMod.scheduleMlReturnsSync(app);
+    console.log('[BOOT] ML Returns agendador ON');
+  }
+
   console.log('[BOOT] ML Returns ok (/api/ml/returns/...)');
 } catch (e) {
   console.warn('[BOOT] ML Returns opcional:', e?.message || e);
