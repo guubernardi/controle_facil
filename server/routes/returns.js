@@ -2,22 +2,26 @@
 'use strict';
 
 /**
- * Importador resiliente de devoluções/claims do Mercado Livre
- * - GET /api/ml/returns/sync?days=30&status=opened,in_progress&silent=1
- * - GET /api/ml/returns/sync?order_id=2000012345678901
+ * ML Returns/Claims:
+ *  - GET /api/ml/returns/state?claim_id=...&order_id=...&update=1
+ *      → Lê o Return v2 pelo claim_id, mapeia p/ fluxo e (se update=1) salva em devolucoes.
+ *      → Nunca responde 400 por claim inválido (retorna 200 {ok:false, error}).
  *
- * Estratégia:
- * 1) Resolve access_token (header x-seller-token OU x-seller-id -> tabela ml_tokens com auto-refresh)
- * 2) Tenta múltiplos endpoints/documentos do ML (claims v1 / returns v2) com paginação
- * 3) Normaliza records e faz UPSERT em "devolucoes" por id_venda
- * 4) Retorna resumo (e opcionalmente os itens tocados)
+ *  - GET /api/ml/returns/sync?days=30&status=opened,in_progress&silent=1
+ *    ou GET /api/ml/returns/sync?order_id=2000012345678901
+ *      → Faz busca resiliente (v2 returns / v1 claims), normaliza e upsert em devolucoes.
  */
 
 const express = require('express');
 const router  = express.Router();
 const { query } = require('../db');
 
-// ---------- utils: checagem de colunas e UPSERT seguro ----------
+/* ========================= Infra: fetch ========================= */
+const _fetch = (typeof fetch === 'function')
+  ? fetch
+  : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+
+/* ==================== Checagem de colunas / UPSERT ==================== */
 const _colsCache = {};
 async function tableHasColumns(table, cols) {
   const key = `${table}:${cols.join(',')}`;
@@ -35,7 +39,7 @@ async function tableHasColumns(table, cols) {
 
 async function upsertDevolucao(rec) {
   // rec: { id_venda, ml_claim_id, ml_return_status, ml_shipping_status, log_status,
-  //        cliente_nome, valor_produto, valor_frete, created_at }
+  //        cliente_nome, valor_produto, valor_frete, created_at, loja_nome }
   if (!rec || !rec.id_venda) return { inserted: false, updated: false };
 
   const cols = await tableHasColumns('devolucoes', [
@@ -43,72 +47,79 @@ async function upsertDevolucao(rec) {
     'cliente_nome','valor_produto','valor_frete','created_at','updated_at','loja_nome'
   ]);
 
-  // UPDATE primeiro (evita depender de UNIQUE para ON CONFLICT)
-  const updFields = [];
-  const params    = [];
+  // Tenta UPDATE primeiro (evita depender de UNIQUE/ON CONFLICT em bases antigas)
+  const upd = [];
+  const params = [];
   let p = 1;
 
-  function add(field, value) {
+  const addUpd = (field, value) => {
     if (cols[field] && value !== undefined) {
-      updFields.push(`${field} = $${p++}`);
+      upd.push(`${field} = $${p++}`);
       params.push(value);
     }
-  }
+  };
 
-  add('ml_claim_id',       rec.ml_claim_id ?? null);
-  add('ml_return_status',  rec.ml_return_status ?? null);
-  add('ml_shipping_status',rec.ml_shipping_status ?? null);
-  add('log_status',        rec.log_status ?? null);
-  add('cliente_nome',      rec.cliente_nome ?? null);
-  add('valor_produto',     rec.valor_produto ?? null);
-  add('valor_frete',       rec.valor_frete ?? null);
-  add('loja_nome',         rec.loja_nome ?? null);
-  if (cols.updated_at) { updFields.push(`updated_at = now()`); }
+  addUpd('ml_claim_id',        rec.ml_claim_id ?? null);
+  addUpd('ml_return_status',   rec.ml_return_status ?? null);
+  addUpd('ml_shipping_status', rec.ml_shipping_status ?? null);
+  addUpd('log_status',         rec.log_status ?? null);
+  addUpd('cliente_nome',       rec.cliente_nome ?? null);
+  addUpd('valor_produto',      rec.valor_produto ?? null);
+  addUpd('valor_frete',        rec.valor_frete ?? null);
+  addUpd('loja_nome',          rec.loja_nome ?? null);
+  if (cols.updated_at) upd.push(`updated_at = now()`);
 
   params.push(rec.id_venda);
 
   let updated = false;
-  if (updFields.length) {
-    const sqlUpd = `UPDATE devolucoes SET ${updFields.join(', ')} WHERE id_venda = $${p}`;
+  if (upd.length) {
+    const sqlUpd = `UPDATE devolucoes SET ${upd.join(', ')} WHERE id_venda = $${p}`;
     const r = await query(sqlUpd, params);
     updated = (r.rowCount || 0) > 0;
   }
-
   if (updated) return { inserted: false, updated: true };
 
-  // INSERT se não há registro
+  // INSERT se não existe
   const insCols = ['id_venda'];
   const insVals = ['$1'];
   const insParams = [rec.id_venda];
   let i = 2;
 
-  function ins(field, value) {
+  const addIns = (field, value) => {
     if (cols[field] && value !== undefined) {
       insCols.push(field);
       insVals.push(`$${i++}`);
       insParams.push(value);
     }
-  }
+  };
 
-  ins('ml_claim_id',        rec.ml_claim_id ?? null);
-  ins('ml_return_status',   rec.ml_return_status ?? null);
-  ins('ml_shipping_status', rec.ml_shipping_status ?? null);
-  ins('log_status',         rec.log_status ?? null);
-  ins('cliente_nome',       rec.cliente_nome ?? null);
-  ins('valor_produto',      rec.valor_produto ?? null);
-  ins('valor_frete',        rec.valor_frete ?? null);
-  ins('loja_nome',          rec.loja_nome ?? 'Mercado Livre');
-  if (cols.created_at)      { insCols.push('created_at'); insVals.push('COALESCE($' + (i++) + ', now())'); insParams.push(rec.created_at ?? null); }
-  if (cols.updated_at)      { insCols.push('updated_at'); insVals.push('now()'); }
+  addIns('ml_claim_id',        rec.ml_claim_id ?? null);
+  addIns('ml_return_status',   rec.ml_return_status ?? null);
+  addIns('ml_shipping_status', rec.ml_shipping_status ?? null);
+  addIns('log_status',         rec.log_status ?? null);
+  addIns('cliente_nome',       rec.cliente_nome ?? null);
+  addIns('valor_produto',      rec.valor_produto ?? null);
+  addIns('valor_frete',        rec.valor_frete ?? null);
+  addIns('loja_nome',          rec.loja_nome ?? 'Mercado Livre');
+
+  if (cols.created_at) {
+    insCols.push('created_at');
+    insVals.push(`COALESCE($${i++}, now())`);
+    insParams.push(rec.created_at ?? null);
+  }
+  if (cols.updated_at) {
+    insCols.push('updated_at');
+    insVals.push('now()');
+  }
 
   const sqlIns = `INSERT INTO devolucoes (${insCols.join(',')}) VALUES (${insVals.join(',')})`;
   await query(sqlIns, insParams);
   return { inserted: true, updated: false };
 }
 
-// ---------- token resolver com auto-refresh de ml_tokens ----------
+/* ==================== Token resolver + refresh ==================== */
 const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
-const AHEAD_SEC = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600; // renova 10min antes
+const AHEAD_SEC = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600; // 10 min
 
 async function loadTokenRowFromDb(sellerId, q = query) {
   const { rows } = await q(`
@@ -134,7 +145,7 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
     client_secret: process.env.ML_CLIENT_SECRET || '',
     refresh_token: refreshToken
   });
-  const r = await fetch(ML_TOKEN_URL, {
+  const r = await _fetch(ML_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form.toString()
@@ -166,6 +177,7 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
   `, [sellerId, access_token || null, refresh_token || null, token_type || null, scope || null, expiresAt, JSON.stringify(body || {})]);
   return { access_token, refresh_token, expires_at: expiresAt };
 }
+
 async function resolveSellerAccessToken(req) {
   const direct = req.get('x-seller-token');
   if (direct) return { token: direct, sellerId: (req.get('x-seller-id')||'') };
@@ -193,9 +205,9 @@ async function resolveSellerAccessToken(req) {
   const e = new Error('missing_access_token'); e.status = 401; throw e;
 }
 
-// ---------- HTTP helper resiliente ----------
+/* ==================== HTTP helper (propaga erro) ==================== */
 async function mlFetch(token, url, opts = {}) {
-  const res = await fetch(url, {
+  const res = await _fetch(url, {
     ...opts,
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -215,7 +227,7 @@ async function mlFetch(token, url, opts = {}) {
   return body;
 }
 
-// ---------- Normalizações (record -> devolucoes) ----------
+/* ==================== Normalizações ==================== */
 function take(obj, path, dflt=null){
   try{
     const parts = Array.isArray(path) ? path : String(path).split('.');
@@ -226,8 +238,32 @@ function take(obj, path, dflt=null){
 function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : 0; }
 function lower(x){ return String(x||'').toLowerCase(); }
 
+function suggestFlow(mlReturnStatus, shipStatus, shipSub) {
+  const s = lower(mlReturnStatus);
+  const ship = [lower(shipStatus), lower(shipSub)].join('_');
+
+  // Devolução (v2)
+  if (/^label_generated$|ready_to_ship|etiqueta|prepar/.test(s)) return 'pronto_envio';
+  if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(s)) return 'pendente';
+  if (/^shipped$|pending_delivered$/.test(s)) return 'em_transporte';
+  if (/^delivered$/.test(s)) return 'recebido_cd';
+  if (/^not_delivered$/.test(s)) return 'pendente';
+  if (/^return_to_buyer$/.test(s)) return 'retorno_comprador';
+  if (/^scheduled$/.test(s)) return 'agendado';
+  if (/^expired$/.test(s)) return 'expirado';
+  if (/^failed$/.test(s)) return 'pendente';
+  if (/^cancelled$|^canceled$/.test(s)) return 'cancelado';
+
+  // Shipping (pedido) — NÃO promove delivered para recebido_cd
+  if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return 'em_preparacao';
+  if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return 'em_transporte';
+  if (/delivered|entreg|arrived|recebid/.test(ship)) return 'pendente';
+  if (/not_delivered|cancel/.test(ship)) return 'pendente';
+
+  return 'pendente';
+}
+
 function mapReturnRecord(rec, sellerNick) {
-  // Tenta extrair o máximo de campos, independente do shape da resposta
   const orderId =
     take(rec, ['order_id']) ||
     take(rec, ['order','id']) ||
@@ -288,34 +324,12 @@ function mapReturnRecord(rec, sellerNick) {
   };
 }
 
-function suggestFlow(mlReturnStatus, shipStatus, shipSub) {
-  const s = lower(mlReturnStatus);
-  const ship = [lower(shipStatus), lower(shipSub)].join('_');
-  if (/^label_generated$|ready_to_ship|etiqueta|prepar/.test(s)) return 'pronto_envio';
-  if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(s)) return 'pendente';
-  if (/^shipped$|pending_delivered$/.test(s)) return 'em_transporte';
-  if (/^delivered$/.test(s)) return 'recebido_cd';
-  if (/^not_delivered$/.test(s)) return 'pendente';
-  if (/^return_to_buyer$/.test(s)) return 'retorno_comprador';
-  if (/^scheduled$/.test(s)) return 'agendado';
-  if (/^expired$/.test(s)) return 'expirado';
-  if (/^failed$/.test(s)) return 'pendente';
-  if (/^cancelled$|^canceled$/.test(s)) return 'cancelado';
-
-  if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return 'em_preparacao';
-  if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return 'em_transporte';
-  if (/delivered|entreg|arrived|recebid/.test(ship)) return 'recebido_cd';
-  if (/not_delivered|cancel/.test(ship)) return 'pendente';
-
-  return 'pendente';
-}
-
-// ---------- Listagens resilientes (tentando vários endpoints) ----------
+/* ==================== Busca paginada resiliente ==================== */
 async function paginatedTry(token, builders, limit=50, maxPages=10) {
   const out = [];
   for (const build of builders) {
     let offset = 0;
-    for (let page=0; page<maxPages; page++) {
+    for (let page = 0; page < maxPages; page++) {
       const { url } = build({ offset, limit });
       try {
         const data = await mlFetch(token, url);
@@ -329,8 +343,8 @@ async function paginatedTry(token, builders, limit=50, maxPages=10) {
         out.push(...list);
         if (list.length < limit) break;
         offset += limit;
-      } catch (e) {
-        // tenta o próximo builder
+      } catch (_e) {
+        // tenta próximo builder
         break;
       }
     }
@@ -340,11 +354,73 @@ async function paginatedTry(token, builders, limit=50, maxPages=10) {
 }
 
 function isoDateNDaysAgo(n) {
-  const d = new Date(); d.setUTCDate(d.getUTCDate()-n);
+  const d = new Date(); d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString();
 }
 
-// ---------- Rotas ----------
+/* ==================== ROTAS ==================== */
+
+/**
+ * GET /api/ml/returns/state?claim_id=...&order_id=...&update=1
+ * Lê o Return v2 pelo claim_id e opcionalmente atualiza a devolução pelo order_id.
+ * Nunca devolve 400 por claim inválido.
+ */
+router.get('/returns/state', async (req, res) => {
+  try {
+    const claimRaw = String(req.query.claim_id || req.query.claimId || '').trim();
+    const claimId  = claimRaw.replace(/\D/g, '');
+    const orderId  = req.query.order_id || req.query.orderId || null;
+    const doUpdate = String(req.query.update ?? '1') !== '0';
+
+    if (!claimId) {
+      return res.json({ ok: false, error: 'missing_claim_id' });
+    }
+
+    const { token } = await resolveSellerAccessToken(req);
+
+    let raw;
+    try {
+      raw = await mlFetch(token, `https://api.mercadolibre.com/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`);
+    } catch (e) {
+      return res.json({ ok: false, error: e?.body?.error || e?.message || 'returns_fetch_failed' });
+    }
+
+    const ret = Array.isArray(raw?.data) ? raw.data[0]
+              : Array.isArray(raw)      ? raw[0]
+              : raw;
+
+    const rawStatus = ret?.status || ret?.return_status || null;
+    const flow      = suggestFlow(rawStatus, null, null);
+
+    if (doUpdate && orderId) {
+      // Atualiza DB (silencioso)
+      try {
+        await upsertDevolucao({
+          id_venda: String(orderId),
+          ml_return_status: rawStatus || null,
+          log_status: flow || null
+        });
+      } catch (_) {}
+    }
+
+    return res.json({
+      ok: true,
+      claim_id: claimId,
+      order_id: orderId || null,
+      raw_status: rawStatus,
+      flow
+    });
+  } catch (e) {
+    return res.json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+/**
+ * GET /api/ml/returns/sync
+ *  - ?order_id=...      → sincroniza somente esse pedido
+ *  - ?days=30&status=opened,in_progress,...  → janela e filtros
+ *  - ?silent=1          → omite detalhes
+ */
 router.get('/returns/sync', async (req, res) => {
   try {
     const { token, sellerId } = await resolveSellerAccessToken(req);
@@ -362,9 +438,8 @@ router.get('/returns/sync', async (req, res) => {
     let raw = [];
 
     if (orderId) {
-      // builders por order
       const builders = [
-        // returns v2 (hipótese comum)
+        // returns v2 por order
         ({offset,limit}) => ({
           url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?resource=order&resource_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}`
         }),
@@ -372,26 +447,24 @@ router.get('/returns/sync', async (req, res) => {
         ({offset,limit}) => ({
           url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}`
         }),
-        // fallback menos específico
+        // claims v1 por resource
         ({offset,limit}) => ({
           url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?resource=order&resource_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}`
         })
       ];
       raw = await paginatedTry(token, builders, limit, 3);
     } else {
-      // builders por seller + datas/estados
       const statusQS = statuses.map(s => `status=${encodeURIComponent(s)}`).join('&');
-
       const builders = [
         // returns v2 por seller (onde disponível)
         ({offset,limit}) => ({
           url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?seller=${encodeURIComponent(sellerId)}&${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}`
         }),
-        // claims v1 por seller (abertas / em andamento)
+        // claims v1 por seller
         ({offset,limit}) => ({
           url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?seller=${encodeURIComponent(sellerId)}&${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}`
         }),
-        // claims v1 sem seller explícito (algumas contas retornam por token)
+        // claims v1 sem seller explícito (algumas contas retornam via token)
         ({offset,limit}) => ({
           url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}`
         })
@@ -399,7 +472,6 @@ router.get('/returns/sync', async (req, res) => {
       raw = await paginatedTry(token, builders, limit, 10);
     }
 
-    // normaliza e persiste
     const touched = [];
     for (const rec of raw) {
       const mapped = mapReturnRecord(rec, sellerNick);
@@ -419,23 +491,14 @@ router.get('/returns/sync', async (req, res) => {
 
 module.exports = router;
 
-/**
- * Agendador opcional: chama returns/sync de tempos em tempos
- * Ex.: no server.js -> const { scheduleMlReturnsSync } = require('./routes/ml-returns');
- *                       scheduleMlReturnsSync(app);
- */
+/* ==================== Agendador opcional ==================== */
 module.exports.scheduleMlReturnsSync = function scheduleMlReturnsSync(app){
-  // roda a cada 10 minutos, últimos 3 dias
-  const INTERVAL_MS = parseInt(process.env.ML_RETURNS_SYNC_MS || '600000', 10);
+  const INTERVAL_MS = parseInt(process.env.ML_RETURNS_SYNC_MS || '600000', 10); // 10 min
   async function tick(){
     try{
-      // Se você tem multi-seller, aqui você pode iterar x-seller-id (ml_tokens) e disparar uma chamada por seller
-      // Para single-seller: apenas dispara localmente (a resolução de token usa sessão/env)
-      const r = await fetch(`${process.env.BASE_URL || 'http://127.0.0.1:3000'}/api/ml/returns/sync?days=3&silent=1`, {
-        headers: { 'Accept':'application/json' },
-        // se quiser forçar seller pelo header: 'x-seller-id': '<id>'
+      await _fetch(`${process.env.BASE_URL || 'http://127.0.0.1:3000'}/api/ml/returns/sync?days=3&silent=1`, {
+        headers: { 'Accept':'application/json' }
       }).catch(()=>null);
-      if (r && r.ok) { /* opcionalmente logar */ }
     }catch(_){}
     finally{
       setTimeout(tick, INTERVAL_MS);
