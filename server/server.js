@@ -316,78 +316,11 @@ try {
   console.warn('[BOOT] Returns falhou (vai usar fallback):', e?.message || e);
 }
 
-/** ---- Fallback mínimo para /api/returns (só GET lista) ---- */
+/** ---- Fallback para /api/returns (GET lista) — completo com shipping/returns ---- */
 if (!__returnsMounted) {
   const fallback = express.Router();
-  fallback.get('/', async (req, res) => {
-    try {
-      // aceita 3 jeitos: (1) page/pageSize, (2) limit&range_days, (3) vazio
-      const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
-      const pageQ   = parseInt(req.query.page || '1', 10);
-      const limit   = Math.max(1, Math.min(Number.isFinite(limitQ) ? limitQ : 200, 200));
-      const page    = Math.max(1, Number.isFinite(pageQ) ? pageQ : 1);
-      const offset  = (page - 1) * limit;
 
-      const orderBy  = String(req.query.orderBy || 'created_at');
-      const orderDir = (String(req.query.orderDir || 'desc').toLowerCase() === 'asc') ? 'asc' : 'desc';
-
-      const allowedCols = new Set([
-        'id','id_venda','cliente_nome','loja_nome','sku',
-        'status','log_status','status_operacional',
-        'valor_produto','valor_frete','created_at','updated_at'
-      ]);
-      const col = allowedCols.has(orderBy) ? orderBy : 'created_at';
-      const cols = [...allowedCols].join(',');
-
-      const { rows } = await query(
-        `SELECT ${cols}
-           FROM devolucoes
-          ORDER BY ${col} ${orderDir} NULLS LAST
-          LIMIT $1 OFFSET $2`,
-        [limit, offset]
-      );
-      const countQ = await query(`SELECT COUNT(*)::int AS n FROM devolucoes`);
-      const total  = countQ.rows[0]?.n || 0;
-      const totalPages = Math.max(1, Math.ceil(total / limit));
-
-      res.json({
-        items: rows.map(r => ({
-          id: r.id,
-          id_venda: r.id_venda,
-          cliente_nome: r.cliente_nome,
-          loja_nome: r.loja_nome,
-          sku: r.sku,
-          status: r.status,
-          created_at: r.created_at ?? r.updated_at ?? null,
-          valor_produto: r.valor_produto,
-          valor_frete: r.valor_frete,
-          log_status_suggested: r.log_status || null,
-          has_mediation: false
-        })),
-        total,
-        page,
-        pageSize: limit,
-        totalPages
-      });
-    } catch (e) {
-      console.error('[returns:fallback] erro:', e);
-      res.status(500).json({ error:'Falha ao listar devoluções (fallback)' });
-    }
-  });
-
-  // Também aceita /api/returns/search do front (mesmo resultado do /)
-  fallback.get('/search', (req, res, next) => fallback.handle(req, res, next));
-
-  app.use('/api/returns', fallback);
-  console.log('[BOOT] Returns Fallback ON (GET /api/returns e /api/returns/search)');
-}
-
-/* ========= COMPAT SHIM: garante SEMPRE /api/returns e /api/returns/search =========
-   - Montado após o router oficial. Se o oficial atender, ele responde antes.
-   - Se não atender a raiz, este shim devolve a lista com paginação e range_days. */
-{
-  const returnsCompat = express.Router();
-  returnsCompat.get(['/', '/search'], async (req, res) => {
+  const listHandler = async (req, res) => {
     try {
       // paginação
       const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
@@ -403,21 +336,25 @@ if (!__returnsMounted) {
       // janela temporal
       const rangeDays = parseInt(req.query.range_days || req.query.rangeDays || '0', 10) || 0;
 
-      // colunas base (existem em qualquer versão do schema)
-      const baseCols = ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status','status_operacional','valor_produto','valor_frete','created_at','updated_at'];
+      // colunas base
+      const baseCols = [
+        'id','id_venda','cliente_nome','loja_nome','sku',
+        'status','log_status','status_operacional',
+        'valor_produto','valor_frete','created_at','updated_at'
+      ];
 
-      // colunas opcionais (checa existência)
-      const opt = await tableHasColumns('devolucoes', ['ml_return_status','ml_shipping_status','shipping_status'], req);
+      // colunas opcionais
+      const opt = await tableHasColumns('devolucoes', ['ml_return_status','ml_shipping_status','shipping_status','claim_stage'], req);
 
-      // SELECT dinâmico com alias p/ compat (se só existir shipping_status, expõe como ml_shipping_status)
       const selectCols = [...baseCols];
-      if (opt.ml_return_status) selectCols.push('ml_return_status');
+      if (opt.ml_return_status)   selectCols.push('ml_return_status');
       if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
       else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
+      if (opt.claim_stage)        selectCols.push('claim_stage');
 
       // ordem segura
-      const allowed = new Set(selectCols.map(c => (c.includes(' AS ') ? c.split(' AS ')[1] : c)));
-      const orderBy = allowed.has(orderByReq) ? orderByReq : 'created_at';
+      const allowedOrder = new Set(['created_at','updated_at','id','id_venda']);
+      const orderBy = allowedOrder.has(orderByReq) ? orderByReq : 'created_at';
 
       // WHERE
       const params = [];
@@ -446,7 +383,6 @@ if (!__returnsMounted) {
       const total = countRows[0]?.n || 0;
       const totalPages = Math.max(1, Math.ceil(total / limit));
 
-      // resposta compat
       res.json({
         items: rows.map(r => ({
           id: r.id,
@@ -468,12 +404,16 @@ if (!__returnsMounted) {
         totalPages
       });
     } catch (e) {
-      console.error('[returns:compat] erro:', e);
-      res.status(500).json({ error:'Falha ao listar devoluções (compat shim)' });
+      console.error('[returns:fallback] erro:', e);
+      res.status(500).json({ error:'Falha ao listar devoluções (fallback)' });
     }
-  });
-  app.use('/api/returns', returnsCompat);
-  console.log('[BOOT] Returns Compat Shim ON (GET /api/returns, /api/returns/search)');
+  };
+
+  fallback.get('/', listHandler);
+  fallback.get('/search', listHandler); // mesmo resultado
+
+  app.use('/api/returns', fallback);
+  console.log('[BOOT] Returns Fallback ON (GET /api/returns e /api/returns/search) — com shipping/returns');
 }
 
 /* ========= Returns LOGS (DEPOIS dos returns, com guard) ========= */

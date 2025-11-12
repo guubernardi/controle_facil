@@ -62,7 +62,7 @@ class DevolucoesFeed {
     this.TRY_FLOW_PREFIX = "rf:flowTry:";
     this.TRY_FLOW_MS = 10 * 60 * 1000;
     this._syncInFlight = false;
-    this.MAX_FLOW_RES_PER_TICK = 2;
+    this.MAX_FLOW_RES_PER_TICK = 10;
     this._flowResolvesThisTick = 0;
 
     this.inicializar();
