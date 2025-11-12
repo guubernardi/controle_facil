@@ -382,6 +382,100 @@ if (!__returnsMounted) {
   console.log('[BOOT] Returns Fallback ON (GET /api/returns e /api/returns/search)');
 }
 
+/* ========= COMPAT SHIM: garante SEMPRE /api/returns e /api/returns/search =========
+   - Montado após o router oficial. Se o oficial atender, ele responde antes.
+   - Se não atender a raiz, este shim devolve a lista com paginação e range_days. */
+{
+  const returnsCompat = express.Router();
+  returnsCompat.get(['/', '/search'], async (req, res) => {
+    try {
+      // paginação
+      const limitQ  = parseInt(req.query.pageSize || req.query.limit || '200', 10);
+      const pageQ   = parseInt(req.query.page || '1', 10);
+      const limit   = Math.max(1, Math.min(Number.isFinite(limitQ) ? limitQ : 200, 200));
+      const page    = Math.max(1, Number.isFinite(pageQ) ? pageQ : 1);
+      const offset  = (page - 1) * limit;
+
+      // ordenação
+      const orderByReq  = String(req.query.orderBy || 'created_at');
+      const orderDir    = (String(req.query.orderDir || 'desc').toLowerCase() === 'asc') ? 'asc' : 'desc';
+
+      // janela temporal
+      const rangeDays = parseInt(req.query.range_days || req.query.rangeDays || '0', 10) || 0;
+
+      // colunas base (existem em qualquer versão do schema)
+      const baseCols = ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status','status_operacional','valor_produto','valor_frete','created_at','updated_at'];
+
+      // colunas opcionais (checa existência)
+      const opt = await tableHasColumns('devolucoes', ['ml_return_status','ml_shipping_status','shipping_status'], req);
+
+      // SELECT dinâmico com alias p/ compat (se só existir shipping_status, expõe como ml_shipping_status)
+      const selectCols = [...baseCols];
+      if (opt.ml_return_status) selectCols.push('ml_return_status');
+      if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
+      else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
+
+      // ordem segura
+      const allowed = new Set(selectCols.map(c => (c.includes(' AS ') ? c.split(' AS ')[1] : c)));
+      const orderBy = allowed.has(orderByReq) ? orderByReq : 'created_at';
+
+      // WHERE
+      const params = [];
+      let whereSql = '';
+      if (rangeDays > 0) {
+        params.push(String(rangeDays));
+        whereSql = `WHERE created_at >= now() - ($${params.length} || ' days')::interval`;
+      }
+
+      // consulta
+      params.push(limit, offset);
+      const { rows } = await query(
+        `SELECT ${selectCols.join(', ')}
+           FROM devolucoes
+          ${whereSql}
+          ORDER BY ${orderBy} ${orderDir} NULLS LAST
+          LIMIT $${params.length-1} OFFSET $${params.length}`,
+        params
+      );
+
+      // count
+      const countParams = [];
+      let countWhere = '';
+      if (rangeDays > 0) { countParams.push(String(rangeDays)); countWhere = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
+      const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM devolucoes ${countWhere}`, countParams);
+      const total = countRows[0]?.n || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+
+      // resposta compat
+      res.json({
+        items: rows.map(r => ({
+          id: r.id,
+          id_venda: r.id_venda,
+          cliente_nome: r.cliente_nome,
+          loja_nome: r.loja_nome,
+          sku: r.sku,
+          status: r.status,
+          log_status: r.log_status ?? null,
+          ml_return_status: r.ml_return_status ?? null,
+          ml_shipping_status: r.ml_shipping_status ?? null,
+          valor_produto: r.valor_produto,
+          valor_frete: r.valor_frete,
+          created_at: r.created_at ?? r.updated_at ?? null
+        })),
+        total,
+        page,
+        pageSize: limit,
+        totalPages
+      });
+    } catch (e) {
+      console.error('[returns:compat] erro:', e);
+      res.status(500).json({ error:'Falha ao listar devoluções (compat shim)' });
+    }
+  });
+  app.use('/api/returns', returnsCompat);
+  console.log('[BOOT] Returns Compat Shim ON (GET /api/returns, /api/returns/search)');
+}
+
 /* ========= Returns LOGS (DEPOIS dos returns, com guard) ========= */
 try {
   const returnsLogRouter = require('./routes/returns-log');
