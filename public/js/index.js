@@ -18,7 +18,7 @@ class DevolucoesFeed {
     this._lastSyncErrShown = false;
 
     // circuit breaker claims/import
-    this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
+    this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000; // padrão (pode ser reduzido caso "invalid_claim_id")
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
 
     // fluxo cache (shipping)
@@ -53,8 +53,8 @@ class DevolucoesFeed {
       pendente:   new Set(["pendente","em_analise","em-analise","aberto"]),
     };
 
-    // DESLIGA busca de claims se o back não tiver endpoints de claims
-    this.HAS_CLAIMS_SEARCH = false;
+    // ATIVADO: permitimos buscas por claims/returns no ML
+    this.HAS_CLAIMS_SEARCH = true;
 
     // anti-F5
     this._refreshTimer = null;
@@ -94,6 +94,12 @@ class DevolucoesFeed {
     await this.carregar();
     this.purgeOldSeen();
     this.renderizar();
+
+    // → puxa devoluções abertas do ML logo no boot
+    await this.syncClaimsWithFallback();
+    await this.carregar();
+    this.renderizar();
+
     this.startAutoSync();
   }
 
@@ -240,7 +246,7 @@ class DevolucoesFeed {
 
   // ===== Circuit breaker claims/import =====
   claimsImportAllowed(){ try{ const until=Number(localStorage.getItem(this.CLAIMS_BLOCK_KEY)||0); return Date.now()>until; }catch{ return true; } }
-  blockClaimsImport(){ try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+this.CLAIMS_BLOCK_MS)); }catch{} }
+  blockClaimsImport(ms=this.CLAIMS_BLOCK_MS){ try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+ms)); }catch{} }
 
   // ===== caches =====
   getCachedFlow(orderId){
@@ -289,36 +295,46 @@ class DevolucoesFeed {
       }
     }catch{}
 
-    // 2) DESLIGADO: não tenta endpoints de claims se o back não tiver
+    // 2) (mantém desligado se o back não tiver endpoints de claims)
     if (!this.HAS_CLAIMS_SEARCH) return null;
-
-    // (Se ativar no futuro, adicione aqui as chamadas aos endpoints de claims)
     return null;
   }
 
   // ===== Syncs curtos =====
   async syncClaimsWithFallback(){
-    if (!this.claimsImportAllowed()) return false;
+    // 1) TENTAR returns/sync (preferível): inclui status da devolução (v2)
+    for (const d of [3,7,30]){
+      const qs = new URLSearchParams({
+        silent: "1",
+        days: String(d),
+        status: "opened,in_progress,shipped,pending_delivered,delivered"
+      });
+      console.info("[sync] returns/sync:", `${d}d`);
+      const r = await this.fetchQuiet(`/api/ml/returns/sync?${qs}`);
+      if (r.ok) {
+        try { localStorage.removeItem(this.CLAIMS_BLOCK_KEY); } catch {}
+        return true;
+      }
+    }
 
-    // tenta janelas curtas → médias → longas
+    // 2) Fallback: claims/import (se permitido)
+    if (!this.claimsImportAllowed()) return false;
     for (const d of [3,7,30]){
       const qs = new URLSearchParams({
         silent:"1",
         all:"1",
         days:String(d),
-        // usa "statuses" explicitamente; o back também aceita "status"
         statuses:"opened,in_progress"
       });
       console.info("[sync] claims/import:", `${d}d opened,in_progress`);
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
+      if (r.ok) return true;
 
-      if (r.ok) return true; // sucesso lógico
-      const detail = (r.detail || "").toString().toLowerCase();
-
-      // Se o back ainda devolver erro do ML, bloqueia por um tempo
+      const detail = (r.detail||"").toString().toLowerCase();
       const bad = (r.status===400) || detail.includes("invalid_claim_id");
       if (bad){
-        this.blockClaimsImport();
+        // reduz punição p/ 30 min para não travar operação
+        try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+30*60*1000)); }catch{}
         if (!this._lastSyncErrShown){
           this._lastSyncErrShown=true;
           this.toast("Erro", this.GENERIC_ERR, "erro");
@@ -362,7 +378,7 @@ class DevolucoesFeed {
     const it = this.items.find(x => String(x.id) === String(id));
     if (it && !claimId) claimId = await this.ensureClaimIdOnItem(it);
 
-    // 1) Returns state (se existir no back; se não, ignora 404)
+    // 1) Returns state
     if (claimId){
       const r = await this.fetchQuiet(`/api/ml/returns/state?claim_id=${encodeURIComponent(claimId)}${orderId?`&order_id=${encodeURIComponent(orderId)}`:""}&silent=1`);
       if (r.ok) {

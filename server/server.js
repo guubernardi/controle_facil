@@ -162,6 +162,7 @@ app.use('/api', (req, res, next) => {
   const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   const isJob = (
     orig.startsWith('/api/ml/claims/import') ||
+    orig.startsWith('/api/ml/returns/sync') || // <-- libera o sync de devoluções
     orig.startsWith('/api/ml/refresh')
   ) && jobHeader && jobToken && jobHeader === jobToken;
 
@@ -335,7 +336,11 @@ if (!__returnsMounted) {
       if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
       else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
 
-      const allowed = new Set([...baseCols, 'ml_return_status', 'ml_shipping_status']);
+      const allowed = new Set([
+        ...baseCols,
+        ...(opt.ml_return_status ? ['ml_return_status'] : []),
+        ...((opt.ml_shipping_status || opt.shipping_status) ? ['ml_shipping_status'] : [])
+      ]);
       const orderBy = allowed.has(orderByReq) ? orderByReq : 'created_at';
 
       const params = [];
@@ -343,7 +348,8 @@ if (!__returnsMounted) {
       if (rangeDays > 0) { params.push(String(rangeDays)); whereSql = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
 
       params.push(limit, offset);
-      const { rows } = await query(
+      const q = qOf(req);
+      const { rows } = await q(
         `SELECT ${selectCols.join(', ')}
            FROM devolucoes
           ${whereSql}
@@ -352,7 +358,7 @@ if (!__returnsMounted) {
         params
       );
 
-      const { rows: countRows } = await query(
+      const { rows: countRows } = await q(
         `SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`,
         whereSql ? [String(rangeDays)] : []
       );
@@ -411,7 +417,11 @@ if (!__returnsMounted) {
       if (opt.ml_shipping_status) selectCols.push('ml_shipping_status');
       else if (opt.shipping_status) selectCols.push('shipping_status AS ml_shipping_status');
 
-      const allowed = new Set([...baseCols, 'ml_return_status', 'ml_shipping_status']);
+      const allowed = new Set([
+        ...baseCols,
+        ...(opt.ml_return_status ? ['ml_return_status'] : []),
+        ...((opt.ml_shipping_status || opt.shipping_status) ? ['ml_shipping_status'] : [])
+      ]);
       const orderBy = allowed.has(orderByReq) ? orderByReq : 'created_at';
 
       const params = [];
@@ -419,7 +429,8 @@ if (!__returnsMounted) {
       if (rangeDays > 0) { params.push(String(rangeDays)); whereSql = `WHERE created_at >= now() - ($1 || ' days')::interval`; }
 
       params.push(limit, offset);
-      const { rows } = await query(
+      const q = qOf(req);
+      const { rows } = await q(
         `SELECT ${selectCols.join(', ')}
            FROM devolucoes
           ${whereSql}
@@ -428,7 +439,7 @@ if (!__returnsMounted) {
         params
       );
 
-      const { rows: countRows } = await query(
+      const { rows: countRows } = await q(
         `SELECT COUNT(*)::int AS n FROM devolucoes ${whereSql ? 'WHERE created_at >= now() - ($1 || \' days\')::interval' : ''}`,
         whereSql ? [String(rangeDays)] : []
       );
@@ -487,7 +498,8 @@ if (!__returnsMounted) {
       if (opt.ml_shipping_status) cols.push('ml_shipping_status');
       else if (opt.shipping_status) cols.push('shipping_status AS ml_shipping_status');
 
-      const { rows } = await query(
+      const q = qOf(req);
+      const { rows } = await q(
         `SELECT ${cols.join(', ')} FROM devolucoes WHERE id=$1 LIMIT 1`, [id]
       );
       if (!rows[0]) return res.status(404).json({ error: 'not_found' });
@@ -551,9 +563,10 @@ if (!__returnsMounted) {
       if (!sets.length) return res.status(400).json({ error: 'no_fields_to_update' });
 
       params.push(id);
-      await query(`UPDATE devolucoes SET ${sets.join(', ')} WHERE id = $${p}`, params);
+      const q = qOf(req);
+      await q(`UPDATE devolucoes SET ${sets.join(', ')} WHERE id = $${p}`, params);
 
-      const { rows } = await query(
+      const { rows } = await q(
         `SELECT id, id_venda, log_status, status, updated_at
            FROM devolucoes WHERE id=$1`, [id]
       );
@@ -640,7 +653,7 @@ try {
   if (typeof registerMlSync === 'function') {
     registerMlSync(app, { addReturnEvent });
     _mlSyncRegistered = true;
-    console.log('[BOOT] ML Sync ok');
+    console.log('[BOOT] ML Sync ok]');
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 

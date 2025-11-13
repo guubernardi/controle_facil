@@ -10,6 +10,39 @@ const _fetch = (typeof fetch === 'function')
   ? fetch
   : (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 
+/* ================= helpers ================= */
+const lower = x => String(x || '').toLowerCase();
+const toNumber = x => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
+function take(obj, path, dflt=null){
+  try{
+    const ps = Array.isArray(path) ? path : String(path).split('.');
+    let cur = obj; for (const p of ps){ if(cur==null) return dflt; cur = cur[p]; }
+    return cur ?? dflt;
+  }catch{ return dflt; }
+}
+
+/** Domínio permitido no CHECK da tabela devolucoes.log_status */
+const FLOW_ALLOWED = new Set([
+  'pendente','em_preparacao','em_transporte','recebido_cd',
+  'mediacao','disputa','agendado','retorno_comprador',
+  'cancelado','fechado','expirado'
+]);
+
+/** Converte qualquer rótulo para um valor aceito pelo CHECK da tabela */
+function canonFlowForDb(s){
+  let v = lower(s).replace(/\s+/g,'_');
+  // sinônimos
+  if (v === 'pronto_envio' || v === 'ready_to_ship' || v === 'label_generated') v = 'em_preparacao';
+  if (v === 'a_caminho' || v === 'em_transito' || v === 'on_the_way' || v === 'in_transit') v = 'em_transporte';
+  if (v === 'entregue' || v === 'delivered' || v === 'recebido_no_cd') v = 'recebido_cd';
+  if (v === 'mediation') v = 'mediacao';
+  if (v === 'claim' || v === 'opened' || v === 'open') v = 'disputa';
+  if (v === 'canceled') v = 'cancelado';
+  if (v === 'expired') v = 'expirado';
+  if (FLOW_ALLOWED.has(v)) return v;
+  return 'pendente';
+}
+
 /* ================= column check / upsert ================= */
 const _colsCache = {};
 async function tableHasColumns(table, cols) {
@@ -28,6 +61,9 @@ async function tableHasColumns(table, cols) {
 
 async function upsertDevolucao(rec) {
   if (!rec || !rec.id_venda) return { inserted:false, updated:false };
+
+  // garante compatibilidade com o CHECK
+  if (rec.log_status) rec.log_status = canonFlowForDb(rec.log_status);
 
   const cols = await tableHasColumns('devolucoes', [
     'id_venda','ml_claim_id','ml_return_status','ml_shipping_status','log_status',
@@ -138,27 +174,31 @@ async function resolveSellerAccessToken(req){
   const e=new Error('missing_access_token'); e.status=401; throw e;
 }
 
-/* ================= helpers ================= */
+/* ================= HTTP helper ================= */
 async function mlFetch(token, url, opts={}){
-  const res = await _fetch(url, { ...opts, headers:{ 'Authorization':`Bearer ${token}`, 'Accept':'application/json', ...(opts.headers||{}) } });
-  const ct=res.headers.get('content-type')||''; const body=ct.includes('json')?await res.json().catch(()=>null):await res.text().catch(()=>null);
+  const res = await _fetch(url, {
+    ...opts,
+    headers: { 'Authorization':`Bearer ${token}`, 'Accept':'application/json', ...(opts.headers||{}) }
+  });
+  const ct=res.headers.get('content-type')||''; 
+  const body=ct.includes('json')?await res.json().catch(()=>null):await res.text().catch(()=>null);
   if(!res.ok){ const err=new Error((body&&(body.message||body.error))||res.statusText||`HTTP ${res.status}`); err.status=res.status; err.body=body; throw err; }
   return body;
 }
-const lower = x => String(x||'').toLowerCase();
-const toNumber = x => { const n=Number(x); return Number.isFinite(n)?n:0; };
-function take(obj, path, dflt=null){ try{ const ps=Array.isArray(path)?path:String(path).split('.'); let cur=obj; for(const p of ps){ if(cur==null) return dflt; cur=cur[p]; } return cur??dflt; }catch{ return dflt; } }
 
+/* ================= flow helpers ================= */
 function flowFromStage(stage){
   const s = lower(stage);
-  if (s==='dispute') return 'mediacao';
-  if (s==='claim')   return 'disputa';
-  // recontact/none/stale → mantém pendente
+  if (s === 'dispute') return 'mediacao';
+  if (s === 'claim')   return 'disputa';
+  // recontact / none / stale -> não promovemos
   return 'pendente';
 }
 function suggestFlow(mlReturnStatus, shipStatus, shipSub){
   const s = lower(mlReturnStatus);
   const ship = [lower(shipStatus), lower(shipSub)].join('_');
+
+  // returns v2
   if (/^label_generated$|ready_to_ship|etiqueta|prepar/.test(s)) return 'pronto_envio';
   if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(s)) return 'pendente';
   if (/^shipped$|pending_delivered$/.test(s)) return 'em_transporte';
@@ -170,13 +210,16 @@ function suggestFlow(mlReturnStatus, shipStatus, shipSub){
   if (/^failed$/.test(s)) return 'pendente';
   if (/^cancelled$|^canceled$/.test(s)) return 'cancelado';
 
+  // shipping
   if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return 'em_preparacao';
   if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return 'em_transporte';
-  if (/delivered|entreg|arrived|recebid/.test(ship)) return 'pendente'; // shipping não promove
+  if (/delivered|entreg|arrived|recebid/.test(ship)) return 'pendente'; // não promovemos via shipping
   if (/not_delivered|cancel/.test(ship)) return 'pendente';
+
   return 'pendente';
 }
 
+/* ================= record mapping ================= */
 function mapReturnRecord(rec, sellerNick){
   const orderId =
     take(rec,['order_id']) ||
@@ -208,6 +251,8 @@ function mapReturnRecord(rec, sellerNick){
     lower(take(rec,['return_status'])) ||
     lower(take(rec,['state'])) || '';
 
+  const stage = lower(take(rec,['stage']) || '');
+
   const mlShipStatus = lower(take(rec,['shipping','status'])||'');
   const mlShipSub    = lower(take(rec,['shipping','substatus'])||'');
   const mlShipAny    = mlShipSub || mlShipStatus;
@@ -222,12 +267,18 @@ function mapReturnRecord(rec, sellerNick){
     take(rec,['created']) ||
     new Date().toISOString();
 
+  // fluxo sugerido
+  let flow = suggestFlow(mlReturnStatus, mlShipStatus, mlShipSub);
+  const fromStage = flowFromStage(stage);
+  if (fromStage !== 'pendente') flow = fromStage;
+  flow = canonFlowForDb(flow);
+
   return {
     id_venda: String(orderId),
     ml_claim_id: claimId ? String(claimId) : null,
     ml_return_status: mlReturnStatus || null,
     ml_shipping_status: mlShipAny || null,
-    log_status: suggestFlow(mlReturnStatus, mlShipStatus, mlShipSub),
+    log_status: flow,
     cliente_nome: String(buyer),
     valor_produto: saleAmount,
     valor_frete: shippingAmount,
@@ -239,9 +290,9 @@ function mapReturnRecord(rec, sellerNick){
 /* ================= /returns/state ================= */
 /**
  * GET /api/ml/returns/state?claim_id=...&order_id=...&update=1
- * - Tenta GET e POST em /post-purchase/v2/claims/{claim_id}/returns
+ * - Tenta GET e, se preciso, POST em /post-purchase/v2/claims/{claim_id}/returns
  * - Se não vier, cai para /post-purchase/v1/claims/{claim_id} e usa stage→flow.
- * - Nunca 400: sempre 200 com { ok:true|false, ... } (o front só precisa de flow/raw_status).
+ * - Sempre 200 com { ok, flow, raw_status }.
  */
 router.get('/returns/state', async (req, res) => {
   try {
@@ -260,7 +311,7 @@ router.get('/returns/state', async (req, res) => {
       const r = await mlFetch(token, `https://api.mercadolibre.com/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`);
       ret = Array.isArray(r?.data) ? r.data[0] : Array.isArray(r) ? r[0] : r;
     } catch (_){ /* tenta POST */ }
-    // 2) POST v2 (algumas contas exigem POST vazio)
+    // 2) POST v2 (algumas contas precisam de POST vazio)
     if (!ret) {
       try {
         const r = await mlFetch(
@@ -277,7 +328,7 @@ router.get('/returns/state', async (req, res) => {
     let flow      = rawStatus ? suggestFlow(rawStatus, null, null) : null;
     let stage     = null;
 
-    // 3) Fallback: pegar claim v1 e mapear stage → flow
+    // 3) Fallback: claim v1 → stage
     if (!rawStatus) {
       try {
         const c = await mlFetch(token, `https://api.mercadolibre.com/post-purchase/v1/claims/${encodeURIComponent(claimId)}`);
@@ -287,6 +338,8 @@ router.get('/returns/state', async (req, res) => {
       } catch(_){}
     }
 
+    flow = canonFlowForDb(flow || 'pendente');
+
     // Atualiza DB se possível
     if (doUpdate && orderId) {
       try {
@@ -294,7 +347,7 @@ router.get('/returns/state', async (req, res) => {
           id_venda: String(orderId),
           ml_claim_id: String(claimId),
           ml_return_status: rawStatus || null,
-          log_status: flow || null
+          log_status: flow
         });
       } catch(_) {}
     }
@@ -305,7 +358,7 @@ router.get('/returns/state', async (req, res) => {
       order_id: orderId || null,
       raw_status: rawStatus || null,
       stage: stage || null,
-      flow: flow || 'pendente'
+      flow
     });
   } catch (e) {
     return res.json({ ok:false, error:String(e?.message||e) });
@@ -373,8 +426,6 @@ router.get('/returns/sync', async (req, res) => {
 
     const touched=[];
     for (const rec of raw){
-      // se vier só claim v1, tenta aplicar stage → flow também
-      if (!rec.status && rec.stage) rec.status = rec.stage;
       const mapped = mapReturnRecord(rec, sellerNick);
       if (!mapped) continue;
       const r = await upsertDevolucao(mapped);
@@ -393,11 +444,13 @@ router.get('/returns/sync', async (req, res) => {
 module.exports = router;
 
 /* ================= agendador opcional ================= */
-module.exports.scheduleMlReturnsSync = function scheduleMlReturnsSync(app){
+module.exports.scheduleMlReturnsSync = function scheduleMlReturnsSync(){
   const INTERVAL_MS = parseInt(process.env.ML_RETURNS_SYNC_MS || '600000', 10);
   async function tick(){
     try{
-      await _fetch(`${process.env.BASE_URL || 'http://127.0.0.1:3000'}/api/ml/returns/sync?days=3&silent=1`, { headers:{Accept:'application/json'} }).catch(()=>null);
+      await _fetch(`${process.env.BASE_URL || 'http://127.0.0.1:3000'}/api/ml/returns/sync?days=3&silent=1`, {
+        headers:{Accept:'application/json'}
+      }).catch(()=>null);
     }finally{
       setTimeout(tick, INTERVAL_MS);
     }
