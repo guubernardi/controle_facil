@@ -162,7 +162,7 @@ app.use('/api', (req, res, next) => {
   const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   const isJob = (
     orig.startsWith('/api/ml/claims/import') ||
-    orig.startsWith('/api/ml/returns/sync') || // << permitir job do sync de devoluções
+    orig.startsWith('/api/ml/returns/sync') || // permitir job do sync de devoluções
     orig.startsWith('/api/ml/refresh')
   ) && jobHeader && jobToken && jobHeader === jobToken;
 
@@ -274,6 +274,32 @@ try {
   console.log('[BOOT] ML Shipping ok');
 } catch (e) {
   console.warn('[BOOT] ML Shipping opcional:', e?.message || e);
+}
+
+/* === ML RETURNS (router + agendador) — MONTE ANTES de qualquer /api/ml catch-all === */
+let _mlReturnsMounted = false;
+try {
+  const raw = require('./routes/ml-returns'); // garanta que o arquivo se chama exatamente ml-returns.js
+  const routerLike = raw?.default || raw?.router || raw;
+  const scheduleFn = raw?.scheduleMlReturnsSync || routerLike?.scheduleMlReturnsSync;
+
+  const isRouter = !!routerLike && (routerLike.stack || typeof routerLike.use === 'function' || routerLike.name === 'router');
+  if (isRouter) { app.use('/api/ml', routerLike); _mlReturnsMounted = true; }
+  else if (typeof routerLike === 'function') { routerLike(app); _mlReturnsMounted = true; }
+  else { console.warn('[BOOT] ml-returns export inesperado:', typeof routerLike); }
+
+  if (scheduleFn && typeof scheduleFn === 'function') {
+    scheduleFn(app);
+    console.log('[BOOT] ML Returns agendador ON');
+  }
+  console.log('[BOOT] ML Returns', _mlReturnsMounted ? 'ok' : 'NÃO MONTADO');
+} catch (e) {
+  console.warn('[BOOT] ML Returns falhou ao carregar:', e?.message || e);
+}
+if (!_mlReturnsMounted) {
+  app.get('/api/ml/returns/sync', (_req, res) => {
+    res.status(501).json({ ok:false, error:'ml-returns não montado. Verifique o nome do arquivo (server/routes/ml-returns.js) e o export (module.exports = router).' });
+  });
 }
 
 /* Demais módulos */
@@ -623,7 +649,7 @@ try {
   console.log('[BOOT] ML Enrich ok');
 } catch (e) { console.warn('[BOOT] ML Enrich opcional:', e?.message || e); }
 
-/* === ML Chat / Communications (aggregador) === */
+/* === ML Chat / Communications (aggregador) — DEPOIS do ml-returns === */
 try {
   let mlChatRoutes = null;
   try { mlChatRoutes = require('./routes/mlChat.js'); } catch (_) {}
@@ -648,34 +674,6 @@ try {
     console.log('[BOOT] ML Sync ok');
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
-
-/* === ML RETURNS (router + agendador) === */
-let _mlReturnsMounted = false;
-try {
-  const raw = require('./routes/ml-returns'); // garanta que o arquivo se chama exatamente ml-returns.js
-  // normaliza export (default / router / função)
-  const routerLike = raw?.default || raw?.router || raw;
-  const scheduleFn = raw?.scheduleMlReturnsSync || routerLike?.scheduleMlReturnsSync;
-
-  const isRouter = !!routerLike && (routerLike.stack || typeof routerLike.use === 'function' || routerLike.name === 'router');
-  if (isRouter) { app.use('/api/ml', routerLike); _mlReturnsMounted = true; }
-  else if (typeof routerLike === 'function') { routerLike(app); _mlReturnsMounted = true; }
-  else { console.warn('[BOOT] ml-returns export inesperado:', typeof routerLike); }
-
-  if (scheduleFn && typeof scheduleFn === 'function') {
-    scheduleFn(app);
-    console.log('[BOOT] ML Returns agendador ON');
-  }
-  console.log('[BOOT] ML Returns', _mlReturnsMounted ? 'ok' : 'NÃO MONTADO');
-} catch (e) {
-  console.warn('[BOOT] ML Returns falhou ao carregar:', e?.message || e);
-}
-// Fallback explícito para não dar 404 mudo
-if (!_mlReturnsMounted) {
-  app.get('/api/ml/returns/sync', (_req, res) => {
-    res.status(501).json({ ok:false, error:'ml-returns não montado. Verifique o nome do arquivo (server/routes/ml-returns.js) e o export (module.exports = router).' });
-  });
-}
 
 /* === Extras que não conflitam com /api/returns === */
 try { app.use('/api/ml', require('./routes/ml-reenrich')); console.log('[BOOT] ML Re-enrich ok'); }
