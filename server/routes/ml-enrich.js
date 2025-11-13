@@ -177,98 +177,10 @@ function shapeClaimForUI(raw) {
 
 module.exports = function registerMlEnrich(app) {
 
-  /**
-   * PREVIEW
-   * GET /api/ml/returns/:id/fetch-amounts?order_id=...&claim_id=...
-   */
-  app.get('/api/ml/returns/:id/fetch-amounts', async (req, res) => {
-    const meta = { steps: [], errors: [], candidates: [], chosen: null };
-
-    try {
-      const id = Number(req.params.id);
-      if (!id) return res.status(400).json({ error: 'ID inválido' });
-
-      const hasCols = await tableHasColumns('devolucoes', ['id_venda','order_id','claim_id','ml_claim_id','loja_nome'], req);
-      const q = qOf(req);
-      const { rows } = await q('SELECT * FROM devolucoes WHERE id=$1', [id]);
-      const dev = rows[0] || {};
-
-      const orderId =
-        (req.query.order_id || req.query.orderId || '').toString().trim() ||
-        (hasCols.id_venda && dev.id_venda) ||
-        (hasCols.order_id && dev.order_id) || null;
-
-      const claimId =
-        (req.query.claim_id || req.query.claimId || '').toString().trim() ||
-        (hasCols.claim_id && dev.claim_id) ||
-        (hasCols.ml_claim_id && dev.ml_claim_id) || null;
-
-      // escolhe token automaticamente (tenta todos)
-      const pick = await pickTokenForOrder({ orderId, claimId, dev, meta });
-      if (!pick.token) {
-        return res.status(404).json({ error: 'Sem dados para esta devolução', meta });
-      }
-
-      // se já veio o order, usa; senão busca agora
-      let order = pick.order;
-      if (!order && notBlank(orderId)) {
-        meta.steps.push({ op: 'GET /orders', orderId, using: pick.tokenFrom });
-        try {
-          order = await mget(pick.token, `/orders/${encodeURIComponent(orderId)}`);
-        } catch (e) {
-          meta.errors.push({ where: 'orders', status: e.status || null, message: e.message });
-        }
-      }
-
-      // return-cost
-      let retCost = null;
-      const amounts = {};
-      if (order) {
-        const productTotal = sumOrderItemsTotal(order);
-        if (productTotal != null) amounts.product = productTotal;
-      }
-      if (notBlank(claimId)) {
-        meta.steps.push({ op: 'GET /claims/return-cost', claimId, using: pick.tokenFrom });
-        try {
-          const rc = await mget(pick.token, `/post-purchase/v1/claims/${encodeURIComponent(claimId)}/charges/return-cost`);
-          if (rc && rc.amount != null) {
-            amounts.freight = toNumber(rc.amount);
-            retCost = rc;
-          }
-        } catch (e) {
-          meta.errors.push({ where: 'return-cost', status: e.status || null, message: e.message });
-        }
-      }
-
-      // claim raw + shape (preview também inclui para debug)
-      let claim = null;
-      if (notBlank(claimId)) {
-        meta.steps.push({ op: 'GET /claims/{id}', claimId, using: pick.tokenFrom });
-        try {
-          const raw = await fetchClaimRaw(pick.token, claimId);
-          claim = shapeClaimForUI(raw);
-        } catch (e) {
-          meta.errors.push({ where: 'claim', status: e.status || null, message: e.message });
-        }
-      }
-
-      if (Object.keys(amounts).length === 0 && !order && !claim) {
-        return res.status(404).json({ error: 'Sem dados para esta devolução', meta });
-      }
-
-      res.json({
-        amounts,
-        order,
-        return_cost: retCost,
-        claim,
-        sources: { order_id: orderId || null, claim_id: claimId || null },
-        meta
-      });
-    } catch (e) {
-      console.error('[ML PREVIEW] erro:', e);
-      res.status(500).json({ error: 'Falha ao buscar valores no ML', detail: e?.message || String(e) });
-    }
-  });
+  // NOTE: preview endpoint `/api/ml/returns/:id/fetch-amounts` is intentionally
+  // handled by `server/routes/ml-amounts.js` which provides the shape expected
+  // by the frontend (including `reason_label`). We avoid registering a
+  // duplicate handler here to prevent response-shape conflicts.
 
   // ------- enrich handler compartilhado (GET/POST) -------
   async function handleEnrich(req, res) {
