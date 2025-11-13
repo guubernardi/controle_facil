@@ -54,7 +54,7 @@ function normalizeFlow(mlStatus, mlSub) {
 
 // -------- Token resolver --------
 async function getActiveMlToken(req) {
-  // 1) sessão (suas estruturas possíveis)
+  // 1) sessão
   if (req?.session?.user?.ml?.access_token) return req.session.user.ml.access_token;
   if (req?.user?.ml?.access_token)         return req.user.ml.access_token;
 
@@ -63,12 +63,12 @@ async function getActiveMlToken(req) {
   const m = hAuth.match(/Bearer\s+(.+)/i);
   if (m) return m[1];
 
-  // 3) Seller headers vindos do front (para filtrar ml_tokens)
-  const sellerIdRaw   = req.get('x-seller-id')   || null;
-  const sellerNick    = req.get('x-seller-nick') || null;
-  const sellerId      = sellerIdRaw && /^\d+$/.test(sellerIdRaw) ? sellerIdRaw : null; // sanitize
+  // 3) headers da loja
+  const sellerIdRaw = req.get('x-seller-id') || null;
+  const sellerNick  = req.get('x-seller-nick') || null;
+  const sellerId    = sellerIdRaw && /^\d+$/.test(sellerIdRaw) ? sellerIdRaw : null;
 
-  // 4) ml_tokens (mais recente, preferindo is_active)
+  // 4) ml_tokens
   try {
     const cols = await tableHasColumns('ml_tokens', ['is_active','user_id','nickname','access_token','updated_at']);
     const where = [];
@@ -189,8 +189,7 @@ async function getShippingStatusFromOrder(orderId, token) {
       };
     }
   } catch (e) {
-    // Propaga 401/403/404 para o caller decidir (não rebaixa aqui)
-    if (e?.status) throw e;
+    if (e?.status) throw e; // 401/403/404 → propaga
     throw new Error(`orders fetch failed: ${e?.message || e}`);
   }
 
@@ -217,8 +216,8 @@ async function getShippingStatusFromOrder(orderId, token) {
         };
       }
     } catch (e) {
-      if (e?.status === 401 || e?.status === 403) throw e; // sem acesso → caller trata
-      // 404 aqui significa "não achei" — segue tentando as demais variações
+      if (e?.status === 401 || e?.status === 403) throw e; // sem acesso
+      // 404 aqui = "não achei" — tenta a próxima variação
     }
   }
 
@@ -233,7 +232,6 @@ async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus 
   const params = [];
   let p = 1;
 
-  // substatus/status do ML
   if (cols.ml_shipping_status) {
     sets.push(`ml_shipping_status = $${p++}`);
     params.push(mlSubstatus || mlStatus || null);
@@ -242,8 +240,6 @@ async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus 
     sets.push(`shipping_status = $${p++}`);
     params.push(mlStatus || null);
   }
-
-  // fluxo sugerido interno
   if (cols.log_status && logStatus) {
     sets.push(`log_status = $${p++}`);
     params.push(logStatus);
@@ -265,9 +261,11 @@ async function updateReturnShipping({ orderId, mlStatus, mlSubstatus, logStatus 
 // -------- GET /api/ml/shipping/status --------
 router.get('/shipping/status', async (req, res) => {
   try {
-    const orderId    = req.query.order_id  || req.query.orderId  || null;
-    const shipmentIdQ= req.query.shipment_id || req.query.shipmentId || null;
-    const doUpdate   = String(req.query.update ?? '1') !== '0';
+    const orderId     = req.query.order_id  || req.query.orderId  || null;
+    const shipmentIdQ = req.query.shipment_id || req.query.shipmentId || null;
+
+    // IMPORTANTE: por padrão NÃO atualiza. Só grava quando update=1.
+    const doUpdate = /^1|true$/i.test(String(req.query.update || '0'));
 
     if (!orderId && !shipmentIdQ) {
       return res.status(400).json({ error: 'missing_param', detail: 'Informe order_id ou shipment_id' });
