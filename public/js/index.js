@@ -44,6 +44,9 @@ class DevolucoesFeed {
                    || localStorage.getItem('rf:sellerId') || '';
     this.sellerNick = document.querySelector('meta[name="ml-seller-nick"]')?.content?.trim()
                    || localStorage.getItem('rf:sellerNick') || '';
+    // token opcional (dev)
+    this.sellerToken = document.querySelector('meta[name="ml-seller-token"]')?.content?.trim()
+                    || localStorage.getItem('rf:sellerToken') || '';
 
     // grupos internos (para filtro e badgeStatus)
     this.STATUS_GRUPOS = {
@@ -119,8 +122,9 @@ class DevolucoesFeed {
   _headersFor(url){
     const h = { Accept:"application/json" };
     if (/^\/api\/ml\//.test(url) || /^\/api\/meli\//.test(url)) {
-      if (this.sellerId)   h['x-seller-id']   = this.sellerId;
-      if (this.sellerNick) h['x-seller-nick'] = this.sellerNick;
+      if (this.sellerId)     h['x-seller-id']     = this.sellerId;
+      if (this.sellerNick)   h['x-seller-nick']   = this.sellerNick;
+      if (this.sellerToken)  h['x-seller-token']  = this.sellerToken; // dev override opcional
     }
     return h;
   }
@@ -144,6 +148,13 @@ class DevolucoesFeed {
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
         console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
 
+        // 401 sem token do ML (qualquer endpoint ML)
+        if (r.status === 401 && (detail||"").toLowerCase().includes('missing_access_token')) {
+          if (!this._lastSyncErrShown){ this._lastSyncErrShown = true; this.toast("Conectar Mercado Livre", "Faça login para sincronizar as devoluções.", "erro"); }
+          return { ok:false, status:r.status, detail, data:body };
+        }
+
+        // Guardas específicos de shipping
         if (url.includes('/api/ml/shipping')) {
           if (r.status===401) {
             this.blockMlShip(30*60*1000);
@@ -309,8 +320,10 @@ class DevolucoesFeed {
         days: String(d),
         status: "opened,in_progress,shipped,pending_delivered,delivered"
       });
+      if (this.sellerId)   qs.set('seller_id', this.sellerId);
+      if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
       console.info("[sync] returns/sync:", `${d}d`);
-      const r = await this.fetchQuiet(`/api/ml/returns/sync?${qs}`);
+      const r = await this.fetchQuiet(`/api/ml/returns/sync?${qs.toString()}`);
       if (r.ok) {
         try { localStorage.removeItem(this.CLAIMS_BLOCK_KEY); } catch {}
         return true;
@@ -326,6 +339,9 @@ class DevolucoesFeed {
         days:String(d),
         statuses:"opened,in_progress"
       });
+      if (this.sellerId)   qs.set('seller_id', this.sellerId);
+      if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
+
       console.info("[sync] claims/import:", `${d}d opened,in_progress`);
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
       if (r.ok) return true;
@@ -604,7 +620,7 @@ class DevolucoesFeed {
   renderizar(){
     const container=document.getElementById("container-devolucoes");
     const vazio=document.getElementById("mensagem-vazia");
-    const descVazio=document.getElementById("descricao-vazia");
+    the const descVazio=document.getElementById("descricao-vazia");
     const countEl=document.getElementById("lista-count");
     const pag=document.getElementById("paginacao");
     if(!container) return;
