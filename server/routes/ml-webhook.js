@@ -5,6 +5,34 @@ const { query } = require('../db');
 const { getAuthedAxios } = require('../mlClient');
 const events = require('../events');
 
+// ===== Motivo derivation helpers (local) =====
+function normalizeKey(s=''){
+  try{ return String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase(); }catch{ return String(s||'').toLowerCase(); }
+}
+const REASONKEY_TO_CANON = {
+  product_defective:'produto_defeituoso',not_working:'produto_defeituoso',broken:'produto_defeituoso',
+  damaged:'produto_danificado',damaged_in_transit:'produto_danificado',
+  different_from_publication:'nao_corresponde',not_as_described:'nao_corresponde',wrong_item:'nao_corresponde',different_item:'nao_corresponde',missing_parts:'nao_corresponde',incomplete:'nao_corresponde',
+  buyer_remorse:'arrependimento_cliente',changed_mind:'arrependimento_cliente',doesnt_fit:'arrependimento_cliente',size_issue:'arrependimento_cliente',
+  not_delivered:'entrega_atrasada',shipment_delayed:'entrega_atrasada'
+};
+function canonFromCode(code){
+  const c = String(code||'').toUpperCase(); if(!c) return null;
+  const SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso' };
+  if (SPEC[c]) return SPEC[c]; if (c === 'PNR') return 'entrega_atrasada'; if (c === 'CS') return 'arrependimento_cliente'; return null;
+}
+function canonFromText(text){
+  if (!text) return null; const s = normalizeKey(String(text));
+  if (/faltam\s+partes\s+ou\s+acess[oó]rios/.test(s)) return 'nao_corresponde';
+  if (/(nao\s*(o\s*)?quer\s*mais|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant|no\s*longer)/.test(s)) return 'arrependimento_cliente';
+  if (/(tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(s)) return 'arrependimento_cliente';
+  if (/(defeit|nao\s*funciona|not\s*working|broken|quebrad|danific|avariad)/.test(s)) return 'produto_defeituoso';
+  if (/(transporte|shipping\s*damage|carrier\s*damage)/.test(s)) return 'produto_danificado';
+  if (/(diferent|descri[cç]ao|nao\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from|produto\s*trocad|incomplet|faltando)/.test(s)) return 'nao_corresponde';
+  if (/(nao\s*entreg|delayed|not\s*delivered|undelivered)/.test(s)) return 'entrega_atrasada';
+  return null;
+}
+
 /**
  * Tenta criar (ou achar) um stub de devolução por order_id.
  * Só cria quando ML_CREATE_STUB_RETURNS === 'true'.
@@ -112,11 +140,53 @@ module.exports = function registerMlWebhook(app) {
               // tenta extrair pedido/pack associado
               const order_id = String(det?.resource_id || det?.order_id || det?.pack_id || '').trim();
 
-              // cria/acha stub (se habilitado via env)
-              const { returnId } = await ensureStubReturn(order_id);
+              // tenta localizar uma devolução já existente vinculada a esse claim
+              let { returnId } = await (async () => ({ returnId: null }))();
+              try {
+                const { rows: found } = await query(
+                  `SELECT id, tipo_reclamacao FROM devolucoes WHERE ml_claim_id = $1 OR claim_id = $1 ORDER BY id DESC LIMIT 1`,
+                  [claimId]
+                );
+                if (found && found[0] && found[0].id) {
+                  returnId = found[0].id;
+                }
+              } catch (e) { /* ignore */ }
+
+              // cria/acha stub por order_id (se ainda não encontramos devolução)
+              if (!returnId) {
+                const stub = await ensureStubReturn(order_id);
+                returnId = stub.returnId;
+              }
+
+              // tenta derivar um motivo canônico a partir do claim/retorno
+              let tipoSug = null;
+              try {
+                const reasonKey = det?.reason_key || det?.reason?.key || null;
+                const reasonId  = det?.reason_id || det?.reason?.id || null;
+                const reasonName = det?.reason_name || det?.reason?.name || det?.reason?.description || null;
+                if (reasonKey && REASONKEY_TO_CANON[reasonKey]) tipoSug = REASONKEY_TO_CANON[reasonKey];
+                if (!tipoSug && reasonId) tipoSug = canonFromCode(reasonId);
+                if (!tipoSug && reasonName) tipoSug = canonFromText(reasonName);
+                if (!tipoSug && det?.problem_description) tipoSug = canonFromText(det.problem_description);
+              } catch (e) { /* ignore */ }
 
               // grava evento somente se temos um return_id (stub ou real)
               if (returnId) {
+                // se temos sugestão de tipo e a coluna existe, persiste (somente se vazio)
+                try {
+                  const col = await query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='devolucoes' AND column_name='tipo_reclamacao'");
+                  if (col.rows.length && tipoSug) {
+                    try {
+                      await query(`UPDATE devolucoes SET tipo_reclamacao = $1 WHERE id = $2 AND (COALESCE(tipo_reclamacao,'') = '')`, [tipoSug, returnId]);
+                    } catch (e) { /* ignore persistence errors */ }
+                  }
+                } catch (e) { /* ignore */ }
+
+                // também garante ml_claim_id se ausente
+                try {
+                  await query(`UPDATE devolucoes SET ml_claim_id = COALESCE(NULLIF(ml_claim_id,''), $1) WHERE id = $2`, [claimId, returnId]);
+                } catch (e) { /* ignore */ }
+
                 const idemp = `ml-claim:${claimId}:${det?.status || det?.stage || 'unknown'}`;
                 await query(
                   `
@@ -126,6 +196,7 @@ module.exports = function registerMlWebhook(app) {
                   ON CONFLICT (idemp_key) DO NOTHING
                   `,
                   [
+                    returnId,
                     JSON.stringify({
                       claim_id: claimId,
                       status: det?.status || null,
@@ -133,7 +204,7 @@ module.exports = function registerMlWebhook(app) {
                       subtype: det?.subtype || null
                     }),
                     idemp
-                  ].splice(0, 0, returnId) // insere returnId como primeiro arg
+                  ]
                 );
               }
 
@@ -141,6 +212,8 @@ module.exports = function registerMlWebhook(app) {
               events.broadcast('ml_claim_opened', {
                 claim_id: claimId,
                 order_id,
+                return_id: returnId || null,
+                tipo_reclamacao: typeof tipoSug !== 'undefined' ? tipoSug : null,
                 buyer: det?.buyer?.nickname || det?.buyer?.id || null,
                 status: det?.status || null,
                 stage: det?.stage || null,

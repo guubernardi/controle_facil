@@ -159,6 +159,34 @@ module.exports = function registerMlSync(app, opts = {}) {
     return 'pendente';
   }
 
+  // ===== Motivo derivation (canonical) =====
+  function normalizeKeyLocal(s=''){
+    try{ return String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase(); }catch{ return String(s||'').toLowerCase(); }
+  }
+  const REASONKEY_TO_CANON_LOCAL = {
+    product_defective:'produto_defeituoso',not_working:'produto_defeituoso',broken:'produto_defeituoso',
+    damaged:'produto_danificado',damaged_in_transit:'produto_danificado',
+    different_from_publication:'nao_corresponde',not_as_described:'nao_corresponde',wrong_item:'nao_corresponde',different_item:'nao_corresponde',missing_parts:'nao_corresponde',incomplete:'nao_corresponde',
+    buyer_remorse:'arrependimento_cliente',changed_mind:'arrependimento_cliente',doesnt_fit:'arrependimento_cliente',size_issue:'arrependimento_cliente',
+    not_delivered:'entrega_atrasada',shipment_delayed:'entrega_atrasada'
+  };
+  function canonFromCodeLocal(code){
+    const c = String(code||'').toUpperCase(); if(!c) return null;
+    const SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso' };
+    if (SPEC[c]) return SPEC[c]; if (c === 'PNR') return 'entrega_atrasada'; if (c === 'CS') return 'arrependimento_cliente'; return null;
+  }
+  function canonFromTextLocal(text){
+    if(!text) return null; const s = normalizeKeyLocal(String(text));
+    if (/faltam\s+partes\s+ou\s+acess[oó]rios/.test(s)) return 'nao_corresponde';
+    if (/(nao\s*(o\s*)?quer\s*mais|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant|no\s*longer)/.test(s)) return 'arrependimento_cliente';
+    if (/(tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(s)) return 'arrependimento_cliente';
+    if (/(defeit|nao\s*funciona|not\s*working|broken|quebrad|danific|avariad)/.test(s)) return 'produto_defeituoso';
+    if (/(transporte|shipping\s*damage|carrier\s*damage)/.test(s)) return 'produto_danificado';
+    if (/(diferent|descri[cç]ao|nao\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from|produto\s*trocad|incomplet|faltando)/.test(s)) return 'nao_corresponde';
+    if (/(nao\s*entreg|delayed|not\s*delivered|undelivered)/.test(s)) return 'entrega_atrasada';
+    return null;
+  }
+
   // -------- Claims Search robusto (com fallback + paginação) ----------
   async function fetchClaimsPaged(http, account, {
     fromIso, toIso, status, siteId, limitPerPage = 200, max = 2000
@@ -413,6 +441,9 @@ module.exports = function registerMlSync(app, opts = {}) {
 
       const accounts = wantAll ? await resolveMlAccounts(req) : [await getAuthedAxios(req)];
 
+      // checar se coluna tipo_reclamacao existe uma vez por execução
+      const hasTipoCol = await tableHasColumns('devolucoes', ['tipo_reclamacao']);
+
       let processed = 0, created = 0, updated = 0, events = 0, errors = 0, skipped = 0;
       const paramsUsed = [];
       const errors_detail = [];
@@ -527,6 +558,17 @@ module.exports = function registerMlSync(app, opts = {}) {
             const internal = mapInternalStatusFromFlow(flow);
             const sku = normalizeSku(it, claimDet);
 
+            // tenta derivar motivo canônico a partir do retorno/claim
+            let tipoSug = null;
+            try {
+              const reasonKey = (ret && (ret.reason_key || ret.reason?.key)) || (claimDet && (claimDet.reason_key || claimDet.reason?.key)) || null;
+              const reasonId  = (ret && (ret.reason_id || ret.reason?.id)) || (claimDet && (claimDet.reason_id || claimDet.reason?.id)) || null;
+              const reasonName = (ret && (ret.reason_name || ret.reason?.name || ret.reason?.description)) || (claimDet && (claimDet.reason_name || claimDet.reason?.name || claimDet.reason?.description)) || null;
+              if (reasonKey && REASONKEY_TO_CANON_LOCAL[reasonKey]) tipoSug = REASONKEY_TO_CANON_LOCAL[reasonKey];
+              if (!tipoSug && reasonId) tipoSug = canonFromCodeLocal(reasonId);
+              if (!tipoSug && reasonName) tipoSug = canonFromTextLocal(reasonName);
+            } catch (e) { /* ignore */ }
+
             const returnId = await ensureReturnByOrder(req, {
               order_id,
               sku,
@@ -550,8 +592,14 @@ module.exports = function registerMlSync(app, opts = {}) {
                   WHERE id = $6`,
                 [flow, String(ret?.status || ''), internal, sku, lojaNome, returnId]
               );
-              updated++;
+                updated++;
             }
+                // persiste tipo_reclamacao separadamente (idempotente)
+                if (!dry && hasTipoCol.tipo_reclamacao && tipoSug) {
+                  try {
+                    await qOf(req)(`UPDATE devolucoes SET tipo_reclamacao = $1 WHERE id = $2 AND (COALESCE(tipo_reclamacao,'') = '')`, [tipoSug, returnId]);
+                  } catch (e) { /* ignore persistence errors */ }
+                }
 
             const idemp = `ml-claim:${account.user_id}:${claimId}:${order_id}`;
             if (!dry) {

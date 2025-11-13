@@ -257,17 +257,63 @@ module.exports = function registerMlEnrich(app) {
         }
       }
 
-      // claim raw + shape
+      // claim raw + shape (guardamos raw para tentativa de derivar motivo)
       let claim = null;
+      let claimRaw = null;
       if (notBlank(claimId)) {
         meta.steps.push({ op: 'GET /claims/{id}', claimId, using: pick.tokenFrom });
         try {
           const raw = await fetchClaimRaw(pick.token, claimId);
+          claimRaw = raw;
           claim = shapeClaimForUI(raw);
         } catch (e) {
           meta.errors.push({ where: 'claim', status: e.status || null, message: e.message });
         }
       }
+
+      // ------- tenta derivar motivo canônico a partir do claim (se existir) -------
+      function normalizeKey(s){ try{ return String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase(); } catch { return String(s||'').toLowerCase(); } }
+      const REASONKEY_TO_CANON = {
+        product_defective:'produto_defeituoso',not_working:'produto_defeituoso',broken:'produto_defeituoso',
+        damaged:'produto_danificado',damaged_in_transit:'produto_danificado',
+        different_from_publication:'nao_corresponde',not_as_described:'nao_corresponde',wrong_item:'nao_corresponde',different_item:'nao_corresponde',missing_parts:'nao_corresponde',incomplete:'nao_corresponde',
+        buyer_remorse:'arrependimento_cliente',changed_mind:'arrependimento_cliente',doesnt_fit:'arrependimento_cliente',size_issue:'arrependimento_cliente',
+        not_delivered:'entrega_atrasada',shipment_delayed:'entrega_atrasada'
+      };
+      function canonFromCode(code){
+        const c = String(code||'').toUpperCase();
+        if (!c) return null;
+        const SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso' };
+        if (SPEC[c]) return SPEC[c];
+        if (c === 'PNR') return 'entrega_atrasada';
+        if (c === 'CS')  return 'arrependimento_cliente';
+        return null;
+      }
+      function canonFromText(text){
+        if (!text) return null; const s = normalizeKey(String(text));
+        if (/faltam\s+partes\s+ou\s+acess[oó]rios\s+do\s+produto/.test(s)) return 'nao_corresponde';
+        if (/(nao\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant|no\s*longer\s*wants?)/.test(s)) return 'arrependimento_cliente';
+        if (/(nao\s*serv|nao\s*serv|tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(s)) return 'arrependimento_cliente';
+        if (/(defeit|nao\s*funciona|not\s*working|broken|quebrad|danific|avariad|parad)/.test(s)) return 'produto_defeituoso';
+        if (/(transporte|shipping\s*damage|carrier\s*damage)/.test(s)) return 'produto_danificado';
+        if (/(diferent|anunciad|descri[cç]ao|nao\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|produto\s*trocad|incomplet|falt(?:a|am)\s*(?:pecas|pe[cç]as|partes|acess[oó]rios)|faltando)/.test(s)) return 'nao_corresponde';
+        if (/(nao\s*entreg|delayed|not\s*delivered|undelivered|shipment\s*delay)/.test(s)) return 'entrega_atrasada';
+        return null;
+      }
+
+      let tipoSug = null;
+      try {
+        const cl = claimRaw || null;
+        if (cl) {
+          const reasonKey = cl?.reason_key || cl?.reason?.key || null;
+          const reasonId  = cl?.reason_id  || cl?.reason?.id || null;
+          const reasonName = cl?.reason_name || cl?.reason?.name || cl?.reason?.description || null;
+          if (reasonKey && REASONKEY_TO_CANON[reasonKey]) tipoSug = REASONKEY_TO_CANON[reasonKey];
+          if (!tipoSug && reasonId) tipoSug = canonFromCode(reasonId);
+          if (!tipoSug && reasonName) tipoSug = canonFromText(reasonName);
+          if (!tipoSug && cl?.problem_description) tipoSug = canonFromText(cl.problem_description);
+        }
+      } catch (e) { /* ignore */ }
 
       // ------- UPDATE só do que mudou -------
       const set = [];
@@ -297,6 +343,17 @@ module.exports = function registerMlEnrich(app) {
           (!notBlank(dev.loja_nome) || String(dev.loja_nome) !== String(novo_loja_nome))) {
         set.push(`loja_nome=$${p.push(novo_loja_nome)}`);
       }
+
+      // se derivamos um tipo canônico, tenta persistir no campo `tipo_reclamacao` (se a coluna existir)
+      try {
+        const hasTipo = await tableHasColumns('devolucoes', ['tipo_reclamacao'], req);
+        if (tipoSug && hasTipo.tipo_reclamacao) {
+          const curVal = dev.tipo_reclamacao || '';
+          if (!curVal || String(curVal).trim() === '') {
+            set.push(`tipo_reclamacao=$${p.push(tipoSug)}`);
+          }
+        }
+      } catch (e) { /* ignore */ }
 
       if (!set.length) {
         // sem alterações em banco, mas retorna o pacote completo para a UI
