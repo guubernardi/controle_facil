@@ -162,7 +162,7 @@ app.use('/api', (req, res, next) => {
   const jobToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   const isJob = (
     orig.startsWith('/api/ml/claims/import') ||
-    orig.startsWith('/api/ml/returns/sync') || // permitir job do sync de devoluções
+    orig.startsWith('/api/ml/returns/sync') ||
     orig.startsWith('/api/ml/refresh')
   ) && jobHeader && jobToken && jobHeader === jobToken;
 
@@ -274,32 +274,6 @@ try {
   console.log('[BOOT] ML Shipping ok');
 } catch (e) {
   console.warn('[BOOT] ML Shipping opcional:', e?.message || e);
-}
-
-/* === ML RETURNS (router + agendador) — MONTE ANTES de qualquer /api/ml catch-all === */
-let _mlReturnsMounted = false;
-try {
-  const raw = require('./routes/ml-returns'); // garanta que o arquivo se chama exatamente ml-returns.js
-  const routerLike = raw?.default || raw?.router || raw;
-  const scheduleFn = raw?.scheduleMlReturnsSync || routerLike?.scheduleMlReturnsSync;
-
-  const isRouter = !!routerLike && (routerLike.stack || typeof routerLike.use === 'function' || routerLike.name === 'router');
-  if (isRouter) { app.use('/api/ml', routerLike); _mlReturnsMounted = true; }
-  else if (typeof routerLike === 'function') { routerLike(app); _mlReturnsMounted = true; }
-  else { console.warn('[BOOT] ml-returns export inesperado:', typeof routerLike); }
-
-  if (scheduleFn && typeof scheduleFn === 'function') {
-    scheduleFn(app);
-    console.log('[BOOT] ML Returns agendador ON');
-  }
-  console.log('[BOOT] ML Returns', _mlReturnsMounted ? 'ok' : 'NÃO MONTADO');
-} catch (e) {
-  console.warn('[BOOT] ML Returns falhou ao carregar:', e?.message || e);
-}
-if (!_mlReturnsMounted) {
-  app.get('/api/ml/returns/sync', (_req, res) => {
-    res.status(501).json({ ok:false, error:'ml-returns não montado. Verifique o nome do arquivo (server/routes/ml-returns.js) e o export (module.exports = router).' });
-  });
 }
 
 /* Demais módulos */
@@ -649,7 +623,7 @@ try {
   console.log('[BOOT] ML Enrich ok');
 } catch (e) { console.warn('[BOOT] ML Enrich opcional:', e?.message || e); }
 
-/* === ML Chat / Communications (aggregador) — DEPOIS do ml-returns === */
+/* === ML Chat / Communications (aggregador) === */
 try {
   let mlChatRoutes = null;
   try { mlChatRoutes = require('./routes/mlChat.js'); } catch (_) {}
@@ -674,6 +648,48 @@ try {
     console.log('[BOOT] ML Sync ok');
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
+
+/* === ML RETURNS (router + agendador) ===
+   OBS: seu arquivo se chama routes/returns.js (não ml-returns.js).
+   Abaixo tentamos carregar ml-returns; se não existir, criamos alias
+   /api/ml/returns/{sync,state} -> /api/returns/{sync,state}.
+*/
+let _mlReturnsMounted = false;
+try {
+  // 1) tenta o nome "ml-returns" (se no futuro você criar)
+  let raw = null;
+  try { raw = require('./routes/ml-returns'); } catch (_) {}
+
+  // 2) senão, usa o "returns.js" existente
+  if (!raw) raw = require('./routes/returns');
+
+  const routerLike = raw?.default || raw?.router || raw;
+  const scheduleFn = raw?.scheduleMlReturnsSync || routerLike?.scheduleMlReturnsSync;
+
+  const isRouter = !!routerLike && (routerLike.stack || typeof routerLike.use === 'function' || routerLike.name === 'router');
+  if (isRouter) { app.use('/api/ml', routerLike); _mlReturnsMounted = true; }
+  else if (typeof routerLike === 'function') { routerLike(app); _mlReturnsMounted = true; }
+  else { console.warn('[BOOT] ml-returns/returns export inesperado:', typeof routerLike); }
+
+  if (scheduleFn && typeof scheduleFn === 'function') {
+    scheduleFn(app);
+    console.log('[BOOT] ML Returns agendador ON');
+  }
+  console.log('[BOOT] ML Returns', _mlReturnsMounted ? 'ok' : 'NÃO MONTADO (alias será usado)');
+} catch (e) {
+  console.warn('[BOOT] ML Returns falhou ao carregar:', e?.message || e);
+}
+
+// Alias se não montou sob /api/ml:
+if (!_mlReturnsMounted) {
+  const alias = (name) => (req, res) => {
+    const qs = req.originalUrl.split('?')[1] || '';
+    return res.redirect(307, `/api/returns/${name}${qs ? `?${qs}` : ''}`);
+  };
+  app.get('/api/ml/returns/sync',  alias('sync'));
+  app.get('/api/ml/returns/state', alias('state'));
+  console.log('[BOOT] ML Returns alias ON -> /api/returns/{sync,state}');
+}
 
 /* === Extras que não conflitam com /api/returns === */
 try { app.use('/api/ml', require('./routes/ml-reenrich')); console.log('[BOOT] ML Re-enrich ok'); }
