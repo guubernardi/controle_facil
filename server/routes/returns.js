@@ -1,4 +1,4 @@
-// server/routes/ml-returns.js
+// server/routes/returns.js
 'use strict';
 
 const express = require('express');
@@ -121,6 +121,16 @@ async function loadTokenRowFromDb(sellerId, q=query){
   `,[sellerId]);
   return rows[0]||null;
 }
+async function loadTokenRowFromDbByNick(nick, q=query){
+  const { rows } = await q(`
+    SELECT user_id, nickname, access_token, refresh_token, expires_at
+      FROM public.ml_tokens
+     WHERE lower(nickname)=lower($1)
+     ORDER BY updated_at DESC
+     LIMIT 1
+  `,[nick]);
+  return rows[0]||null;
+}
 function isExpiringSoon(expiresAtIso, ahead=AHEAD_SEC){
   if(!expiresAtIso) return true;
   const t = new Date(expiresAtIso).getTime();
@@ -151,10 +161,19 @@ async function refreshAccessToken({ sellerId, refreshToken, q=query }){
   return { access_token, refresh_token, expires_at: expiresAt };
 }
 async function resolveSellerAccessToken(req){
+  // x-seller-token (direto)
   const direct = req.get('x-seller-token');
   if (direct) return { token: direct, sellerId: (req.get('x-seller-id')||'') };
 
+  // Authorization: Bearer
+  const hAuth = req.get('authorization') || '';
+  const m = hAuth.match(/Bearer\s+(.+)/i);
+  if (m) return { token: m[1], sellerId: (req.get('x-seller-id')||'') };
+
+  const sellerNick = String(req.get('x-seller-nick') || req.query.seller_nick || '').trim();
   const sellerId = String(req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || '').replace(/\D/g,'');
+
+  // por ID
   if (sellerId){
     const row = await loadTokenRowFromDb(sellerId);
     if (row?.access_token){
@@ -169,8 +188,18 @@ async function resolveSellerAccessToken(req){
       }
     }
   }
+
+  // por nickname (fallback)
+  if (!sellerId && sellerNick){
+    const row = await loadTokenRowFromDbByNick(sellerNick);
+    if (row?.access_token) return { token: row.access_token, sellerId: String(row.user_id||'') };
+  }
+
+  // sessão/env
   if (req.session?.ml?.access_token) return { token:req.session.ml.access_token, sellerId: sellerId || (req.session.ml.user_id||'') };
   if (process.env.MELI_OWNER_TOKEN)   return { token:process.env.MELI_OWNER_TOKEN, sellerId };
+  if (process.env.ML_ACCESS_TOKEN)    return { token:process.env.ML_ACCESS_TOKEN, sellerId };
+
   const e=new Error('missing_access_token'); e.status=401; throw e;
 }
 
@@ -210,10 +239,10 @@ function suggestFlow(mlReturnStatus, shipStatus, shipSub){
   if (/^failed$/.test(s)) return 'pendente';
   if (/^cancelled$|^canceled$/.test(s)) return 'cancelado';
 
-  // shipping
+  // shipping (não promove delivered)
   if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return 'em_preparacao';
   if (/in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito/.test(ship)) return 'em_transporte';
-  if (/delivered|entreg|arrived|recebid/.test(ship)) return 'pendente'; // não promovemos via shipping
+  if (/delivered|entreg|arrived|recebid/.test(ship)) return 'pendente';
   if (/not_delivered|cancel/.test(ship)) return 'pendente';
 
   return 'pendente';
@@ -410,6 +439,8 @@ router.get('/returns/sync', async (req, res) => {
     const silent  = /^1|true$/i.test(String(req.query.silent||'0'));
 
     const limit=50; const dateFrom=isoDateNDaysAgo(days);
+    const statusQS = statuses.map(s=>`status=${encodeURIComponent(s)}`).join('&');
+    const sellerQS = sellerId ? `seller=${encodeURIComponent(sellerId)}&` : '';
 
     let raw=[];
     if (orderId){
@@ -420,10 +451,9 @@ router.get('/returns/sync', async (req, res) => {
       ];
       raw = await paginatedTry(token, builders, limit, 3);
     } else {
-      const statusQS = statuses.map(s=>`status=${encodeURIComponent(s)}`).join('&');
       const builders = [
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?seller=${encodeURIComponent(sellerId)}&${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?seller=${encodeURIComponent(sellerId)}&${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
+        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?${sellerQS}${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
+        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${sellerQS}${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
         ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` })
       ];
       raw = await paginatedTry(token, builders, limit, 10);
@@ -431,7 +461,6 @@ router.get('/returns/sync', async (req, res) => {
 
     const touched=[];
     for (const rec of raw){
-      // se vier só claim v1 com stage, ainda normaliza via canonFlowForDb dentro do map
       const mapped = mapReturnRecord(rec, sellerNick);
       if (!mapped) continue;
       const r = await upsertDevolucao(mapped);
