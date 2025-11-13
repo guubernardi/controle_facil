@@ -620,7 +620,7 @@ class DevolucoesFeed {
   renderizar(){
     const container=document.getElementById("container-devolucoes");
     const vazio=document.getElementById("mensagem-vazia");
-    the const descVazio=document.getElementById("descricao-vazia");
+    const descVazio=document.getElementById("descricao-vazia");
     const countEl=document.getElementById("lista-count");
     const pag=document.getElementById("paginacao");
     if(!container) return;
