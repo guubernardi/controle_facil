@@ -31,7 +31,7 @@ const FLOW_ALLOWED = new Set([
 /** Converte qualquer rótulo para um valor aceito pelo CHECK da tabela */
 function canonFlowForDb(s){
   let v = lower(s).replace(/\s+/g,'_');
-  // sinônimos
+  // sinônimos → valores válidos
   if (v === 'pronto_envio' || v === 'ready_to_ship' || v === 'label_generated') v = 'em_preparacao';
   if (v === 'a_caminho' || v === 'em_transito' || v === 'on_the_way' || v === 'in_transit') v = 'em_transporte';
   if (v === 'entregue' || v === 'delivered' || v === 'recebido_no_cd') v = 'recebido_cd';
@@ -180,7 +180,7 @@ async function mlFetch(token, url, opts={}){
     ...opts,
     headers: { 'Authorization':`Bearer ${token}`, 'Accept':'application/json', ...(opts.headers||{}) }
   });
-  const ct=res.headers.get('content-type')||''; 
+  const ct=res.headers.get('content-type')||'';
   const body=ct.includes('json')?await res.json().catch(()=>null):await res.text().catch(()=>null);
   if(!res.ok){ const err=new Error((body&&(body.message||body.error))||res.statusText||`HTTP ${res.status}`); err.status=res.status; err.body=body; throw err; }
   return body;
@@ -286,6 +286,11 @@ function mapReturnRecord(rec, sellerNick){
     created_at: created
   };
 }
+
+/* ================== sanity / ping ================== */
+router.get('/returns/ping', (req, res) => {
+  res.json({ ok:true, where:'ml-returns', ts:new Date().toISOString() });
+});
 
 /* ================= /returns/state ================= */
 /**
@@ -426,6 +431,7 @@ router.get('/returns/sync', async (req, res) => {
 
     const touched=[];
     for (const rec of raw){
+      // se vier só claim v1 com stage, ainda normaliza via canonFlowForDb dentro do map
       const mapped = mapReturnRecord(rec, sellerNick);
       if (!mapped) continue;
       const r = await upsertDevolucao(mapped);
