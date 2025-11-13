@@ -5,7 +5,7 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
@@ -21,7 +21,7 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (_req, file, cb) => {
-    const id = uuidv4();
+    const id = (crypto.randomUUID && typeof crypto.randomUUID === 'function') ? crypto.randomUUID() : require('crypto').randomBytes(16).toString('hex');
     const ext = path.extname(file.originalname || '').toLowerCase();
     cb(null, `${id}${ext || '.jpg'}`);
   }
