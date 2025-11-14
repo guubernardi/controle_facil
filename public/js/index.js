@@ -313,13 +313,19 @@ class DevolucoesFeed {
 
   // ===== Syncs curtos =====
   async syncClaimsWithFallback(){
+    // CORREÇÃO: usar o conjunto unido de statuses (v2 returns + v1 claims)
+    const STAT_RETURNS = ['label_generated','pending','shipped','pending_delivered','delivered','not_delivered','return_to_buyer','scheduled','expired','failed','cancelled','canceled'];
+    const STAT_CLAIMS  = ['opened','in_progress','shipped','pending_delivered','delivered'];
+    const STAT_ALL = Array.from(new Set([...STAT_RETURNS, ...STAT_CLAIMS])).join(',');
+
     // 1) TENTAR returns/sync (preferível): inclui status da devolução (v2)
     for (const d of [3,7,30]){
       const qs = new URLSearchParams({
         silent: "1",
         days: String(d),
-        status: "opened,in_progress,shipped,pending_delivered,delivered"
+        status: STAT_ALL // <-- antes mandava só statuses de claim; agora cobre ambos
       });
+      // headers são preferidos; query é inofensiva
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
       console.info("[sync] returns/sync:", `${d}d`);
@@ -799,7 +805,7 @@ class DevolucoesFeed {
           <span class="campo-valor">${data}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0 0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0 0 1 8 1zm3.5 3v-.5a3.5 3.5 0  1 0-7 0V4H1v10a2 2 0  0 0 2 2h10a2 2 0  0 0 2-2V4h-3.5z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a2.5 2.5 0  0 1 2.5 2.5V4h-5v-.5A2.5 2.5 0  0 1 8 1zm3.5 3v-.5a3.5 3.5 0  1 0-7 0V4H1v10a2 2 0  0 0 2 2h10a2 2 0  0 0 2-2V4h-3.5z"/></svg>
           <span class="campo-label">Produto</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>

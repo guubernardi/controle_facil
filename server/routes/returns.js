@@ -317,8 +317,8 @@ function mapReturnRecord(rec, sellerNick){
 }
 
 /* ================== sanity / ping ================== */
-router.get('/returns/ping', (req, res) => {
-  res.json({ ok:true, where:'ml-returns', ts:new Date().toISOString() });
+router.get('/returns/ping', (_req, res) => {
+  res.json({ ok:true, where:'returns', ts:new Date().toISOString() });
 });
 
 /* ================= /returns/state ================= */
@@ -426,50 +426,107 @@ async function paginatedTry(token, builders, limit=50, maxPages=10){
 }
 function isoDateNDaysAgo(n){ const d=new Date(); d.setUTCDate(d.getUTCDate()-n); return d.toISOString(); }
 
+/* util: tokens mais recentes por seller */
+async function listLatestSellerTokens(){
+  const { rows } = await query(`
+    SELECT DISTINCT ON (user_id)
+           user_id::bigint  AS user_id,
+           nickname         AS nickname,
+           access_token     AS access_token,
+           updated_at
+      FROM public.ml_tokens
+     WHERE coalesce(access_token,'') <> ''
+     ORDER BY user_id, updated_at DESC NULLS LAST
+  `);
+  return rows || [];
+}
+
 /* ================= /returns/sync ================= */
 router.get('/returns/sync', async (req, res) => {
   try {
-    const { token, sellerId } = await resolveSellerAccessToken(req);
-    const sellerNick = req.get('x-seller-nick') || null;
+    const wantSilent = /^1|true$/i.test(String(req.query.silent||'0'));
+    const orderId    = req.query.order_id || req.query.orderId || null;
+    const days       = parseInt(req.query.days || req.query.range_days || '30', 10) || 30;
+    const statuses   = String(req.query.status || 'opened,in_progress,shipped,pending_delivered,delivered')
+                        .split(',').map(s=>s.trim()).filter(Boolean);
 
-    const orderId = req.query.order_id || req.query.orderId || null;
-    const days    = parseInt(req.query.days || req.query.range_days || '30', 10) || 30;
-    const statuses= String(req.query.status || 'opened,in_progress,shipped,pending_delivered,delivered')
-                      .split(',').map(s=>s.trim()).filter(Boolean);
-    const silent  = /^1|true$/i.test(String(req.query.silent||'0'));
+    const hdrSellerId   = (req.get('x-seller-id') || '').trim();
+    const hdrSellerNick = (req.get('x-seller-nick') || '').trim();
 
     const limit=50; const dateFrom=isoDateNDaysAgo(days);
-    const statusQS = statuses.map(s=>`status=${encodeURIComponent(s)}`).join('&');
-    const sellerQS = sellerId ? `seller=${encodeURIComponent(sellerId)}&` : '';
 
-    let raw=[];
-    if (orderId){
-      const builders = [
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?resource=order&resource_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}` }),
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}` }),
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?resource=order&resource_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}` })
-      ];
-      raw = await paginatedTry(token, builders, limit, 3);
-    } else {
-      const builders = [
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?${sellerQS}${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${sellerQS}${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
-        ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` })
-      ];
-      raw = await paginatedTry(token, builders, limit, 10);
+    const runFor = async ({ token, sellerId, sellerNick }) => {
+      const statusQS = statuses.map(s=>`status=${encodeURIComponent(s)}`).join('&');
+      let raw=[];
+      if (orderId){
+        const builders = [
+          ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?resource=order&resource_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}` }),
+          ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?order_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}` }),
+          ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?resource=order&resource_id=${encodeURIComponent(orderId)}&limit=${limit}&offset=${offset}` })
+        ];
+        raw = await paginatedTry(token, builders, limit, 3);
+      } else {
+        const sellerQS = sellerId ? `seller=${encodeURIComponent(sellerId)}&` : '';
+        const builders = sellerId
+          ? [
+              ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v2/returns/search?${sellerQS}${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
+              ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${sellerQS}${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` }),
+              ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` })
+            ]
+          : [
+              ({offset,limit}) => ({ url: `https://api.mercadolibre.com/post-purchase/v1/claims/search?${statusQS}&date_from=${encodeURIComponent(dateFrom)}&limit=${limit}&offset=${offset}` })
+            ];
+        raw = await paginatedTry(token, builders, limit, 10);
+      }
+
+      let touched = 0;
+      for (const rec of raw){
+        const mapped = mapReturnRecord(rec, sellerNick || null);
+        if (!mapped) continue;
+        const r = await upsertDevolucao(mapped);
+        if (r.inserted || r.updated) touched++;
+      }
+      return { total: raw.length, touched };
+    };
+
+    // Caminho single-seller (headers presentes) → comportamento atual
+    if (hdrSellerId || hdrSellerNick) {
+      const { token, sellerId } = await resolveSellerAccessToken(req);
+      const r = await runFor({ token, sellerId, sellerNick: hdrSellerNick || null });
+      const out = { ok:true, sellers:1, total:r.total, touched:r.touched };
+      if (!wantSilent) out.details = [{ seller_id:String(sellerId||''), seller_nick:hdrSellerNick||null, ...r }];
+      return res.json(out);
     }
 
-    const touched=[];
-    for (const rec of raw){
-      const mapped = mapReturnRecord(rec, sellerNick);
-      if (!mapped) continue;
-      const r = await upsertDevolucao(mapped);
-      touched.push({ id_venda: mapped.id_venda, updated:r.updated, inserted:r.inserted });
+    // Multi-seller (sem headers) → roda para todos com token
+    let rows = await listLatestSellerTokens();
+    if (!rows.length) {
+      // fallback: resolve um token genérico
+      const { token, sellerId } = await resolveSellerAccessToken(req);
+      const r = await runFor({ token, sellerId, sellerNick: null });
+      return res.json({ ok:true, sellers:1, total:r.total, touched:r.touched });
     }
 
-    const out = { ok:true, total: raw.length, touched: touched.length };
-    if (!silent) out.details = touched;
+    const results = [];
+    for (const row of rows) {
+      try {
+        const r = await runFor({
+          token: row.access_token,
+          sellerId: String(row.user_id),
+          sellerNick: row.nickname || null
+        });
+        results.push({ ok:true, seller_id:String(row.user_id), seller_nick:row.nickname||null, ...r });
+      } catch (e) {
+        results.push({ ok:false, seller_id:String(row.user_id), seller_nick:row.nickname||null, error:String(e?.message||e) });
+      }
+    }
+
+    const total   = results.reduce((a,r)=>a+(r.total||0), 0);
+    const touched = results.reduce((a,r)=>a+(r.touched||0), 0);
+    const out = { ok:true, sellers: rows.length, total, touched };
+    if (!wantSilent) out.details = results;
     return res.json(out);
+
   } catch (e) {
     const code = e.status || 500;
     return res.status(code).json({ error:String(e.message||e), detail:e.body||null });
@@ -479,7 +536,7 @@ router.get('/returns/sync', async (req, res) => {
 module.exports = router;
 
 /* ================= agendador opcional ================= */
-module.exports.scheduleMlReturnsSync = function scheduleMlReturnsSync(){
+function scheduleMlReturnsSync(){
   const INTERVAL_MS = parseInt(process.env.ML_RETURNS_SYNC_MS || '600000', 10);
   async function tick(){
     try{
@@ -491,4 +548,6 @@ module.exports.scheduleMlReturnsSync = function scheduleMlReturnsSync(){
     }
   }
   setTimeout(tick, 5000);
-};
+}
+module.exports.scheduleMlReturnsSync = scheduleMlReturnsSync;
+router.scheduleMlReturnsSync = scheduleMlReturnsSync;
