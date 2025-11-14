@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML return-cost integrado + hidratação robusta
+// /public/js/devolucao-editar.js — ML return-cost integrado + hidratação robusta (+nick)
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -213,13 +213,25 @@
 
   var current = {};
 
+  // ==== Seller nick helper (usa loja_nome ou label do resumo)
+  function sellerNick(){
+    var ln = (current && current.loja_nome) ? String(current.loja_nome) : '';
+    if (ln.includes('·')) ln = ln.split('·')[1];
+    ln = (ln || '').trim();
+    if (!ln) {
+      var el = $('ml-nick-display');
+      if (el) ln = String(el.textContent || '').replace(/^Mercado Livre\s*·\s*/,'').trim();
+    }
+    return ln || null;
+  }
+
   function updateSummary(d){
     var rs=$('resumo-status'), rl=$('resumo-log'), rc=$('resumo-cd'), rp=$('resumo-prod'), rf=$('resumo-frete'), rt=$('resumo-total');
     if (rs) rs.textContent = (d.status || '—').toLowerCase();
     if (rl) rl.textContent = (d.log_status || '—').toLowerCase();
     if (rc) rc.textContent = d.cd_recebido_em ? 'recebido' : 'não recebido';
     if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
-    if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
+    if (rf) rp && (rf.textContent = moneyBRL(d.valor_frete || 0));
     if (rt) rt.textContent = moneyBRL(calcTotalByRules(d));
   }
 
@@ -616,7 +628,8 @@
 
   function tryFetchClaimDetails(claimId){
     if (!claimId) return Promise.resolve();
-    return fetch('/api/ml/claims/' + encodeURIComponent(claimId), { headers: { 'Accept': 'application/json' } })
+    var q = sellerNick() ? ('?nick=' + encodeURIComponent(sellerNick())) : '';
+    return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + q, { headers: { 'Accept': 'application/json' } })
       .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(j){ var c = j && (j.data || j.claim || j); if (c && typeof c==='object') fillClaimUI(c); })
       .catch(function(){ /* silencioso */ });
@@ -655,14 +668,13 @@
   }
   function fetchAndApplyReturnCost(claimId, opts){
     opts = opts || {};
-    var url = '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?usd=true';
+    var q = ['usd=true'];
+    var nick = sellerNick(); if (nick) q.push('nick=' + encodeURIComponent(nick));
+    var url = '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?' + q.join('&');
     return fetch(url, { headers: { 'Accept': 'application/json' } })
       .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, body:j }; }); })
       .then(function(res){
-        if (!res.ok) {
-          if (qs.has('debug')) console.warn('[return-cost] erro', res.body);
-          return;
-        }
+        if (!res.ok) { if (qs.has('debug')) console.warn('[return-cost] erro', res.body); return; }
         var data = (res.body && res.body.data) || res.body || {};
         showReturnCostInUi(data);
         applyReturnCostToFreight(toNum(data.amount), { persist: opts.persist });
@@ -873,10 +885,11 @@
     var params = [];
     if (typedOrderId) params.push('order_id=' + encodeURIComponent(typedOrderId));
     if (typedClaimId) params.push('claim_id=' + encodeURIComponent(typedClaimId));
+    var nk = sellerNick(); if (nk) params.push('nick=' + encodeURIComponent(nk));
     var qsOverride = params.length ? ('?' + params.join('&')) : '';
 
     var previewUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/fetch-amounts' + qsOverride;
-    var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
+    var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich' + (nk ? ('?nick=' + encodeURIComponent(nk)) : '');
 
     return fetch(previewUrl, { headers: { 'Accept': 'application/json' } })
       .then(function (r) { return r.text().then(function (txt) { var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (_e) {} if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP ' + r.status)); err.status = r.status; throw err; } return j; }); })
@@ -928,8 +941,8 @@
             (ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name);
           applyIfEmpty(patch, 'cliente_nome', buyer);
 
-          var sellerNick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || ord.store_nickname || null;
-          var lojaNome   = sellerNick ? ('Mercado Livre · ' + sellerNick) : (ord.site_id ? (siteIdToName(ord.site_id)) : null);
+          var sellerNickVal = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || ord.store_nickname || null;
+          var lojaNome   = sellerNickVal ? ('Mercado Livre · ' + sellerNickVal) : (ord.site_id ? (siteIdToName(ord.site_id)) : null);
           applyIfEmpty(patch, 'loja_nome', lojaNome);
 
           var dt = ord.date_created || ord.paid_at || ord.created_at || null;
@@ -1020,8 +1033,9 @@
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      .then(safeJson)
-      .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; }).catch(function(){ return []; });
+      .then(function(r){ if(!r.ok) return []; return r.json(); })
+      .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; })
+      .catch(function(){ return []; });
   }
   function fmtRel(iso){
     var d = new Date(iso); if (isNaN(d)) return '';
