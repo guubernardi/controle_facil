@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML return-cost integrado + sem "Custos do ML" na UI
+// /public/js/devolucao-editar.js — ML return-cost integrado + hidratação robusta
 (function () {
   // ===== Helpers =====
   var $  = function (id) { return document.getElementById(id); };
@@ -6,6 +6,41 @@
   var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
 
   // ---- DOM helpers (fallbacks para diferenças no HTML) ----
+  function pickEl(sel) {
+    if (!sel) return null;
+    if (sel[0] === '#' || sel[0] === '.' || /\[.+\]/.test(sel)) return document.querySelector(sel);
+    return $(sel);
+  }
+  function getFirst(selectors) {
+    for (var i=0;i<selectors.length;i++) {
+      var el = pickEl(selectors[i]);
+      if (el) return el;
+    }
+    return null;
+  }
+  function setFirst(selectors, value, opts) {
+    var el = getFirst(selectors); if (!el) return false;
+    if ('value' in el) {
+      if (el.dataset && el.dataset.dirty === '1') return false; // não pisa em edição
+      var v = (value == null ? '' : String(value));
+      if (opts && opts.upper) v = v.toUpperCase();
+      el.value = v;
+    } else {
+      el.textContent = (value == null ? '' : String(value));
+    }
+    return true;
+  }
+  function readFirst(selectors, toNumFlag) {
+    var el = getFirst(selectors); if (!el) return null;
+    var v = ('value' in el) ? el.value : el.textContent;
+    return toNumFlag ? toNum(v) : (v == null ? null : String(v).trim());
+  }
+  function bindDirty(el){
+    if (!el || el.__dirtyBound) return;
+    el.addEventListener('input', function(){ el.dataset.dirty = '1'; });
+    el.__dirtyBound = true;
+  }
+
   function getMotivoSelect() {
     return $('tipo_reclamacao')
         || $('motivo')
@@ -27,28 +62,23 @@
   function moneyUSD(v){ return Number(v || 0).toLocaleString('en-US',{style:'currency',currency:'USD'}); }
   function toast(msg, type){
     type = type || 'info';
-    var t = $('toast'); if (!t) { alert(msg); return; }
+    var t = $('toast'); if (!t) { try{ console.warn('[toast]', type, msg);}catch(_){alert(msg);} return; }
     t.className = 'toast ' + type; t.textContent = msg;
     requestAnimationFrame(function(){ t.classList.add('show'); setTimeout(function(){ t.classList.remove('show'); }, 3000); });
   }
   function setAutoHint(txt){ var el=$('auto-hint'); if(el) el.textContent = txt || ''; }
 
   // ====== "Sticky fields" ======
-  function bindDirty(el){
-    if (!el || el.__dirtyBound) return;
-    el.addEventListener('input', function(){ el.dataset.dirty = '1'; });
-    el.__dirtyBound = true;
-  }
   function setSafe(el, value, opts){
     if (!el) return;
-    if (el.dataset.dirty === '1') return;            // não sobrescreve o que o usuário digitou
+    if (el.dataset && el.dataset.dirty === '1') return; // não sobrescreve o que o usuário digitou
     if (value === null || value === undefined || String(value).trim() === '') return;
     var v = String(value).trim();
     if (opts && opts.upper) v = v.toUpperCase();
     el.value = v;
   }
   function upperSKUInstant(){
-    var s = $('sku');
+    var s = getFirst(['#sku','input[name="sku"]','.js-sku']);
     if (!s) return;
     bindDirty(s);
     s.addEventListener('input', function(){
@@ -196,18 +226,18 @@
   function capture(){
     var selMot = getMotivoSelect();
     return {
-      id_venda:        $('id_venda') ? $('id_venda').value.trim() : null,
-      cliente_nome:    $('cliente_nome') ? $('cliente_nome').value.trim() : null,
-      loja_nome:       $('loja_nome') ? $('loja_nome').value.trim() : null,
-      data_compra:     $('data_compra') ? $('data_compra').value : null,
-      status:          $('status') ? $('status').value : null,
-      sku:             $('sku') ? $('sku').value.trim().toUpperCase() : null, // sempre MAIÚSCULO
+      id_venda:        readFirst(['#id_venda','input[name="id_venda"]','.js-order-id']),
+      cliente_nome:    readFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome']),
+      loja_nome:       readFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
+      data_compra:     readFirst(['#data_compra','input[name="data_compra"]','.js-data']),
+      status:          readFirst(['#status','select[name="status"]']),
+      sku:             (readFirst(['#sku','input[name="sku"]','.js-sku']) || '').toUpperCase(),
       tipo_reclamacao: selMot ? selMot.value : null,
-      nfe_numero:      $('nfe_numero') ? $('nfe_numero').value.trim() : null,
-      nfe_chave:       $('nfe_chave') ? $('nfe_chave').value.trim() : null,
-      reclamacao:      $('reclamacao') ? $('reclamacao').value.trim() : null,
-      valor_produto:   toNum($('valor_produto') ? $('valor_produto').value : 0),
-      valor_frete:     toNum($('valor_frete') ? $('valor_frete').value : 0),
+      nfe_numero:      readFirst(['#nfe_numero','input[name="nfe_numero"]']),
+      nfe_chave:       readFirst(['#nfe_chave','input[name="nfe_chave"]']),
+      reclamacao:      readFirst(['#reclamacao','textarea[name="reclamacao"]']),
+      valor_produto:   readFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto'], true),
+      valor_frete:     readFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'], true),
       log_status:      current.log_status || null,
       cd_recebido_em:  current.cd_recebido_em || null
     };
@@ -215,11 +245,9 @@
 
   function recalc(){
     var d = capture();
-    var eProd=$('ml-product-sum'), eFrete=$('ml-freight');
-    if (eProd)  eProd.textContent  = moneyBRL(d.valor_produto);
-    if (eFrete) eFrete.textContent = moneyBRL(d.valor_frete);
-    var eTotal = $('valor_total');
-    if (eTotal) eTotal.value = moneyBRL(calcTotalByRules(d));
+    setFirst(['#ml-product-sum','.js-ml-produto'], moneyBRL(d.valor_produto));
+    setFirst(['#ml-freight','.js-ml-frete'], moneyBRL(d.valor_frete));
+    setFirst(['#valor_total','input[name="valor_total"]','.js-total'], moneyBRL(calcTotalByRules(d)));
     updateSummary(Object.assign({}, current, d));
   }
 
@@ -400,34 +428,32 @@
     var dvId=$('dv-id'); if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
 
     // sticky + MAIÚSCULO p/ SKU
-    bindDirty($('cliente_nome'));
-    bindDirty($('loja_nome'));
-    bindDirty($('id_venda'));
-    bindDirty($('valor_produto'));
-    bindDirty($('valor_frete'));
+    [getFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome']),
+     getFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
+     getFirst(['#id_venda','input[name="id_venda"]','.js-order-id']),
+     getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
+     getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
+    ].forEach(bindDirty);
     upperSKUInstant();
 
-    setSafe($('id_venda'),     d.id_venda);
-    setSafe($('cliente_nome'), d.cliente_nome);
-    setSafe($('loja_nome'),    d.loja_nome);
-    if ($('data_compra')) $('data_compra').value = d.data_compra ? String(d.data_compra).slice(0,10) : '';
-    if ($('status'))      $('status').value      = d.status || '';
-    setSafe($('sku'), d.sku, { upper:true });
+    setFirst(['#id_venda','input[name="id_venda"]','.js-order-id'], d.id_venda);
+    setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], d.cliente_nome);
+    setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], d.loja_nome);
+    var dataStr = d.data_compra ? String(d.data_compra).slice(0,10) : '';
+    setFirst(['#data_compra','input[name="data_compra"]','.js-data'], dataStr);
+    setFirst(['#status','select[name="status"]'], d.status);
+    setFirst(['#sku','input[name="sku"]','.js-sku'], d.sku, { upper:true });
 
-    if ($('nfe_numero'))    $('nfe_numero').value = d.nfe_numero || '';
-    if ($('nfe_chave'))     $('nfe_chave').value  = d.nfe_chave || '';
-    if ($('reclamacao'))    $('reclamacao').value = d.reclamacao || '';
-    if ($('valor_produto')) $('valor_produto').value = (d.valor_produto == null ? '' : String(toNum(d.valor_produto)));
-    if ($('valor_frete'))   $('valor_frete').value   = (d.valor_frete  == null ? '' : String(toNum(d.valor_frete)));
+    setFirst(['#nfe_numero','input[name="nfe_numero"]'], d.nfe_numero || '');
+    setFirst(['#nfe_chave','input[name="nfe_chave"]'],   d.nfe_chave  || '');
+    setFirst(['#reclamacao','textarea[name="reclamacao"]'], d.reclamacao || '');
+    setFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto'], (d.valor_produto == null ? '' : String(toNum(d.valor_produto))));
+    setFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'], (d.valor_frete == null ? '' : String(toNum(d.valor_frete))));
 
-    if ($('order_id')) {
-      var rawOrderId = firstNonEmpty(d.raw && d.raw.order_id, d.raw && d.raw.id_venda, d.id_venda);
-      setSafe($('order_id'), rawOrderId);
-    }
-    if ($('ml_claim_id')) {
-      var rawClaimId = firstNonEmpty(d.raw && (d.raw.ml_claim_id || d.raw.claim_id), d.raw && d.raw.claim && d.raw.claim.id);
-      setSafe($('ml_claim_id'), rawClaimId);
-    }
+    var rawOrderId = firstNonEmpty(d.raw && d.raw.order_id, d.raw && d.raw.id_venda, d.id_venda);
+    setFirst(['#order_id','input[name="order_id"]','.js-order-id-raw'], rawOrderId);
+    var rawClaimId = firstNonEmpty(d.raw && (d.raw.ml_claim_id || d.raw.claim_id), d.raw && d.raw.claim && d.raw.claim.id);
+    setFirst(['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id'], rawClaimId);
 
     var sel = getMotivoSelect();
     if (sel) {
@@ -446,8 +472,6 @@
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);
 
     updateSummary(d); recalc();
-
-    // (removido) — não há mais totalização de custos do ML na UI
   }
 
   // === ML summary UI (informativo) ===
@@ -456,19 +480,12 @@
     var amounts = payload && payload.amounts;
     var retCost = payload && payload.return_cost;
 
-    var orderDisplay = $('ml-order-display');
-    if (orderDisplay) {
-      var ordId = (order && (order.id || order.order_id)) || (function(){ var x=$('order_id'); return x ? x.value : null; })();
-      orderDisplay.textContent = ordId || '—';
-    }
-    if ($('ml-nick-display')) {
-      var nick = (order && order.seller && (order.seller.nickname || order.seller.nick_name)) || null;
-      $('ml-nick-display').textContent = nick ? ('Mercado Livre · ' + nick) : (current.loja_nome || '—');
-    }
-    if ($('ml-date-display')) {
-      var dt = (order && (order.date_created || order.paid_at || order.created_at)) || current.data_compra || '';
-      $('ml-date-display').textContent = dt ? new Date(dt).toLocaleDateString('pt-BR') : '—';
-    }
+    var ordId = (order && (order.id || order.order_id)) || readFirst(['#order_id','input[name="order_id"]','.js-order-id-raw']);
+    setFirst(['#ml-order-display','.js-ml-order'], ordId || '—');
+    var nick = (order && order.seller && (order.seller.nickname || order.seller.nick_name)) || null;
+    setFirst(['#ml-nick-display','.js-ml-nick'], nick ? ('Mercado Livre · ' + nick) : (current.loja_nome || '—'));
+    var dt = (order && (order.date_created || order.paid_at || order.created_at)) || current.data_compra || '';
+    setFirst(['#ml-date-display','.js-ml-date'], dt ? new Date(dt).toLocaleDateString('pt-BR') : '—');
 
     var prodSum = null, freight = null;
     if (amounts) {
@@ -479,26 +496,17 @@
     }
     if (retCost && retCost.amount != null) freight = toNum(retCost.amount);
 
-    if ($('ml-product-sum')) $('ml-product-sum').textContent = prodSum != null ? moneyBRL(prodSum) : moneyBRL(current.valor_produto || 0);
-    if ($('ml-freight'))     $('ml-freight').textContent     = freight != null ? moneyBRL(freight) : moneyBRL(current.valor_frete || 0);
+    setFirst(['#ml-product-sum','.js-ml-produto'], prodSum != null ? moneyBRL(prodSum) : moneyBRL(current.valor_produto || 0));
+    setFirst(['#ml-freight','.js-ml-frete'],     freight != null ? moneyBRL(freight) : moneyBRL(current.valor_frete || 0));
 
-    var claimId = (payload && payload.sources && payload.sources.claim_id) || (function(){ var x=$('ml_claim_id'); return x ? x.value : null; })();
-    var a = $('claim-open-link');
-    if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
+    var claimId = (payload && payload.sources && payload.sources.claim_id) || readFirst(['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id']);
+    var a = $('claim-open-link'); if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
 
-    // slot p/ exibir return-cost caso exista
     if ($('ml-return-cost')) {
-      if (retCost && retCost.amount != null) {
-        $('ml-return-cost').textContent = moneyBRL(retCost.amount);
-        $('ml-return-cost').dataset.value = String(toNum(retCost.amount));
-      } else {
-        $('ml-return-cost').textContent = '—';
-        $('ml-return-cost').dataset.value = '';
-      }
+      if (retCost && retCost.amount != null) { $('ml-return-cost').textContent = moneyBRL(retCost.amount); $('ml-return-cost').dataset.value = String(toNum(retCost.amount)); }
+      else { $('ml-return-cost').textContent = '—'; $('ml-return-cost').dataset.value = ''; }
     }
-    if ($('ml-return-cost-usd')) {
-      $('ml-return-cost-usd').textContent = (retCost && retCost.amount_usd != null) ? moneyUSD(retCost.amount_usd) : '—';
-    }
+    if ($('ml-return-cost-usd')) $('ml-return-cost-usd').textContent = (retCost && retCost.amount_usd != null) ? moneyUSD(retCost.amount_usd) : '—';
   }
   function fillMlSummaryFromCurrent(){
     fillMlSummary({ order: current.raw && (current.raw.order || current.raw.order_info) || null,
@@ -563,7 +571,6 @@
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
     related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
 
-    // Preferência de motivo
     var prefer =
       reasonCanonFromPayload({ claim: claim }) ||
       canonFromCode(claim.reason_id);
@@ -588,7 +595,6 @@
       }
     }
 
-    // ---- ML: Mediação + status humano
     try {
       var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
       var status = (claim.status || '').toString().toLowerCase();
@@ -603,7 +609,6 @@
       setTxt('ml-status-desc', human);
     } catch(_){}
 
-    // ---- Puxa custo de devolução e tenta aplicar no frete (se útil)
     if (claim.id) {
       fetchAndApplyReturnCost(String(claim.id), { persist: true });
     }
@@ -629,10 +634,9 @@
   }
   function applyReturnCostToFreight(brlAmount, opts){
     opts = opts || {};
-    var inputFrete = $('valor_frete');
+    var inputFrete = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
     var wasDirty = inputFrete && inputFrete.dataset.dirty === '1';
     var curFrete = inputFrete ? toNum(inputFrete.value) : toNum(current.valor_frete);
-    // Regra: só aplica automático se campo não foi mexido e frete atual é 0
     if (!wasDirty && toNum(curFrete) === 0 && toNum(brlAmount) > 0) {
       if (inputFrete) { inputFrete.value = String(toNum(brlAmount)); }
       current.valor_frete = toNum(brlAmount);
@@ -825,7 +829,7 @@
   function parecePedidoML(pedido){ return /^\d{6,}$/.test(String(pedido || '')); }
   function needsEnrichment(d){
     var faltamValores = !d || toNum(d.valor_produto) === 0 || toNum(d.valor_frete) === 0;
-    var faltamMetadados = !d || !d.id_venda || !d.sku || !d.cliente_nome || !d.loja_nome || !d.data_compra || !d.log_status;
+    var faltamMetadados = !d || !d.id_venda || !d.cliente_nome || !d.loja_nome || !d.data_compra;
     return faltamValores || faltamMetadados;
   }
   function canEnrichNow(){ var key='rf_enrich_'+returnId; var last=Number(localStorage.getItem(key) || 0); var ok=!last || (Date.now()-last)>ENRICH_TTL_MS; if(ok) localStorage.setItem(key,String(Date.now())); return ok; }
@@ -845,15 +849,14 @@
     return acc;
   }
 
-  // persistimos meta (id_venda, cliente, loja, data, sku) ANTES do reload
   function persistMetaPatch(patch){
     var idp = current.id || returnId;
     if (!idp || !Object.keys(patch).length) return Promise.resolve();
     return fetch('/api/returns/' + encodeURIComponent(idp), {
       method: 'PATCH',
       headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' }))
-    }).catch(function(){});
+      body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' }))}
+    ).catch(function(){});
   }
 
   function enrichFromML(reason){
@@ -865,8 +868,8 @@
 
     var id = current.id;
 
-    var typedOrderId = $('id_venda') && $('id_venda').value ? $('id_venda').value.trim() : '';
-    var typedClaimId = $('ml_claim_id') && $('ml_claim_id').value ? $('ml_claim_id').value.trim() : '';
+    var typedOrderId = readFirst(['#id_venda','input[name="id_venda"]','.js-order-id']);
+    var typedClaimId = readFirst(['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id']);
     var params = [];
     if (typedOrderId) params.push('order_id=' + encodeURIComponent(typedOrderId));
     if (typedClaimId) params.push('claim_id=' + encodeURIComponent(typedClaimId));
@@ -876,13 +879,7 @@
     var persistUrl = '/api/ml/returns/' + encodeURIComponent(id) + '/enrich';
 
     return fetch(previewUrl, { headers: { 'Accept': 'application/json' } })
-      .then(function (r) {
-        return r.text().then(function (txt) {
-          var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (_e) {}
-          if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP ' + r.status)); err.status = r.status; throw err; }
-          return j;
-        });
-      })
+      .then(function (r) { return r.text().then(function (txt) { var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (_e) {} if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP ' + r.status)); err.status = r.status; throw err; } return j; }); })
       .then(function (raw) {
         var j = raw && (raw.data || raw) || {};
 
@@ -904,7 +901,8 @@
         if (freight === null) freight = numFrom((j.return_cost || {}), ['amount','value']);
         if (freight === null) freight = numFrom(j.amounts || {}, ['freight','shipping','shipping_cost','logistics','logistic_cost']);
 
-        var ip=$('valor_produto'), ifr=$('valor_frete');
+        var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
+        var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
         var changed = false;
         if (product !== null && toNum(product) !== toNum(current.valor_produto)) { current.valor_produto = toNum(product); if (ip)  ip.value  = String(current.valor_produto); changed = true; }
         if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   { current.valor_frete   = toNum(freight); if (ifr) ifr.value = String(current.valor_frete);   changed = true; }
@@ -918,7 +916,6 @@
           toast('Valores do ML já estavam corretos.', 'info');
         }
 
-        // ---- Dados do pedido (vazios) -> patch + persist
         var ord = j.order || j.order_info || null;
         var patch = {};
         if (ord) {
@@ -942,7 +939,6 @@
           applyIfEmpty(patch, 'sku', sku);
         }
 
-        // ---- Motivo (pega canônico) ----
         var canon =
           reasonCanonFromPayload(j) ||
           (j.reason_key && REASONKEY_TO_CANON[j.reason_key]) ||
@@ -950,7 +946,6 @@
           canonFromText(j.reason_label);
 
         var persistPatch = Promise.resolve();
-
         function persistTipo(c){
           if (!c) return Promise.resolve();
           setMotivoCanon(c, true);
@@ -959,7 +954,6 @@
             body: JSON.stringify({ tipo_reclamacao: c, updated_by: 'frontend-auto-enrich' })
           }).catch(function(){});
         }
-
         if (canon) {
           persistPatch = persistTipo(canon);
         } else {
@@ -970,7 +964,6 @@
           if (rid) persistPatch = fetchReasonCanonById(rid).then(persistTipo);
         }
 
-        // ---- Log sugerido ----
         var logHint = j.log_status_suggested || null;
         if (logHint) {
           var lsNow = String(current.log_status || '').toLowerCase();
@@ -979,20 +972,17 @@
           }
         }
 
-        // aplica patch no front imediatamente
         if (Object.keys(patch).length) {
-          if (patch.id_venda && $('id_venda')) setSafe($('id_venda'), patch.id_venda);
-          if (patch.cliente_nome && $('cliente_nome')) setSafe($('cliente_nome'), patch.cliente_nome);
-          if (patch.loja_nome && $('loja_nome')) setSafe($('loja_nome'), patch.loja_nome);
-          if (patch.data_compra && $('data_compra')) $('data_compra').value = patch.data_compra;
-          if (patch.sku && $('sku')) setSafe($('sku'), patch.sku, { upper:true });
+          setFirst(['#id_venda','input[name="id_venda"]','.js-order-id'], patch.id_venda);
+          setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], patch.cliente_nome);
+          setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], patch.loja_nome);
+          setFirst(['#data_compra','input[name="data_compra"]','.js-data'], patch.data_compra);
+          setFirst(['#sku','input[name="sku"]','.js-sku'], patch.sku, { upper:true });
           current = Object.assign({}, current, patch);
           recalc();
         }
 
-        // >>> PERSISTE META (id_venda/cliente/loja/data/SKU) ANTES DO reload <<<
         var persistMeta = persistMetaPatch(patch);
-
         var persistEvent = fetch(persistUrl, { method: 'POST' }).catch(function(){});
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
@@ -1010,9 +1000,8 @@
         var claimed = (j.sources && j.sources.claim_id) || null;
         if (!j.claim && claimed) tryFetchClaimDetails(claimed);
 
-        // Caso a prévia não traga return_cost, tenta endpoint dedicado agora:
         var needReturnCost = !(j && j.return_cost && j.return_cost.amount != null);
-        var claimId = claimed || (j.claim && j.claim.id) || ( $('ml_claim_id') && $('ml_claim_id').value ) || null;
+        var claimId = claimed || (j.claim && j.claim.id) || readFirst(['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id']);
         var rcPull = needReturnCost && claimId ? fetchAndApplyReturnCost(String(claimId), { persist: true }) : Promise.resolve();
 
         return Promise.all([persistMeta, persistEvent, persistMoney, persistPatch, rcPull]);
@@ -1101,9 +1090,10 @@
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
   // ===== Listeners básicos =====
-  ['valor_produto','valor_frete','status'].forEach(function(id){
-    var el=$(id); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc);
-  });
+  ['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto',
+   '#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete',
+   '#status','select[name="status"]'
+  ].forEach(function(sel){ var el=pickEl(sel); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc); });
   (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', recalc); } })();
 
   var btnIA=$('btn-insp-aprova'), btnIR=$('btn-insp-reprova');
@@ -1132,19 +1122,16 @@
     }
     reloadCurrent()
       .then(function(){
-        upperSKUInstant(); // garante uppercase sempre
-        // marca os campos como "dirty-aware"
-        ['valor_produto','valor_frete'].forEach(function(id){ var el=$(id); if (el) bindDirty(el); });
+        upperSKUInstant();
+        [getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
+         getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
+        ].forEach(bindDirty);
 
         var needMotivoConvert = !!current.tipo_reclamacao && !/_/.test(String(current.tipo_reclamacao)) && current.tipo_reclamacao !== 'nao_corresponde';
-        var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda);
+        var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda) || !!readFirst(['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id']);
 
-        if (needMotivoConvert) {
-          return enrichFromML('motivo');
-        }
-        if (podeML && canEnrichNow() && needsEnrichment(current)) {
-          return enrichFromML('auto');
-        }
+        if (needMotivoConvert) return enrichFromML('motivo');
+        if (podeML && canEnrichNow() && needsEnrichment(current)) return enrichFromML('auto');
       })
       .then(function(){
         var ls = String(current.log_status || '').toLowerCase();
@@ -1153,9 +1140,8 @@
           var rqA2=$('rq-aprovar'), rqR2=$('rq-reprovar'); if (rqA2) rqA2.setAttribute('disabled','true'); if (rqR2) rqR2.setAttribute('disabled','true');
         }
 
-        var cid = ($('ml_claim_id') && $('ml_claim_id').value) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
+        var cid = readFirst(['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id']) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
         if (cid && !(current.raw && current.raw.claim)) tryFetchClaimDetails(cid);
-        // Puxa return-cost mesmo que a claim já esteja carregada (atualiza UI dedicada)
         if (cid) fetchAndApplyReturnCost(String(cid), { persist: true });
 
         return current.id ? refreshTimeline(current.id) : null;
