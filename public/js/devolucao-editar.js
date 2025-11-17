@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + campos essenciais + fix 404 timeline
+// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + campos essenciais + fix 404 timeline + buyer name fallback
 (function () {
   /* ================= Helpers ================= */
   var $  = function (id) { return document.getElementById(id); };
@@ -544,6 +544,37 @@
     if (claim.id) fetchAndApplyReturnCost(String(claim.id), { persist: true });
   }
 
+  /* ========== FALLBACK de NOME DO COMPRADOR ========== */
+  function guessBuyerNameFromOrder(ord){
+    try {
+      // 1) dados diretos do pedido
+      var direct =
+        (ord && ord.buyer && (
+          (ord.buyer.first_name && ord.buyer.last_name
+            ? (ord.buyer.first_name + ' ' + ord.buyer.last_name)
+            : (ord.buyer.nickname || ord.buyer.name || ord.buyer.first_name)
+          )
+        )) ||
+        (ord && ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name);
+      if (direct) return Promise.resolve(String(direct).trim());
+
+      // 2) consulta /api/ml/users/:id para pegar nickname/nome
+      var buyerId = ord && ord.buyer && (ord.buyer.id || ord.buyer.user_id);
+      if (!buyerId) return Promise.resolve(null);
+
+      return fetch('/api/ml/users/' + encodeURIComponent(buyerId), { headers:{ 'Accept':'application/json' } })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(u){
+          if (!u || typeof u !== 'object') return 'Cliente ML #' + buyerId;
+          var n = (u.first_name && u.last_name) ? (u.first_name + ' ' + u.last_name) : (u.nickname || u.name);
+          return (n && String(n).trim()) || ('Cliente ML #' + buyerId);
+        })
+        .catch(function(){ return 'Cliente ML #' + buyerId; });
+    } catch(_) {
+      return Promise.resolve(null);
+    }
+  }
+
   /* =========== FALLBACK via ORDER (preenche produto/frete/cliente/SKU/data/loja) =========== */
   function fetchOrderInfo(orderId){
     if (!orderId) return Promise.resolve(null);
@@ -574,11 +605,6 @@
   function applyOrderToUi(ord, opts){
     opts = opts || {};
     if (!ord || typeof ord !== 'object') return Promise.resolve(false);
-
-    // buyer
-    var buyerName =
-      (ord.buyer && ((ord.buyer.first_name && ord.buyer.last_name) ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : (ord.buyer.nickname || ord.buyer.name || ord.buyer.first_name))) ||
-      (ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name) || null;
 
     // loja/nick
     var nick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || null;
@@ -620,60 +646,65 @@
       freight = (freight != null) ? toNum(freight) : null;
     }
 
-    // aplica nos inputs (respeitando dirty)
-    var changed = false;
-    if (buyerName) {
-      if (setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], buyerName)) changed = true;
-    }
-    if (nick && !current.loja_nome) {
-      if (setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], 'Mercado Livre · ' + nick)) changed = true;
-    }
-    if (when) {
-      if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], String(when).slice(0,10))) changed = true;
-    }
-    if (sku) {
-      if (setFirst(['#sku','input[name="sku"]','.js-sku'], String(sku).toUpperCase(), {upper:true})) changed = true;
-      current.sku = String(sku).toUpperCase();
-    }
+    // >>> Nome do comprador com fallback (inclui chamada /users/:id)
+    return guessBuyerNameFromOrder(ord).then(function(buyerName){
+      var changed = false;
 
-    var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
-    var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
-    if (product != null && ip && ip.dataset.dirty!=='1') { ip.value = String(product); current.valor_produto = product; changed = true; }
-    if (freight != null && ifr && ifr.dataset.dirty!=='1') { ifr.value = String(freight); current.valor_frete = freight; changed = true; }
-
-    if (changed) {
-      recalc();
-      updateSummary(Object.assign({}, current, capture()));
-      toast('Dados do pedido aplicados do ML.', 'success');
-    }
-    // persist meta/amounts
-    var patchMeta = {};
-    if (buyerName && !current.cliente_nome) patchMeta.cliente_nome = buyerName;
-    if (nick && !current.loja_nome) patchMeta.loja_nome = 'Mercado Livre · ' + nick;
-    if (when && !current.data_compra) patchMeta.data_compra = when;
-    if (sku && !current.sku) patchMeta.sku = String(sku).toUpperCase();
-
-    var patchAmounts = {};
-    if (product != null) patchAmounts.valor_produto = product;
-    if (freight != null) patchAmounts.valor_frete   = freight;
-
-    var persists = [];
-    var idp = current.id || returnId;
-    if (idp) {
-      if (Object.keys(patchMeta).length) {
-        persists.push(fetch('/api/returns/' + encodeURIComponent(idp), {
-          method:'PATCH', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(Object.assign({}, patchMeta, { updated_by:'frontend-order-fallback-meta' }))
-        }));
+      // aplica nos inputs (respeitando dirty)
+      if (buyerName) {
+        if (setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], buyerName)) changed = true;
       }
-      if (Object.keys(patchAmounts).length) {
-        persists.push(fetch('/api/returns/' + encodeURIComponent(idp), {
-          method:'PATCH', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(Object.assign({}, patchAmounts, { updated_by:'frontend-order-fallback-amounts' }))
-        }));
+      if (nick && !current.loja_nome) {
+        if (setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], 'Mercado Livre · ' + nick)) changed = true;
       }
-    }
-    return Promise.all(persists).catch(function(){ return null; }).then(function(){ return changed; });
+      if (when) {
+        if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], String(when).slice(0,10))) changed = true;
+      }
+      if (sku) {
+        if (setFirst(['#sku','input[name="sku"]','.js-sku'], String(sku).toUpperCase(), {upper:true})) changed = true;
+        current.sku = String(sku).toUpperCase();
+      }
+
+      var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
+      var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
+      if (product != null && ip && ip.dataset.dirty!=='1') { ip.value = String(product); current.valor_produto = product; changed = true; }
+      if (freight != null && ifr && ifr.dataset.dirty!=='1') { ifr.value = String(freight); current.valor_frete = freight; changed = true; }
+
+      if (changed) {
+        recalc();
+        updateSummary(Object.assign({}, current, capture()));
+        toast('Dados do pedido aplicados do ML.', 'success');
+      }
+
+      // persist meta/amounts
+      var patchMeta = {};
+      if (buyerName && !current.cliente_nome) patchMeta.cliente_nome = buyerName;
+      if (nick && !current.loja_nome) patchMeta.loja_nome = 'Mercado Livre · ' + nick;
+      if (when && !current.data_compra) patchMeta.data_compra = when;
+      if (sku && !current.sku) patchMeta.sku = String(sku).toUpperCase();
+
+      var patchAmounts = {};
+      if (product != null) patchAmounts.valor_produto = product;
+      if (freight != null) patchAmounts.valor_frete   = freight;
+
+      var persists = [];
+      var idp = current.id || returnId;
+      if (idp) {
+        if (Object.keys(patchMeta).length) {
+          persists.push(fetch('/api/returns/' + encodeURIComponent(idp), {
+            method:'PATCH', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(Object.assign({}, patchMeta, { updated_by:'frontend-order-fallback-meta' }))
+          }));
+        }
+        if (Object.keys(patchAmounts).length) {
+          persists.push(fetch('/api/returns/' + encodeURIComponent(idp), {
+            method:'PATCH', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(Object.assign({}, patchAmounts, { updated_by:'frontend-order-fallback-amounts' }))
+          }));
+        }
+      }
+      return Promise.all(persists).catch(function(){ return null; }).then(function(){ return changed; });
+    });
   }
 
   /* ================= Return-cost (ML) ================= */
