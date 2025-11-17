@@ -735,7 +735,7 @@
           body: JSON.stringify({ valor_frete: toNum(brlAmount), updated_by: 'frontend-ml-return-cost' })
         }).catch(function(){});
       }
-      toast('Frete de devolução (ML) aplicado: ' ' + moneyBRL(brlAmount), 'success');
+      toast('Frete de devolução (ML) aplicado: ' + moneyBRL(brlAmount), 'success');
       return true;
     }
     return false;
