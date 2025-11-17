@@ -324,7 +324,7 @@
     return null;
   }
 
-  // === faltavam no seu arquivo:
+  // controles do select de motivo
   function lockMotivo(lock, hint){
     var sel = getMotivoSelect(); if (!sel) return;
     sel.disabled = !!lock;
@@ -723,14 +723,23 @@
 
   /* ================= Timeline ================= */
   function coerceEventsPayload(j){ if (Array.isArray(j)) return j; if (!j || typeof j !== 'object') return []; return j.items || j.events || j.data || []; }
+
+  // devolve { ok, items } — para sabermos se devemos limpar a UI ou mantê-la
   function fetchEvents(id, limit, offset){
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      .then(function(r){ if(!r.ok) return []; return r.json(); })
-      .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; })
-      .catch(function(){ return []; });
+      .then(function(r){
+        return r.text().then(function(txt){
+          var j={}; try{ j = txt ? JSON.parse(txt) : {}; } catch(_){}
+          if (!r.ok) return { ok:false, items:null };
+          var arr = coerceEventsPayload(j);
+          return { ok:true, items: Array.isArray(arr) ? arr : [] };
+        });
+      })
+      .catch(function(){ return { ok:false, items:null }; });
   }
+
   function fmtRel(iso){
     var d = new Date(iso); if (isNaN(d)) return '';
     var diffMs = Date.now() - d.getTime(); var abs = Math.abs(diffMs);
@@ -744,14 +753,15 @@
 
   function renderEvents(items){
     var wrap=$('events-list'), elLoad=$('events-loading'), elEmpty=$('events-empty');
-    if (!wrap) return; wrap.innerHTML=''; if (elLoad) elLoad.hidden=true;
-    if (!items.length){ if (elEmpty) elEmpty.hidden=false; return; } if (elEmpty) elEmpty.hidden=true;
+    if (!wrap) return;
+    if (elLoad) elLoad.hidden=true;
 
-    function reasonFromMeta(meta){
-      if (!meta) return null;
-      return meta.reason_name || meta.reason || meta.tipo_reclamacao ||
-             (meta.claim && (meta.claim.reason_name || (meta.claim.reason && (meta.claim.reason.name || meta.claim.reason.description)))) || null;
+    if (!items || !items.length){
+      if (elEmpty) elEmpty.hidden=false;
+      wrap.innerHTML = '';
+      return;
     }
+    if (elEmpty) elEmpty.hidden=true;
 
     var frag=document.createDocumentFragment();
     items.forEach(function (ev) {
@@ -777,16 +787,20 @@
       if (meta && meta.cd && meta.cd.unreceivedAt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">removido: '+ new Date(meta.cd.unreceivedAt).toLocaleString('pt-BR') +'</span>');
       if (meta && meta.cd && meta.cd.inspectedAt)  metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">inspecionado: '+ new Date(meta.cd.inspectedAt).toLocaleString('pt-BR') +'</span>');
 
-      var reasonTxt = reasonFromMeta(meta);
+      var reasonTxt =
+        (meta && (meta.reason_name || meta.reason || meta.tipo_reclamacao ||
+          (meta.claim && (meta.claim.reason_name || (meta.claim.reason && (meta.claim.reason.name || meta.claim.reason.description)))))) || null;
       if (reasonTxt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">motivo: <b>'+ reasonTxt +'</b></span>');
 
       frag.appendChild(item);
     });
-    wrap.appendChild(frag);
+
+    // limpa e aplica novo conteúdo (apenas em resposta OK)
+    $('events-list').innerHTML='';
+    $('events-list').appendChild(frag);
   }
 
   function refreshTimeline(id){
-    // evita 404: só busca eventos se houver registro local confirmado
     if (!hasLocalRow) {
       var elLoad=$('events-loading'), elEmpty=$('events-empty');
       if (elLoad) elLoad.hidden=true;
@@ -794,11 +808,26 @@
       return Promise.resolve();
     }
     var elLoad=$('events-loading'), elList=$('events-list');
-    if (elLoad) elLoad.hidden=false; if (elList) elList.setAttribute('aria-busy','true');
+    if (elLoad) elLoad.hidden=false;
+    if (elList) elList.setAttribute('aria-busy','true');
+
+    var previousHTML = elList ? elList.innerHTML : '';
+
     return fetchEvents(id, 100, 0)
-      .then(renderEvents)
-      .catch(function(){ renderEvents([]); })
-      .then(function(){ if (elLoad) elLoad.hidden=true; if (elList) elList.setAttribute('aria-busy','false'); });
+      .then(function(res){
+        if (!res.ok) { // 404/500 -> mantém UI atual
+          if (elList) elList.innerHTML = previousHTML;
+          return;
+        }
+        renderEvents(res.items || []);
+      })
+      .catch(function(){
+        if (elList) elList.innerHTML = previousHTML;
+      })
+      .then(function(){
+        if (elLoad) elLoad.hidden=true;
+        if (elList) elList.setAttribute('aria-busy','false');
+      });
   }
 
   /* ================= Ações header ================= */
@@ -1129,12 +1158,13 @@
           }).catch(function(){});
         }
 
-        tryFetchClaimDetails(res.claimId);
-        fetchAndApplyReturnCost(res.claimId, { persist: true });
+        tryFetchClaimDetails(res.claimId);               // detalhes para motivo/status
+        fetchAndApplyReturnCost(res.claimId, { persist: true }); // frete devolução
 
         // === FALLBACK via ORDER quando ainda faltam campos/valores ===
         var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id);
         if (!orderId) {
+          // às vezes vem em claim.resource_id mas só depois do tryFetchClaimDetails
           orderId = (current.raw && (current.raw.order_id || current.raw.resource_id)) || null;
         }
         if (needsEnrichment(Object.assign({}, current, capture()))) {
