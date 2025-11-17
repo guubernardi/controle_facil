@@ -522,14 +522,14 @@
       var role = p.role || '-';
       var type = p.type || '-';
       var uid  = p.user_id || '-';
-      pushLi('claim-players', `<b>${role}</b> • ${type} • #${uid}`);
+      pushLi('claim-players', '<b>'+role+'</b> • '+type+' • #'+uid);
     });
 
     clearList('claim-actions');
     var actions = Array.isArray(claim.available_actions) ? claim.available_actions : [];
     actions.forEach(function(a){
       var due = a.due_date ? (' · até ' + new Date(a.due_date).toLocaleString('pt-BR')) : '';
-      pushLi('claim-actions', `<code>${a.action || '-'}</code>${a.mandatory ? ' (obrigatória)' : ''}${due}`);
+      pushLi('claim-actions', '<code>'+(a.action || '-')+'</code>'+(a.mandatory ? ' (obrigatória)' : '')+due);
     });
 
     var res = claim.resolution || {};
@@ -541,10 +541,9 @@
 
     clearList('claim-related');
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
-    related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
+    related.forEach(function(r){ pushLi('claim-related', '<b>'+(r.type || '-')+'</b> • '+(r.id || '-')); });
 
     var prefer = (function (root) {
-      // tenta inferir motivo
       function canonFromPayload(root){
         if (!root || typeof root !== 'object') return null;
         if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
@@ -672,7 +671,11 @@
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      .then(function(r){ if(!r.ok) return []; return r.json(); })
+      .then(function(r){
+        if (r.status === 404) return []; // tolera backend sem rota de eventos
+        if(!r.ok) return [];
+        return r.json();
+      })
       .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; })
       .catch(function(){ return []; });
   }
@@ -957,6 +960,34 @@
     return String(items[0].id || items[0].claim_id || '').replace(/\D+/g,'') || null;
   }
 
+  // === Fallback para quando /returns/enriched não existir (404) ===
+  function fetchClaimBasic(claimId){
+    var nk = sellerNick();
+    var q  = nk ? ('?nick=' + encodeURIComponent(nk)) : '';
+    return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + q, { headers:{Accept:'application/json'} })
+      .then(function(r){
+        if (r.status === 403 && q) {
+          return fetch('/api/ml/claims/' + encodeURIComponent(claimId), { headers:{Accept:'application/json'} });
+        }
+        return r;
+      })
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(j){ return (j && (j.data || j.claim || j)) || {}; });
+  }
+  function fallbackEnrichmentFromClaim(claimId){
+    return fetchClaimBasic(claimId).then(function(claim){
+      try { fillClaimUI(claim); } catch(_){}
+      return fetchAndApplyReturnCost(String(claimId), { persist: true }).then(function(){
+        var el = $('ml-return-cost');
+        var brl = el && el.dataset && el.dataset.value ? Number(el.dataset.value) : null;
+        var rc  = (brl != null) ? { amount: brl } : null;
+        var ordId = claim && (claim.resource_id || (claim.order && claim.order.id)) || null;
+        fillMlSummary({ order: ordId ? { id: ordId, order_id: ordId } : null, return_cost: rc, sources: { claim_id: claimId } });
+        return { orders: [], return_cost: rc, summary: {} };
+      });
+    });
+  }
+
   function enrichFromML(reason){
     reason = reason || 'auto';
     if (!current || !current.id) current = { id: returnId }; // garante id para persist
@@ -978,11 +1009,20 @@
           }
           return r;
         })
-        .then(function(r){ return r.text().then(function (txt) {
-          var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
-          if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status)); err.status = r.status; throw err; }
-          return j;
-        });});
+        .then(function(r){
+          return r.text().then(function (txt) {
+            var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
+            if (!r.ok) {
+              if (r.status === 404) {
+                if (qs.has('debug')) console.warn('[enriched] 404 — usando fallback claim+return-cost');
+                return fallbackEnrichmentFromClaim(cId); // <- Fallback aqui
+              }
+              var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status));
+              err.status = r.status; throw err;
+            }
+            return j;
+          });
+        });
     }
 
     var claimPromise;
@@ -1005,7 +1045,7 @@
         try {
           var anyOrder = (j.orders && j.orders[0]) || null;
           var ordMeta = anyOrder ? { id: anyOrder.order_id } : null;
-          fillMlSummary({ order: ordMeta, return_cost: j.return_cost });
+          fillMlSummary({ order: ordMeta, return_cost: j.return_cost, sources: { claim_id: res.claimId } });
         } catch(_){}
 
         var product = null;
