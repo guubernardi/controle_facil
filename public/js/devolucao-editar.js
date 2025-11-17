@@ -30,14 +30,20 @@
     }
     return null;
   }
+  // === FIX 1: setFirst não-destrutivo (não sobrescreve com vazio / respeita dirty) ===
   function setFirst(selectors, value, opts) {
     var el = getFirst(selectors); if (!el) return false;
+    var incomingEmpty = (value === undefined || value === null || (typeof value === 'string' && value.trim() === ''));
     if ('value' in el) {
       if (el.dataset && el.dataset.dirty === '1') return false;
+      var hasCurrent = String(el.value || '').trim() !== '';
+      if (incomingEmpty && hasCurrent) return false;
       var v = (value == null ? '' : String(value));
       if (opts && opts.upper) v = v.toUpperCase();
       el.value = v;
     } else {
+      var hasCurrentT = String(el.textContent || '').trim() !== '';
+      if (incomingEmpty && hasCurrentT) return false;
       el.textContent = (value == null ? '' : String(value));
     }
     return true;
@@ -564,9 +570,10 @@
     return next();
   }
 
+  // === FIX 2: applyOrderToUi passa a aguardar persistências e devolver Promise<boolean> ===
   function applyOrderToUi(ord, opts){
     opts = opts || {};
-    if (!ord || typeof ord !== 'object') return false;
+    if (!ord || typeof ord !== 'object') return Promise.resolve(false);
 
     // buyer
     var buyerName =
@@ -650,22 +657,23 @@
     if (product != null) patchAmounts.valor_produto = product;
     if (freight != null) patchAmounts.valor_frete   = freight;
 
+    var persists = [];
     var idp = current.id || returnId;
     if (idp) {
       if (Object.keys(patchMeta).length) {
-        fetch('/api/returns/' + encodeURIComponent(idp), {
+        persists.push(fetch('/api/returns/' + encodeURIComponent(idp), {
           method:'PATCH', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(Object.assign({}, patchMeta, { updated_by:'frontend-order-fallback-meta' }))
-        }).catch(function(){});
+        }));
       }
       if (Object.keys(patchAmounts).length) {
-        fetch('/api/returns/' + encodeURIComponent(idp), {
+        persists.push(fetch('/api/returns/' + encodeURIComponent(idp), {
           method:'PATCH', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(Object.assign({}, patchAmounts, { updated_by:'frontend-order-fallback-amounts' }))
-        }).catch(function(){});
+        }));
       }
     }
-    return changed;
+    return Promise.all(persists).catch(function(){ return null; }).then(function(){ return changed; });
   }
 
   /* ================= Return-cost (ML) ================= */
@@ -1168,16 +1176,25 @@
           orderId = (current.raw && (current.raw.order_id || current.raw.resource_id)) || null;
         }
         if (needsEnrichment(Object.assign({}, current, capture()))) {
-          return fetchOrderInfo(orderId).then(function(ord){ if (ord) applyOrderToUi(ord, {persist:true}); });
+          return fetchOrderInfo(orderId).then(function(ord){
+            if (ord) return applyOrderToUi(ord, {persist:true});
+          });
         }
       })
-      .then(function(){ return reloadCurrent(); })
+      // === FIX 3: recarrega do banco somente quando já existir linha local ===
+      .then(function(){ if (hasLocalRow) return reloadCurrent(); })
       .catch(function (e) {
         // Se enriched falhou (404/403), tentar direto pelo pedido digitado
         var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id');
         if (orderId) {
           return fetchOrderInfo(String(orderId).replace(/\D+/g,''))
-            .then(function(ord){ if (ord) { applyOrderToUi(ord, {persist:true}); return reloadCurrent(); } })
+            .then(function(ord){
+              if (ord) {
+                return applyOrderToUi(ord, {persist:true}).then(function(){
+                  return hasLocalRow ? reloadCurrent() : null;
+                });
+              }
+            })
             .catch(function(){});
         }
         if (e && e.status === 404) toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
