@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML enriched + fallback 404 + claim link + mark persist
+// /public/js/devolucao-editar.js — ML enriched + fallback completo (claim + order) + return-cost + persist meta
 (function () {
   /* ================= Helpers ================= */
   var $  = function (id) { return document.getElementById(id); };
@@ -935,32 +935,117 @@
       body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' })) }
     ).catch(function(){});
   }
-  function searchClaimsByOrder(orderId){
-    if (!orderId) return Promise.resolve([]);
+
+  // === NOVO: buscar pedido do ML para preencher cliente, SKU, data, valor produto ===
+  function fetchOrderBasic(orderId){
+    if (!orderId) return Promise.resolve(null);
     var nk = sellerNick();
-    var url = '/api/ml/claims/search?order_id=' + encodeURIComponent(orderId) + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
-    return fetch(url, { headers: { 'Accept':'application/json' } })
-      .then(function(r){
-        if (r.status === 403 && nk) {
-          return fetch('/api/ml/claims/search?order_id=' + encodeURIComponent(orderId), { headers: { 'Accept':'application/json' } });
-        }
-        return r;
-      })
-      .then(function(r){ if (!r.ok) return []; return r.json(); })
-      .then(function(j){ var items = (j && (j.items || j.results || j.claims)) || []; return Array.isArray(items) ? items : []; })
-      .catch(function(){ return []; });
-  }
-  function pickLatestClaimId(items){
-    if (!Array.isArray(items) || !items.length) return null;
-    items.sort(function(a,b){
-      var da = new Date(a.created_date || a.date_created || 0).getTime();
-      var db = new Date(b.created_date || b.date_created || 0).getTime();
-      return db - da;
-    });
-    return String(items[0].id || items[0].claim_id || '').replace(/\D+/g,'') || null;
+    var urls = [
+      '/api/ml/orders/' + encodeURIComponent(orderId) + (nk ? ('?nick=' + encodeURIComponent(nk)) : ''),
+      // fallback sem nick
+      '/api/ml/orders/' + encodeURIComponent(orderId)
+    ];
+    var i = 0;
+    function tryOne(){
+      if (i >= urls.length) return Promise.resolve(null);
+      var u = urls[i++]; 
+      return fetch(u, { headers:{Accept:'application/json'} })
+        .then(function(r){ if(!r.ok){ if (r.status===403 && i<urls.length) return tryOne(); if (r.status===404) return null; throw new Error('HTTP '+r.status);} return r.json(); })
+        .then(function(j){ 
+          if (!j) return null;
+          var o = j.data || j.order || j;
+          return (o && typeof o==='object') ? o : null;
+        })
+        .catch(function(){ return null; });
+    }
+    return tryOne();
   }
 
-  // === Fallback para quando /returns/enriched não existir (404) ===
+  function pickBuyerName(order){
+    try{
+      var b = order.buyer || order.payer || {};
+      if (b.first_name || b.last_name) return [b.first_name, b.last_name].filter(Boolean).join(' ').trim();
+      return b.nickname || b.name || null;
+    }catch(_){ return null; }
+  }
+
+  function sumProductValue(order){
+    try{
+      if (order.total_paid_amount != null) return toNum(order.total_paid_amount);
+      if (order.paid_amount != null)       return toNum(order.paid_amount);
+      if (order.order_items && order.order_items.length){
+        return order.order_items.reduce(function(acc, it){
+          var up = toNum((it.unit_price!=null)?it.unit_price:(it.item && it.item.price));
+          var q  = toNum(it.quantity || 1);
+          return acc + (up*q);
+        }, 0);
+      }
+    }catch(_){}
+    return null;
+  }
+
+  function pickSku(order){
+    try{
+      if (order.order_items && order.order_items.length){
+        var it = order.order_items[0];
+        return (it.item && it.item.id) ? String(it.item.id).toUpperCase() : (it.item_id ? String(it.item_id).toUpperCase() : null);
+      }
+    }catch(_){}
+    return null;
+  }
+
+  function applyOrderToUi(order){
+    if (!order) return { changed:false, patch:{} };
+    var buyer   = pickBuyerName(order);
+    var sku     = pickSku(order);
+    var produto = sumProductValue(order);
+    var when    = order.date_created || order.paid_at || order.created_at || null;
+    var sellerNickFromOrder = order.seller && (order.seller.nickname || order.seller.nick_name);
+
+    var patch = {};
+    var changed = false;
+
+    // Cliente
+    if (buyer && setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], buyer)) { current.cliente_nome = buyer; changed = true; patch.cliente_nome = buyer; }
+
+    // SKU
+    if (sku && setFirst(['#sku','input[name="sku"]','.js-sku'], sku, { upper:true })) { current.sku = sku; changed = true; patch.sku = sku; }
+
+    // Data da compra
+    if (when) {
+      var ds = String(when).slice(0,10);
+      if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], ds)) { current.data_compra = ds; changed = true; patch.data_compra = ds; }
+    }
+
+    // Loja (apelido)
+    if (sellerNickFromOrder) {
+      var lojaNome = 'Mercado Livre · ' + sellerNickFromOrder;
+      if (setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], lojaNome)) { current.loja_nome = lojaNome; changed = true; patch.loja_nome = lojaNome; }
+      setFirst(['#ml-nick-display','.js-ml-nick'], 'Mercado Livre · ' + sellerNickFromOrder);
+    }
+
+    // Valor do produto
+    if (produto != null) {
+      var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
+      var isDirty = ip && ip.dataset.dirty === '1';
+      if (!isDirty) {
+        if (ip) ip.value = String(toNum(produto));
+        current.valor_produto = toNum(produto);
+        changed = true; patch.valor_produto = toNum(produto);
+      }
+      setFirst(['#ml-product-sum','.js-ml-produto'], moneyBRL(produto));
+    }
+
+    // Order ID
+    if (order.id || order.order_id) {
+      var oid = String(order.id || order.order_id);
+      if (setFirst(ORDER_ID_SELECTORS, oid)) { current.id_venda = oid; patch.id_venda = oid; }
+    }
+
+    return { changed: changed, patch: patch, orderApplied: order };
+  }
+
+  // === Fallback quando /claims/:id/returns/enriched não existir (404) ===
   function fetchClaimBasic(claimId){
     var nk = sellerNick();
     var q  = nk ? ('?nick=' + encodeURIComponent(nk)) : '';
@@ -974,17 +1059,42 @@
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
       .then(function(j){ return (j && (j.data || j.claim || j)) || {}; });
   }
+
   function fallbackEnrichmentFromClaim(claimId){
     return fetchClaimBasic(claimId).then(function(claim){
       try { fillClaimUI(claim); } catch(_){}
-      return fetchAndApplyReturnCost(String(claimId), { persist: true }).then(function(){
+      var ordId = claim && (claim.resource_id || (claim.order && claim.order.id)) || readFirst(ORDER_ID_SELECTORS) || current.id_venda || qs.get('order_id');
+
+      // 1) return-cost
+      var p1 = fetchAndApplyReturnCost(String(claimId), { persist: true });
+
+      // 2) order → preencher cliente, sku, data, valor produto
+      var p2 = Promise.resolve().then(function(){
+        if (!ordId) return null;
+        return fetchOrderBasic(String(ordId)).then(function(order){
+          var res = applyOrderToUi(order || {});
+          // persist meta/valores se veio algo
+          var idp = current.id || returnId;
+          var toPersist = Object.assign({}, res.patch);
+          if (Object.keys(toPersist).length && idp) {
+            return fetch('/api/returns/' + encodeURIComponent(idp), {
+              method: 'PATCH',
+              headers: { 'Content-Type':'application/json' },
+              body: JSON.stringify(Object.assign({}, toPersist, { updated_by: 'frontend-order-fallback' }))
+            }).catch(function(){});
+          }
+        });
+      });
+
+      // 3) preencher summary “visual”
+      var p3 = Promise.resolve().then(function(){
         var el = $('ml-return-cost');
         var brl = el && el.dataset && el.dataset.value ? Number(el.dataset.value) : null;
         var rc  = (brl != null) ? { amount: brl } : null;
-        var ordId = claim && (claim.resource_id || (claim.order && claim.order.id)) || null;
-        fillMlSummary({ order: ordId ? { id: ordId, order_id: ordId } : null, return_cost: rc, sources: { claim_id: claimId } });
-        return { orders: [], return_cost: rc, summary: {} };
+        fillMlSummary({ order: ordId ? { id: ordId, order_id: ordId, seller: claim.seller } : null, return_cost: rc, sources: { claim_id: claimId } });
       });
+
+      return Promise.all([p1,p2,p3]).then(function(){ return { ok:true }; });
     });
   }
 
@@ -1014,7 +1124,7 @@
             var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
             if (!r.ok) {
               if (r.status === 404) {
-                if (qs.has('debug')) console.warn('[enriched] 404 — usando fallback claim+return-cost');
+                if (qs.has('debug')) console.warn('[enriched] 404 — usando fallback claim+order+return-cost');
                 return fallbackEnrichmentFromClaim(cId); // <- Fallback aqui
               }
               var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status));
@@ -1025,6 +1135,7 @@
         });
     }
 
+    // Resolve claimId
     var claimPromise;
     if (typedClaimId) {
       claimPromise = Promise.resolve(String(typedClaimId).replace(/\D+/g,''));
@@ -1041,25 +1152,24 @@
         return enrichedFetchByClaim(claimId).then(function(j){ return { claimId: claimId, payload: j }; });
       })
       .then(function(res){
+        // Se veio do fallback, res.payload pode ser {ok:true}. Só seguir reload/persist.
         var j = res.payload || {};
-        try {
-          var anyOrder = (j.orders && j.orders[0]) || null;
-          var ordMeta = anyOrder ? { id: anyOrder.order_id } : null;
-          fillMlSummary({ order: ordMeta, return_cost: j.return_cost, sources: { claim_id: res.claimId } });
-        } catch(_){}
+        var gotOrders = Array.isArray(j.orders) && j.orders.length;
+        var product = null, freight = null;
 
-        var product = null;
-        if (Array.isArray(j.orders) && j.orders.length) {
+        if (gotOrders) {
           product = j.orders.reduce(function(acc, o){
             var p = (o.total_paid != null ? toNum(o.total_paid) : toNum(o.unit_price) * toNum(o.quantity || 1));
             return acc + (isFinite(p) ? p : 0);
           }, 0);
         }
-        var freight = (j.return_cost && j.return_cost.amount != null) ? toNum(j.return_cost.amount) : null;
+        if (j.return_cost && j.return_cost.amount != null) freight = toNum(j.return_cost.amount);
 
         var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
         var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
-        var changed = false;
+
+        var changed = false, gotAny = (product !== null) || (freight !== null);
+
         if (product !== null && toNum(product) !== toNum(current.valor_produto)) { current.valor_produto = toNum(product); if (ip && ip.dataset.dirty!=='1')  { ip.value  = String(current.valor_produto); changed = true; } }
         if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   { current.valor_frete   = toNum(freight); if (ifr && ifr.dataset.dirty!=='1'){ ifr.value = String(current.valor_frete);   changed = true; } }
 
@@ -1068,27 +1178,16 @@
           toast('Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados' +
                ((product !== null) ? ' · produto ' + moneyBRL(product) : '') +
                ((freight !== null) ? ' · frete '   + moneyBRL(freight) : ''), 'success');
+        } else if (!gotAny) {
+          toast('ML não retornou valores de produto/frete para este claim.', 'info');
         } else {
           toast('Valores do ML já estavam corretos.', 'info');
         }
 
-        var patch = {};
-        if (Array.isArray(j.orders) && j.orders.length) {
-          var ord = j.orders[0];
-          if (!current.id_venda) patch.id_venda = ord.order_id;
-          var sku = ord.item_id ? String(ord.item_id).toUpperCase() : null;
-          if (!current.sku && sku) patch.sku = sku;
-        }
-        if (Object.keys(patch).length) {
-          if (patch.id_venda) setFirst(ORDER_ID_SELECTORS, patch.id_venda);
-          if (patch.sku) setFirst(['#sku','input[name="sku"]','.js-sku'], patch.sku, { upper:true });
-          current = Object.assign({}, current, patch);
-        }
-
+        // Persist
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
         if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
-
         var persistMoney = Promise.resolve();
         if (Object.keys(amountsPatch).length && (current.id || returnId)) {
           var body = Object.assign({}, amountsPatch, { updated_by: 'frontend-auto-enrich' });
@@ -1096,12 +1195,11 @@
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).catch(function(){});
         }
-        var persistMeta = persistMetaPatch(patch);
 
         tryFetchClaimDetails(res.claimId);
         fetchAndApplyReturnCost(res.claimId, { persist: true });
 
-        return Promise.all([persistMoney, persistMeta]);
+        return Promise.all([persistMoney]);
       })
       .then(function(){ return reloadCurrent(); })
       .catch(function (e) {
@@ -1120,7 +1218,6 @@
     return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
       .then(function(r){
         if (r.status === 404) {
-          // fallback: inicializa estado mínimo e não trava fluxo
           current = { id: returnId };
           return Promise.reject(Object.assign(new Error('404'), { status: 404 }));
         }
