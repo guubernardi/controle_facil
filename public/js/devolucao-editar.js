@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + campos essenciais
+// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + campos essenciais + fix 404 timeline
 (function () {
   /* ================= Helpers ================= */
   var $  = function (id) { return document.getElementById(id); };
@@ -213,6 +213,8 @@
   }
 
   var current = {};
+  // controla se existe linha local (evita 404 em /events)
+  var hasLocalRow = false;
 
   function sellerNick(){
     var ln = (current && current.loja_nome) ? String(current.loja_nome) : '';
@@ -321,9 +323,49 @@
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
     return null;
   }
-  function fetchJsonOk(url){
-    return fetch(url, { headers: { 'Accept':'application/json' } })
-      .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)); });
+
+  // === faltavam no seu arquivo:
+  function lockMotivo(lock, hint){
+    var sel = getMotivoSelect(); if (!sel) return;
+    sel.disabled = !!lock;
+    var id = 'motivo-hint';
+    var hintEl = document.getElementById(id);
+    if (lock) {
+      if (!hintEl){
+        hintEl = document.createElement('small');
+        hintEl.id = id;
+        hintEl.style.marginLeft = '8px';
+        hintEl.style.opacity = '0.8';
+        sel.insertAdjacentElement('afterend', hintEl);
+      }
+      hintEl.textContent = hint || '(automático)';
+      hintEl.hidden = false;
+    } else {
+      if (hintEl) hintEl.hidden = true;
+    }
+  }
+  function setMotivoCanon(canon, lock){
+    var sel = getMotivoSelect(); if (!sel || !canon) return false;
+    // Match por value exato
+    for (var i=0;i<sel.options.length;i++){
+      if (sel.options[i].value === canon) {
+        sel.value = canon; sel.dispatchEvent(new Event('change'));
+        if (lock) lockMotivo(true,'(ML)');
+        return true;
+      }
+    }
+    // Match por label
+    var wanted = (CANON_LABELS[canon] || []).map(norm);
+    for (var j=0;j<sel.options.length;j++){
+      var opt = sel.options[j];
+      var labelN = norm(opt.text || opt.label || '');
+      if (labelN && (labelN === norm(canon) || wanted.indexOf(labelN) >= 0)) {
+        sel.value = opt.value; sel.dispatchEvent(new Event('change'));
+        if (lock) lockMotivo(true,'(ML)');
+        return true;
+      }
+    }
+    return false;
   }
 
   /* ================= Preenchimento UI ================= */
@@ -744,6 +786,13 @@
   }
 
   function refreshTimeline(id){
+    // evita 404: só busca eventos se houver registro local confirmado
+    if (!hasLocalRow) {
+      var elLoad=$('events-loading'), elEmpty=$('events-empty');
+      if (elLoad) elLoad.hidden=true;
+      if (elEmpty) elEmpty.hidden=false;
+      return Promise.resolve();
+    }
     var elLoad=$('events-loading'), elList=$('events-list');
     if (elLoad) elLoad.hidden=false; if (elList) elList.setAttribute('aria-busy','true');
     return fetchEvents(id, 100, 0)
@@ -986,7 +1035,6 @@
         var c = j && (j.data || j.claim || j);
         if (c && typeof c==='object') {
           fillClaimUI(c);
-          // se claim trouxe order, salva pra fallback
           if (c.resource_id && !readFirst(ORDER_ID_SELECTORS)) {
             setFirst(ORDER_ID_SELECTORS, String(c.resource_id));
           }
@@ -1081,13 +1129,12 @@
           }).catch(function(){});
         }
 
-        tryFetchClaimDetails(res.claimId);               // detalhes para motivo/status
-        fetchAndApplyReturnCost(res.claimId, { persist: true }); // frete devolução
+        tryFetchClaimDetails(res.claimId);
+        fetchAndApplyReturnCost(res.claimId, { persist: true });
 
         // === FALLBACK via ORDER quando ainda faltam campos/valores ===
         var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id);
         if (!orderId) {
-          // às vezes vem em claim.resource_id mas só depois do tryFetchClaimDetails
           orderId = (current.raw && (current.raw.order_id || current.raw.resource_id)) || null;
         }
         if (needsEnrichment(Object.assign({}, current, capture()))) {
@@ -1119,12 +1166,17 @@
       .then(function(r){
         if (r.status === 404) {
           current = { id: returnId };
+          hasLocalRow = false;
           return Promise.reject(Object.assign(new Error('404'), { status: 404 }));
         }
         if (!r.ok) throw new Error('HTTP '+r.status);
         return r.json();
       })
-      .then(function (j) { var data = (j && (j.data || j.item || j.return || j)) || j || {}; normalizeAndSet(data); })
+      .then(function (j) {
+        var data = (j && (j.data || j.item || j.return || j)) || j || {};
+        hasLocalRow = true;
+        normalizeAndSet(data);
+      })
       .catch(function (e) {
         if (e && e.status === 404) return; // seguimos com enrich
         throw e;
@@ -1162,7 +1214,7 @@
         if (cid && !(current.raw && current.raw.claim)) tryFetchClaimDetails(cid);
         if (cid) fetchAndApplyReturnCost(String(cid), { persist: true });
 
-        return (current.id || returnId) ? refreshTimeline(current.id || returnId) : null;
+        return hasLocalRow ? refreshTimeline(current.id || returnId) : null;
       })
       .catch(function (e) {
         var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>'+(e.message || 'Falha ao carregar.')+'</b></div>';
