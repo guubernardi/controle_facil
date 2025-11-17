@@ -1,10 +1,9 @@
-// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + campos essenciais + fix 404 timeline + buyer name fallback
+// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente
 (function () {
-  /* ================= Helpers ================= */
+  /* =============== Helpers =============== */
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
 
-  // ID da devolução (aceita ?id=, ?return_id=, /devolucoes/123, /returns/123)
   var returnId = (function () {
     var qid = qs.get('id') || qs.get('return_id');
     if (qid) return String(qid).replace(/\D+/g,'');
@@ -14,9 +13,9 @@
     return tail || '';
   })();
 
-  // seletores canônicos
   var ORDER_ID_SELECTORS = ['#id_venda','input[name="id_venda"]','.js-order-id','#numero_pedido','input[name="numero_pedido"]','#order_id','input[name="order_id"]'];
   var CLAIM_ID_SELECTORS = ['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id','#claim_id','input[name="claim_id"]'];
+  var CLIENTE_SELECTORS  = ['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'];
 
   function pickEl(sel) {
     if (!sel) return null;
@@ -30,7 +29,6 @@
     }
     return null;
   }
-  // === FIX 1: setFirst não-destrutivo (não sobrescreve com vazio / respeita dirty) ===
   function setFirst(selectors, value, opts) {
     var el = getFirst(selectors); if (!el) return false;
     var incomingEmpty = (value === undefined || value === null || (typeof value === 'string' && value.trim() === ''));
@@ -51,7 +49,10 @@
   function readFirst(selectors, toNumFlag) {
     var el = getFirst(selectors); if (!el) return null;
     var v = ('value' in el) ? el.value : el.textContent;
-    return toNumFlag ? toNum(v) : (v == null ? null : String(v).trim());
+    v = (v == null ? '' : String(v).trim());
+    // trata placeholder "—" como vazio
+    if (v === '—') v = '';
+    return toNumFlag ? toNum(v) : v;
   }
   function bindDirty(el){
     if (!el || el.__dirtyBound) return;
@@ -126,7 +127,7 @@
     if (sep) sep.hidden = false;
   }
 
-  /* ================= Regras de cálculo ================= */
+  /* =============== Regras =============== */
   function calcTotalByRules(d){
     var st = String(d.status || '').toLowerCase();
     var mot= String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
@@ -139,7 +140,7 @@
     return vp + vf;
   }
 
-  /* ================= Normalização ================= */
+  /* =============== Normalização =============== */
   function siteIdToName(siteId){ var map={MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre'}; return map[siteId] || 'Mercado Livre'; }
   function firstNonEmpty(){ for (var i=0;i<arguments.length;i++){ var v=arguments[i]; if(v!==undefined && v!==null && String(v).trim()!=='') return v; } return null; }
   function findWarehouseReceivedAt(j){
@@ -159,8 +160,7 @@
   function normalize(j){
     var sellerName =
       (j.seller && (j.seller.nickname || j.seller.name || j.seller.nick_name)) ||
-      j.seller_nickname || j.sellerNick || j.seller_nick || j.nickname ||
-      j.seller_name || j.store_name || null;
+      j.seller_nickname || j.nickname || j.seller_name || j.store_name || null;
 
     var buyerName  =
       (j.buyer && (
@@ -212,14 +212,13 @@
       valor_produto: toNum(vpRaw),
       valor_frete:   toNum(vfRaw),
       log_status:    logAtual,
-      cd_recebido_em: receivedAtFrom(j),
+      cd_recebido_em: recebidoDe(j),
       cd_responsavel: recebResp
     };
-    function receivedAtFrom(_j){ return recebCdEm; }
+    function recebidoDe(_j){ return recebCdEm; }
   }
 
   var current = {};
-  // controla se existe linha local (evita 404 em /events)
   var hasLocalRow = false;
 
   function sellerNick(){
@@ -247,7 +246,7 @@
     var selMot = getMotivoSelect();
     return {
       id_venda:        readFirst(ORDER_ID_SELECTORS),
-      cliente_nome:    readFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome']),
+      cliente_nome:    readFirst(CLIENTE_SELECTORS),
       loja_nome:       readFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
       data_compra:     readFirst(['#data_compra','input[name="data_compra"]','.js-data']),
       status:          readFirst(['#status','select[name="status"]']),
@@ -270,7 +269,7 @@
     updateSummary(Object.assign({}, current, d));
   }
 
-  /* ================= Motivo (canon) ================= */
+  /* =============== Motivo (canon) =============== */
   function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
   function norm(s){
     s = stripAcc(String(s||'').toLowerCase());
@@ -297,8 +296,8 @@
   var REASONKEY_TO_CANON = {
     product_defective:'produto_defeituoso',not_working:'produto_defeituoso',broken:'produto_defeituoso',
     damaged:'produto_danificado',damaged_in_transit:'produto_danificado',
-    different_from_publication:'nao_corresponde',not_as_described:'nao_corresponde',wrong_item:'nao_corresponde',different_from_listing:'nao_corresponde',different_from_ad:'nao_corresponde',different_item:'nao_corresponde',missing_parts:'nao_corresponde',parts_missing:'nao_corresponde',incomplete:'nao_corresponde',incomplete_product:'nao_corresponde',
-    buyer_remorse:'arrependimento_cliente',changed_mind:'arrependimento_cliente',change_of_mind:'arrependimento_cliente',buyer_changed_mind:'arrependimento_cliente',doesnt_fit:'arrependimento_cliente',size_issue:'arrependimento_cliente',buyer_doesnt_want:'arrependimento_cliente',doesnt_want:'arrependimento_cliente',buyer_no_longer_wants:'arrependimento_cliente',no_longer_wants:'arrependimento_cliente',no_longer_needed:'arrependimento_cliente',not_needed_anymore:'arrependimento_cliente',not_needed:'arrependimento_cliente',unwanted:'arrependimento_cliente',repentant_buyer:'arrependimento_cliente',
+    different_from_publication:'nao_corresponde',not_as_described:'nao_corresponde',wrong_item:'nao_corresponde',different_from_listing:'nao_corresponde',different_from_ad:'nao_corresponde',different_item:'nao_corresponde',missing_parts:'nao_corresponde',parts_missing:'nao_corresponde',incomplete:'nao_corresponde',
+    buyer_remorse:'arrependimento_cliente',
     not_delivered:'entrega_atrasada',shipment_delayed:'entrega_atrasada'
   };
   var REASONNAME_TO_CANON = {
@@ -320,17 +319,16 @@
     var t = norm(text);
     if (!t) return null;
     if (/faltam\s+partes\s+ou\s+acess[oó]rios\s+do\s+produto/.test(t)) return 'nao_corresponde';
-    if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|nao\s*quero\s*mais|não\s*quero\s*mais|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|repentant|no\s*longer\s*wants?|no\s*longer\s*need(?:ed)?|doesn.?t\s*want)/.test(t)) return 'arrependimento_cliente';
-    if (/(nao\s*serv|não\s*serv|tamanho|size|doesn.?t\s*fit|size\s*issue)/.test(t)) return 'arrependimento_cliente';
-    if (/(defeit|nao\s*funciona|não\s*funciona|not\s*working|doesn.?t\s*work|broken|quebrad|queimad|parad)/.test(t)) return 'produto_defeituoso';
-    if (/(danific|avariad|amassad|shipping\s*damage|carrier\s*damage|in\s*transit)/.test(t)) return 'produto_danificado';
-    if (/(diferent[ea]|anunciad|publicad|descri[cç][aã]o|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described|different\s*from\s*(?:publication|ad|listing)|trocad|produto\s*errad|item\s*errad|modelo\s*diferent|tamanho\s*diferent|cor\s*diferent|incomplet[oa]|falt(?:a|am)\s*(?:pecas|pe[cç]as|partes|acess[oó]rios)|sem\s*(?:pecas|pe[cç]as|partes|acess[oó]rios)|faltando)/.test(t)) return 'nao_corresponde';
-    if (/(nao\s*entreg|não\s*entreg|delayed|not\s*delivered|undelivered|shipment\s*delay)/.test(t)) return 'entrega_atrasada';
+    if (/(nao\s*(o\s*)?quer\s*mais|não\s*(o\s*)?quer\s*mais|mudou\s*de\s*ideia|changed\s*mind|buyer\s*remorse|no\s*longer\s*wants?)/.test(t)) return 'arrependimento_cliente';
+    if (/(nao\s*serv|não\s*serv|tamanho|size|doesn.?t\s*fit)/.test(t)) return 'arrependimento_cliente';
+    if (/(defeit|nao\s*funciona|não\s*funciona|not\s*working|broken)/.test(t)) return 'produto_defeituoso';
+    if (/(danific|avariad|in\s*transit)/.test(t)) return 'produto_danificado';
+    if (/(diferent[ea]|nao\s*correspond|não\s*correspond|wrong\s*item|not\s*as\s*described)/.test(t)) return 'nao_corresponde';
+    if (/(nao\s*entreg|não\s*entreg|delayed|not\s*delivered)/.test(t)) return 'entrega_atrasada';
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
     return null;
   }
 
-  // controles do select de motivo
   function lockMotivo(lock, hint){
     var sel = getMotivoSelect(); if (!sel) return;
     sel.disabled = !!lock;
@@ -352,7 +350,6 @@
   }
   function setMotivoCanon(canon, lock){
     var sel = getMotivoSelect(); if (!sel || !canon) return false;
-    // Match por value exato
     for (var i=0;i<sel.options.length;i++){
       if (sel.options[i].value === canon) {
         sel.value = canon; sel.dispatchEvent(new Event('change'));
@@ -360,7 +357,6 @@
         return true;
       }
     }
-    // Match por label
     var wanted = (CANON_LABELS[canon] || []).map(norm);
     for (var j=0;j<sel.options.length;j++){
       var opt = sel.options[j];
@@ -374,11 +370,11 @@
     return false;
   }
 
-  /* ================= Preenchimento UI ================= */
+  /* =============== UI fill =============== */
   function fill(d){
     var dvId=$('dv-id'); if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
 
-    [getFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome']),
+    [getFirst(CLIENTE_SELECTORS),
      getFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
      getFirst(ORDER_ID_SELECTORS),
      getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
@@ -387,7 +383,7 @@
     upperSKUInstant();
 
     setFirst(ORDER_ID_SELECTORS, d.id_venda);
-    setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], d.cliente_nome);
+    setFirst(CLIENTE_SELECTORS, d.cliente_nome);
     setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], d.loja_nome);
     var dataStr = d.data_compra ? String(d.data_compra).slice(0,10) : '';
     setFirst(['#data_compra','input[name="data_compra"]','.js-data'], dataStr);
@@ -424,7 +420,7 @@
     updateSummary(d); recalc();
   }
 
-  // resumo ML
+  /* =============== Resumo ML =============== */
   function fillMlSummary(payload){
     var order = payload && (payload.order || payload.order_info);
     var amounts = payload && payload.amounts;
@@ -449,7 +445,6 @@
     setFirst(['#ml-product-sum','.js-ml-produto'], prodSum != null ? moneyBRL(prodSum) : moneyBRL(current.valor_produto || 0));
     setFirst(['#ml-freight','.js-ml-frete'],     freight != null ? moneyBRL(freight) : moneyBRL(current.valor_frete || 0));
 
-    // link do claim
     var claimId = (payload && payload.sources && payload.sources.claim_id) || readFirst(CLAIM_ID_SELECTORS);
     var a = $('claim-open-link');
     if (a) {
@@ -475,7 +470,7 @@
                     sources: { claim_id: (current.raw && (current.raw.ml_claim_id || current.raw.claim_id)) || null } });
   }
 
-  // Claim UI (resumo básico + motivo)
+  /* =============== Claim UI =============== */
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
   function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
@@ -487,7 +482,6 @@
   }
   function fillClaimUI(claim){
     if (!claim || typeof claim !== 'object') return;
-
     setTxt('claim-id',         claim.id);
     setTxt('claim-status',     claim.status);
     setTxt('claim-type',       claim.type);
@@ -544,10 +538,9 @@
     if (claim.id) fetchAndApplyReturnCost(String(claim.id), { persist: true });
   }
 
-  /* ========== FALLBACK de NOME DO COMPRADOR ========== */
+  /* =============== Nome do comprador: fallbacks =============== */
   function guessBuyerNameFromOrder(ord){
     try {
-      // 1) dados diretos do pedido
       var direct =
         (ord && ord.buyer && (
           (ord.buyer.first_name && ord.buyer.last_name
@@ -557,11 +550,8 @@
         )) ||
         (ord && ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name);
       if (direct) return Promise.resolve(String(direct).trim());
-
-      // 2) consulta /api/ml/users/:id para pegar nickname/nome
       var buyerId = ord && ord.buyer && (ord.buyer.id || ord.buyer.user_id);
       if (!buyerId) return Promise.resolve(null);
-
       return fetch('/api/ml/users/' + encodeURIComponent(buyerId), { headers:{ 'Accept':'application/json' } })
         .then(function(r){ return r.ok ? r.json() : null; })
         .then(function(u){
@@ -574,8 +564,34 @@
       return Promise.resolve(null);
     }
   }
+  function setBuyerName(name, persist){
+    if (!name) return;
+    if (setFirst(CLIENTE_SELECTORS, name)) {
+      current.cliente_nome = name;
+    }
+    if (persist && (current.id || returnId)) {
+      fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ cliente_nome: name, updated_by:'frontend-buyername' })
+      }).catch(function(){});
+    }
+  }
+  function ensureBuyerName(opts){
+    opts = opts || {};
+    var existing = readFirst(CLIENTE_SELECTORS);
+    if (existing) return Promise.resolve(existing);
+    var ordId = readFirst(ORDER_ID_SELECTORS) || (current.raw && (current.raw.order_id || current.raw.resource_id)) || qs.get('order_id');
+    if (!ordId) return Promise.resolve(null);
+    return fetchOrderInfo(String(ordId).replace(/\D+/g,'')).then(function(ord){
+      if (!ord) return null;
+      return guessBuyerNameFromOrder(ord).then(function(name){
+        if (name) setBuyerName(name, true);
+        return name;
+      });
+    });
+  }
 
-  /* =========== FALLBACK via ORDER (preenche produto/frete/cliente/SKU/data/loja) =========== */
+  /* =============== Order fallback =============== */
   function fetchOrderInfo(orderId){
     if (!orderId) return Promise.resolve(null);
     var nk = sellerNick();
@@ -601,15 +617,12 @@
     return next();
   }
 
-  // === FIX 2: applyOrderToUi passa a aguardar persistências e devolver Promise<boolean> ===
   function applyOrderToUi(ord, opts){
     opts = opts || {};
     if (!ord || typeof ord !== 'object') return Promise.resolve(false);
 
-    // loja/nick
     var nick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || null;
 
-    // sku
     var sku = null;
     if (Array.isArray(ord.order_items) && ord.order_items.length) {
       var it0 = ord.order_items[0];
@@ -617,10 +630,8 @@
       sku = it0.seller_sku || it0.variation_sku || it.seller_sku || it.sku || it.id || null;
     }
 
-    // datas
     var when = ord.date_created || ord.paid_at || ord.created_at || null;
 
-    // valores
     var product = null;
     if (Array.isArray(ord.order_items) && ord.order_items.length) {
       product = ord.order_items.reduce(function(acc, oi){
@@ -646,24 +657,15 @@
       freight = (freight != null) ? toNum(freight) : null;
     }
 
-    // >>> Nome do comprador com fallback (inclui chamada /users/:id)
     return guessBuyerNameFromOrder(ord).then(function(buyerName){
       var changed = false;
 
-      // aplica nos inputs (respeitando dirty)
-      if (buyerName) {
-        if (setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], buyerName)) changed = true;
-      }
+      if (buyerName) { if (setFirst(CLIENTE_SELECTORS, buyerName)) { current.cliente_nome = buyerName; changed = true; } }
       if (nick && !current.loja_nome) {
         if (setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], 'Mercado Livre · ' + nick)) changed = true;
       }
-      if (when) {
-        if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], String(when).slice(0,10))) changed = true;
-      }
-      if (sku) {
-        if (setFirst(['#sku','input[name="sku"]','.js-sku'], String(sku).toUpperCase(), {upper:true})) changed = true;
-        current.sku = String(sku).toUpperCase();
-      }
+      if (when) { if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], String(when).slice(0,10))) changed = true; }
+      if (sku)  { if (setFirst(['#sku','input[name="sku"]','.js-sku'], String(sku).toUpperCase(), {upper:true})) { current.sku = String(sku).toUpperCase(); changed = true; } }
 
       var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
       var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
@@ -676,9 +678,9 @@
         toast('Dados do pedido aplicados do ML.', 'success');
       }
 
-      // persist meta/amounts
+      // persist — agora compara e atualiza se mudou
       var patchMeta = {};
-      if (buyerName && !current.cliente_nome) patchMeta.cliente_nome = buyerName;
+      if (buyerName && buyerName !== current.cliente_nome) patchMeta.cliente_nome = buyerName;
       if (nick && !current.loja_nome) patchMeta.loja_nome = 'Mercado Livre · ' + nick;
       if (when && !current.data_compra) patchMeta.data_compra = when;
       if (sku && !current.sku) patchMeta.sku = String(sku).toUpperCase();
@@ -707,7 +709,7 @@
     });
   }
 
-  /* ================= Return-cost (ML) ================= */
+  /* =============== Return-cost =============== */
   function showReturnCostInUi(data){
     if (!data) return;
     var brl = toNum(data.amount);
@@ -733,7 +735,7 @@
           body: JSON.stringify({ valor_frete: toNum(brlAmount), updated_by: 'frontend-ml-return-cost' })
         }).catch(function(){});
       }
-      toast('Frete de devolução (ML) aplicado: ' + moneyBRL(brlAmount), 'success');
+      toast('Frete de devolução (ML) aplicado: ' ' + moneyBRL(brlAmount), 'success');
       return true;
     }
     return false;
@@ -752,7 +754,7 @@
       })
       .then(function(r){ return r.json().then(function(j){ return { ok:r.ok, body:j }; }); })
       .then(function(res){
-        if (!res.ok) { if (qs.has('debug')) console.warn('[return-cost] erro', res.body); return; }
+        if (!res.ok) return;
         var data = (res.body && res.body.data) || res.body || {};
         showReturnCostInUi(data);
         applyReturnCostToFreight(toNum(data.amount), { persist: opts.persist });
@@ -760,10 +762,8 @@
       .catch(function(){});
   }
 
-  /* ================= Timeline ================= */
+  /* =============== Timeline =============== */
   function coerceEventsPayload(j){ if (Array.isArray(j)) return j; if (!j || typeof j !== 'object') return []; return j.items || j.events || j.data || []; }
-
-  // devolve { ok, items } — para sabermos se devemos limpar a UI ou mantê-la
   function fetchEvents(id, limit, offset){
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
@@ -778,7 +778,6 @@
       })
       .catch(function(){ return { ok:false, items:null }; });
   }
-
   function fmtRel(iso){
     var d = new Date(iso); if (isNaN(d)) return '';
     var diffMs = Date.now() - d.getTime(); var abs = Math.abs(diffMs);
@@ -789,7 +788,6 @@
     return d.toLocaleString('pt-BR');
   }
   function iconFor(type){ if (type==='status') return '🛈'; if (type==='note') return '📝'; if (type==='warn') return '⚠️'; if (type==='error') return '⛔'; return '•'; }
-
   function renderEvents(items){
     var wrap=$('events-list'), elLoad=$('events-loading'), elEmpty=$('events-empty');
     if (!wrap) return;
@@ -823,8 +821,6 @@
       if (meta && meta.log_status)       metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">log: <b>'+ meta.log_status +'</b></span>');
       if (meta && meta.cd && meta.cd.responsavel)  metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">CD: '+ meta.cd.responsavel +'</span>');
       if (meta && meta.cd && meta.cd.receivedAt)   metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">recebido: '+ new Date(meta.cd.receivedAt).toLocaleString('pt-BR') +'</span>');
-      if (meta && meta.cd && meta.cd.unreceivedAt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">removido: '+ new Date(meta.cd.unreceivedAt).toLocaleString('pt-BR') +'</span>');
-      if (meta && meta.cd && meta.cd.inspectedAt)  metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">inspecionado: '+ new Date(meta.cd.inspectedAt).toLocaleString('pt-BR') +'</span>');
 
       var reasonTxt =
         (meta && (meta.reason_name || meta.reason || meta.tipo_reclamacao ||
@@ -834,11 +830,9 @@
       frag.appendChild(item);
     });
 
-    // limpa e aplica novo conteúdo (apenas em resposta OK)
     $('events-list').innerHTML='';
     $('events-list').appendChild(frag);
   }
-
   function refreshTimeline(id){
     if (!hasLocalRow) {
       var elLoad=$('events-loading'), elEmpty=$('events-empty');
@@ -854,22 +848,17 @@
 
     return fetchEvents(id, 100, 0)
       .then(function(res){
-        if (!res.ok) { // 404/500 -> mantém UI atual
-          if (elList) elList.innerHTML = previousHTML;
-          return;
-        }
+        if (!res.ok) { if (elList) elList.innerHTML = previousHTML; return; }
         renderEvents(res.items || []);
       })
-      .catch(function(){
-        if (elList) elList.innerHTML = previousHTML;
-      })
+      .catch(function(){ if (elList) elList.innerHTML = previousHTML; })
       .then(function(){
         if (elLoad) elLoad.hidden=true;
         if (elList) elList.setAttribute('aria-busy','false');
       });
   }
 
-  /* ================= Ações header ================= */
+  /* =============== Header actions =============== */
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
   ['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto',
@@ -891,7 +880,6 @@
 
   var btnSalvar=$('btn-salvar'); if (btnSalvar) btnSalvar.addEventListener('click', save);
 
-  // Botão "Aplicar" (marcação rápida)
   var btnMark=$('btn-mark');
   if (btnMark) {
     btnMark.addEventListener('click', function(){
@@ -918,7 +906,7 @@
       .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
   }
 
-  /* ================= Save ================= */
+  /* =============== Save =============== */
   function save(){
     var body = capture();
     var id = current.id || returnId;
@@ -936,7 +924,7 @@
     .catch(function(e){ toast(e.message || 'Erro ao salvar', 'error'); });
   }
 
-  /* ================= Recebimento no CD ================= */
+  /* =============== Recebimento no CD =============== */
   function runReceive(responsavel, whenIso){
     var id = current.id || returnId;
     if (!id) return;
@@ -989,7 +977,7 @@
     if (nome !== null) runReceive(String(nome).trim());
   }
 
-  /* ================= Inspeção ================= */
+  /* =============== Inspeção =============== */
   function openInspectDialog(targetStatus){
     var dlg = $('dlg-inspecao'); if (!dlg) return performInspectFallback(targetStatus, '');
     var sub = $('insp-sub'), txt = $('insp-text');
@@ -1042,7 +1030,7 @@
     .then(function(){ disableHead(false); });
   }
 
-  /* ================= Enriquecimento (ML) ================= */
+  /* =============== Enrich (ML) =============== */
   var ENRICH_TTL_MS = 10 * 60 * 1000;
   function lojaEhML(nome){ var s=String(nome||'').toLowerCase(); return s.indexOf('mercado')>=0 || s.indexOf('meli')>=0 || s.indexOf('ml')>=0; }
   function parecePedidoML(pedido){ return /^\d{6,}$/.test(String(pedido || '')); }
@@ -1113,7 +1101,7 @@
 
   function enrichFromML(reason){
     reason = reason || 'auto';
-    if (!current || !current.id) current = { id: returnId }; // garante id para persist
+    if (!current || !current.id) current = { id: returnId };
 
     disableHead(true);
     setAutoHint('(buscando valores no ML…)');
@@ -1127,7 +1115,8 @@
       var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
       return fetch(url, { headers: { 'Accept':'application/json' } })
         .then(function(r){
-          if (r.status === 403 && nk) {
+          if ((r.status === 403 || r.status === 429) && nk) {
+            // 403/429 → tenta sem nick (outra conta/limite)
             return fetch('/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true', { headers: { 'Accept':'application/json' } });
           }
           return r;
@@ -1139,15 +1128,11 @@
         });});
     }
 
-    var claimPromise;
-    if (typedClaimId) {
-      claimPromise = Promise.resolve(String(typedClaimId).replace(/\D+/g,''));
-    } else if (typedOrderId) {
-      claimPromise = searchClaimsByOrder(String(typedOrderId).replace(/\D+/g,''))
-        .then(pickLatestClaimId);
-    } else {
-      claimPromise = Promise.resolve(null);
-    }
+    var claimPromise = typedClaimId
+      ? Promise.resolve(String(typedClaimId).replace(/\D+/g,''))
+      : (typedOrderId
+          ? searchClaimsByOrder(String(typedOrderId).replace(/\D+/g,'')).then(pickLatestClaimId)
+          : Promise.resolve(null));
 
     return claimPromise
       .then(function(claimId){
@@ -1179,14 +1164,11 @@
 
         if (changed) {
           recalc(); updateSummary(Object.assign({}, current, capture()));
-          toast('Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados' +
-               ((product !== null) ? ' · produto ' + moneyBRL(product) : '') +
-               ((freight !== null) ? ' · frete '   + moneyBRL(freight) : ''), 'success');
+          toast('Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados', 'success');
         } else {
-          toast('ML não retornou valores de produto/frete para este claim. Tentando pelo pedido…', 'warning');
+          toast('ML não trouxe valores. Tentando pelo pedido…', 'warning');
         }
 
-        // persist amounts
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
         if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
@@ -1197,26 +1179,19 @@
           }).catch(function(){});
         }
 
-        tryFetchClaimDetails(res.claimId);               // detalhes para motivo/status
-        fetchAndApplyReturnCost(res.claimId, { persist: true }); // frete devolução
+        tryFetchClaimDetails(res.claimId);
+        fetchAndApplyReturnCost(res.claimId, { persist: true });
 
-        // === FALLBACK via ORDER quando ainda faltam campos/valores ===
-        var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id);
-        if (!orderId) {
-          // às vezes vem em claim.resource_id mas só depois do tryFetchClaimDetails
-          orderId = (current.raw && (current.raw.order_id || current.raw.resource_id)) || null;
-        }
+        var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id) || (current.raw && (current.raw.order_id || current.raw.resource_id));
         if (needsEnrichment(Object.assign({}, current, capture()))) {
-          return fetchOrderInfo(orderId).then(function(ord){
-            if (ord) return applyOrderToUi(ord, {persist:true});
-          });
+          return orderId ? fetchOrderInfo(orderId).then(function(ord){ if (ord) return applyOrderToUi(ord, {persist:true}); }) : null;
         }
       })
-      // === FIX 3: recarrega do banco somente quando já existir linha local ===
       .then(function(){ if (hasLocalRow) return reloadCurrent(); })
       .catch(function (e) {
-        // Se enriched falhou (404/403), tentar direto pelo pedido digitado
-        var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id');
+        // 429/403/404 → fallback via pedido
+        if (e && (e.status === 429 || e.status === 403)) toast('Limite do ML (429/403). Usando fallback do pedido…', 'warning');
+        var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id') || (current.raw && (current.raw.order_id || current.raw.resource_id));
         if (orderId) {
           return fetchOrderInfo(String(orderId).replace(/\D+/g,''))
             .then(function(ord){
@@ -1226,18 +1201,21 @@
                 });
               }
             })
+            .then(function(){ return ensureBuyerName({ persist:true }); })
             .catch(function(){});
         }
-        if (e && e.status === 404) toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
-        else toast((e && e.message) || 'Não foi possível obter dados do ML', 'error');
+        if (e && e.status === 404) toast('Sem dados do ML para esta devolução.', 'warning');
+        else if (e) toast(e.message || 'Falha no ML', 'error');
+      })
+      .then(function(){
+        // garante nome mesmo após enrich
+        return ensureBuyerName({ persist:true });
       })
       .then(function(){ setAutoHint(''); disableHead(false); });
   }
 
-  /* ================= API local ================= */
-  function safeJson(res){ if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status)); if (res.status === 204) return {}; return res.json(); }
+  /* =============== API local =============== */
   function normalizeAndSet(j){ var n = normalize(j); current = n; fill(n); if (qs.has('debug')) try{ console.debug('[devolucao-editar] raw->norm', j, n);}catch(e){} }
-
   function reloadCurrent(){
     if (!returnId) return Promise.resolve();
     return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
@@ -1256,12 +1234,12 @@
         normalizeAndSet(data);
       })
       .catch(function (e) {
-        if (e && e.status === 404) return; // seguimos com enrich
+        if (e && e.status === 404) return; // segue com enrich
         throw e;
       });
   }
 
-  /* ================= Load inicial ================= */
+  /* =============== Load =============== */
   function load(){
     if (!returnId) {
       var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>ID não informado.</b></div>'; return;
@@ -1273,7 +1251,7 @@
          getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
         ].forEach(bindDirty);
       })
-      .catch(function(){ /* 404 tratado em reloadCurrent */ })
+      .catch(function(){})
       .then(function(){
         var needMotivoConvert = !!current.tipo_reclamacao && !/_/.test(String(current.tipo_reclamacao)) && current.tipo_reclamacao !== 'nao_corresponde';
         var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda) || !!readFirst(CLAIM_ID_SELECTORS) || !!qs.get('order_id') || !!qs.get('claim_id');
@@ -1294,6 +1272,7 @@
 
         return hasLocalRow ? refreshTimeline(current.id || returnId) : null;
       })
+      .then(function(){ return ensureBuyerName({ persist:true }); })
       .catch(function (e) {
         var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>'+(e.message || 'Falha ao carregar.')+'</b></div>';
       });
