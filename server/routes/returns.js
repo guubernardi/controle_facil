@@ -25,19 +25,22 @@ function take(obj, path, dflt=null){
 const FLOW_ALLOWED = new Set([
   'pendente','em_preparacao','em_transporte','recebido_cd',
   'mediacao','disputa','agendado','retorno_comprador',
-  'cancelado','fechado','expirado'
+  'cancelado','fechado','expirado',
+  // usados pela UI para travar botões
+  'aprovado_cd','reprovado_cd'
 ]);
 
 /** Converte qualquer rótulo para um valor aceito pelo CHECK da tabela */
 function canonFlowForDb(s){
-  let v = lower(s).replace(/\s+/g,'_');
+  if (!s) return 'pendente';
+  let v = lower(s).replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
   // sinônimos → valores válidos
   if (v === 'pronto_envio' || v === 'ready_to_ship' || v === 'label_generated') v = 'em_preparacao';
   if (v === 'a_caminho' || v === 'em_transito' || v === 'on_the_way' || v === 'in_transit') v = 'em_transporte';
   if (v === 'entregue' || v === 'delivered' || v === 'recebido_no_cd') v = 'recebido_cd';
   if (v === 'mediation') v = 'mediacao';
   if (v === 'claim' || v === 'opened' || v === 'open') v = 'disputa';
-  if (v === 'canceled') v = 'cancelado';
+  if (v === 'canceled' || v === 'cancelled') v = 'cancelado';
   if (v === 'expired') v = 'expirado';
   if (FLOW_ALLOWED.has(v)) return v;
   return 'pendente';
@@ -62,15 +65,16 @@ async function tableHasColumns(table, cols) {
 async function upsertDevolucao(rec) {
   if (!rec || !rec.id_venda) return { inserted:false, updated:false };
 
-  // garante compatibilidade com o CHECK
   if (rec.log_status) rec.log_status = canonFlowForDb(rec.log_status);
 
   const cols = await tableHasColumns('devolucoes', [
-    'id_venda','ml_claim_id','ml_return_status','ml_shipping_status','log_status',
-    'cliente_nome','valor_produto','valor_frete','created_at','updated_at','loja_nome'
+    'id','id_venda','ml_claim_id','ml_return_status','ml_shipping_status','log_status',
+    'cliente_nome','valor_produto','valor_frete','created_at','updated_at','loja_nome',
+    'data_compra','sku','nfe_numero','nfe_chave','reclamacao',
+    'cd_recebido_em','cd_responsavel'
   ]);
 
-  // UPDATE primeiro
+  // UPDATE por id_venda
   const upd = []; const params = []; let p = 1;
   const add = (k,v)=>{ if(cols[k] && v !== undefined){ upd.push(`${k}=$${p++}`); params.push(v); } };
   add('ml_claim_id',        rec.ml_claim_id ?? null);
@@ -81,6 +85,13 @@ async function upsertDevolucao(rec) {
   add('valor_produto',      rec.valor_produto ?? null);
   add('valor_frete',        rec.valor_frete ?? null);
   add('loja_nome',          rec.loja_nome ?? null);
+  add('data_compra',        rec.data_compra ?? null);
+  add('sku',                rec.sku ?? null);
+  add('nfe_numero',         rec.nfe_numero ?? null);
+  add('nfe_chave',          rec.nfe_chave ?? null);
+  add('reclamacao',         rec.reclamacao ?? null);
+  add('cd_recebido_em',     rec.cd_recebido_em ?? null);
+  add('cd_responsavel',     rec.cd_responsavel ?? null);
   if (cols.updated_at) upd.push('updated_at=now()');
   params.push(rec.id_venda);
 
@@ -100,6 +111,13 @@ async function upsertDevolucao(rec) {
   ins('valor_produto',      rec.valor_produto ?? null);
   ins('valor_frete',        rec.valor_frete ?? null);
   ins('loja_nome',          rec.loja_nome ?? 'Mercado Livre');
+  ins('data_compra',        rec.data_compra ?? null);
+  ins('sku',                rec.sku ?? null);
+  ins('nfe_numero',         rec.nfe_numero ?? null);
+  ins('nfe_chave',          rec.nfe_chave ?? null);
+  ins('reclamacao',         rec.reclamacao ?? null);
+  ins('cd_recebido_em',     rec.cd_recebido_em ?? null);
+  ins('cd_responsavel',     rec.cd_responsavel ?? null);
   if (cols.created_at){ insC.push('created_at'); insV.push(`COALESCE($${i++},now())`); insP.push(rec.created_at ?? null); }
   if (cols.updated_at){ insC.push('updated_at'); insV.push('now()'); }
 
@@ -224,8 +242,8 @@ function flowFromStage(stage){
   return 'pendente';
 }
 function suggestFlow(mlReturnStatus, shipStatus, shipSub){
-  const s = lower(mlReturnStatus);
-  const ship = [lower(shipStatus), lower(shipSub)].join('_');
+  const s = lower(mlReturnStatus||'');
+  const ship = [lower(shipStatus||''), lower(shipSub||'')].join('_');
 
   // returns v2
   if (/^label_generated$|ready_to_ship|etiqueta|prepar/.test(s)) return 'pronto_envio';
@@ -316,9 +334,202 @@ function mapReturnRecord(rec, sellerNick){
   };
 }
 
+/* ================= small utils for local rows ================= */
+async function getReturnRowByIdOrOrder(idOrOrder){
+  const key = String(idOrOrder||'').trim();
+  if (!key) return null;
+  const { rows } = await query(`
+    SELECT *
+      FROM devolucoes
+     WHERE (CAST(id AS text) = $1) OR (CAST(id_venda AS text) = $1)
+     LIMIT 1
+  `,[key]);
+  return rows[0] || null;
+}
+async function updateReturnById(id, patch){
+  const cols = await tableHasColumns('devolucoes', Object.keys(patch).concat(['updated_at']));
+  const sets = []; const params=[]; let p=1;
+  for (const [k,v] of Object.entries(patch)){
+    if (!cols[k]) continue;
+    sets.push(`${k}=$${p++}`); params.push(v);
+  }
+  if (!sets.length) return { rowCount:0 };
+  sets.push(`updated_at=now()`);
+  params.push(id);
+  return query(`UPDATE devolucoes SET ${sets.join(',')} WHERE id=$${p}`, params);
+}
+async function insertLogEvent(devolucaoId, { type='status', title=null, message=null, meta=null, status=null }){
+  const cols = await tableHasColumns('devolucoes_log', ['devolucao_id','type','title','message','meta','status','created_at']);
+  if (!cols.devolucao_id) return;
+  const params=[devolucaoId];
+  const fields=['devolucao_id']; const values=['$1']; let i=2;
+  function put(k,v){ if (cols[k]){ fields.push(k); values.push(`$${i++}`); params.push(v); } }
+  put('type', type);
+  put('title', title);
+  put('message', message);
+  put('meta', meta ? JSON.stringify(meta) : null);
+  put('status', status ? canonFlowForDb(status) : null);
+  if (cols.created_at){ fields.push('created_at'); values.push('now()'); }
+  await query(`INSERT INTO devolucoes_log (${fields.join(',')}) VALUES (${values.join(',')})`, params);
+}
+
 /* ================== sanity / ping ================== */
 router.get('/returns/ping', (_req, res) => {
   res.json({ ok:true, where:'returns', ts:new Date().toISOString() });
+});
+
+/* ================= /returns/:id (GET) ================= */
+router.get('/returns/:id', async (req, res) => {
+  try{
+    const id = req.params.id;
+    const row = await getReturnRowByIdOrOrder(id);
+    if (!row) return res.status(404).json({ error:'not_found' });
+    return res.json(row);
+  }catch(e){
+    return res.status(500).json({ error:String(e?.message||e) });
+  }
+});
+
+/* ================= /returns/:id (PATCH) ================= */
+router.patch('/returns/:id', async (req, res) => {
+  try{
+    const id = req.params.id;
+    const row = await getReturnRowByIdOrOrder(id);
+    if (!row) return res.status(404).json({ error:'not_found' });
+
+    const body = req.body || {};
+    const patch = {};
+    // whitelist de campos aceitos
+    const allow = [
+      'id_venda','cliente_nome','loja_nome','data_compra','sku',
+      'nfe_numero','nfe_chave','reclamacao','tipo_reclamacao',
+      'valor_produto','valor_frete','status','log_status'
+    ];
+    for (const k of allow){
+      if (Object.prototype.hasOwnProperty.call(body,k)){
+        patch[k] = (k === 'valor_produto' || k === 'valor_frete') ? toNumber(body[k])
+                 : (k === 'log_status') ? canonFlowForDb(body[k])
+                 : body[k];
+      }
+    }
+    await updateReturnById(row.id, patch);
+
+    // log opcional
+    const updated_by = body.updated_by || 'frontend';
+    await insertLogEvent(row.id, {
+      type:'status',
+      title:'Atualização',
+      message:`PATCH por ${updated_by}`,
+      meta:{ patch },
+      status: patch.log_status || null
+    });
+
+    const fresh = await getReturnRowByIdOrOrder(row.id);
+    return res.json(fresh);
+  }catch(e){
+    const code = /check constraint/i.test(String(e)) ? 400 : 500;
+    return res.status(code).json({ error:String(e?.message||e) });
+  }
+});
+
+/* ================= /returns/:id/events ================= */
+router.get('/returns/:id/events', async (req, res) => {
+  try{
+    const id = req.params.id;
+    const row = await getReturnRowByIdOrOrder(id);
+    if (!row) return res.status(404).json({ error:'not_found' });
+
+    const limit  = Math.max(1, Math.min(200, parseInt(req.query.limit || '100',10)));
+    const offset = Math.max(0, parseInt(req.query.offset || '0',10));
+
+    const hasLog = await tableHasColumns('devolucoes_log', ['id','devolucao_id','type','title','message','meta','status','created_at']);
+    if (!hasLog.devolucao_id) return res.json({ items: [] });
+
+    const { rows } = await query(`
+      SELECT id, devolucao_id, coalesce(type,'status') AS type, title, message, meta, status, created_at
+        FROM devolucoes_log
+       WHERE devolucao_id=$1
+       ORDER BY created_at DESC, id DESC
+       LIMIT $2 OFFSET $3
+    `,[row.id, limit, offset]);
+
+    const items = rows.map(r => ({
+      id: r.id,
+      type: r.type || 'status',
+      title: r.title || null,
+      message: r.message || null,
+      meta: r.meta,
+      status: r.status || null,
+      createdAt: r.created_at
+    }));
+    return res.json({ items, limit, offset });
+  }catch(e){
+    return res.status(500).json({ error:String(e?.message||e) });
+  }
+});
+
+/* ================= /returns/:id/cd/receive ================= */
+router.patch('/returns/:id/cd/receive', async (req, res) => {
+  try{
+    const id = req.params.id;
+    const row = await getReturnRowByIdOrOrder(id);
+    if (!row) return res.status(404).json({ error:'not_found' });
+
+    const responsavel = String(req.body.responsavel || '').trim() || null;
+    const whenIso     = req.body.when ? new Date(req.body.when).toISOString() : new Date().toISOString();
+    const updated_by  = req.body.updated_by || 'frontend';
+
+    await updateReturnById(row.id, {
+      cd_recebido_em: whenIso,
+      cd_responsavel: responsavel,
+      log_status: canonFlowForDb('recebido_cd')
+    });
+
+    await insertLogEvent(row.id, {
+      type:'status',
+      title:'Recebido no CD',
+      message:`Responsável: ${responsavel || '—'}`,
+      meta:{ cd:{ responsavel, receivedAt: whenIso } },
+      status:'recebido_cd'
+    });
+
+    const fresh = await getReturnRowByIdOrOrder(row.id);
+    return res.json({ ok:true, item:fresh, updated_by });
+  }catch(e){
+    const code = /check constraint/i.test(String(e)) ? 400 : 500;
+    return res.status(code).json({ ok:false, error:String(e?.message||e) });
+  }
+});
+
+/* ================= /returns/:id/cd/inspect ================= */
+router.patch('/returns/:id/cd/inspect', async (req, res) => {
+  try{
+    const id = req.params.id;
+    const row = await getReturnRowByIdOrOrder(id);
+    if (!row) return res.status(404).json({ error:'not_found' });
+
+    const result = String(req.body.result || '').toLowerCase(); // 'approve' | 'reject'
+    const note   = String(req.body.note || '').trim();
+    const updated_by = req.body.updated_by || 'frontend-inspecao';
+
+    const targetStatus = result === 'approve' ? 'aprovado_cd' : 'reprovado_cd';
+
+    await updateReturnById(row.id, { log_status: canonFlowForDb(targetStatus) });
+
+    await insertLogEvent(row.id, {
+      type:'status',
+      title: result === 'approve' ? 'Inspeção aprovada' : 'Inspeção reprovada',
+      message: note || null,
+      meta:{ cd:{ inspectedAt: new Date().toISOString() } },
+      status: targetStatus
+    });
+
+    const fresh = await getReturnRowByIdOrOrder(row.id);
+    return res.json({ ok:true, item:fresh, updated_by });
+  }catch(e){
+    const code = /check constraint/i.test(String(e)) ? 400 : 500;
+    return res.status(code).json({ ok:false, error:String(e?.message||e) });
+  }
 });
 
 /* ================= /returns/state ================= */
