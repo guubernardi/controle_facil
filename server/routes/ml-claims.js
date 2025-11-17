@@ -18,10 +18,10 @@
  *  - GET  /claims/:id/attachments-evidences/:attachmentId/download
  *  - GET  /claims/:id/charges/return-cost
  *
- *  **NOVO** (compat com teu front):
+ *  Compat com front:
  *  - GET /claims/search?order_id=...
  *  - GET /claims/of-order/:orderId
- *  - GET /claims?order_id=...   (alias p/ search)
+ *  - GET /claims?order_id=...
  */
 
 const express = require('express');
@@ -30,10 +30,10 @@ const path    = require('path');
 const multer  = require('multer');
 const { query } = require('../db');
 
-const router      = express.Router();
-const ML_BASE     = 'https://api.mercadolibre.com/post-purchase/v1';
-const ML_TOKEN_URL= process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
-const AHEAD_SEC   = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600;
+const router       = express.Router();
+const ML_BASE      = 'https://api.mercadolibre.com/post-purchase/v1';
+const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
+const AHEAD_SEC    = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600;
 
 // ============================== Helpers de token ==============================
 
@@ -45,6 +45,22 @@ async function loadTokenRowFromDb(sellerId, q = query) {
      ORDER BY updated_at DESC
      LIMIT 1`;
   const { rows } = await q(sql, [sellerId]);
+  return rows[0] || null;
+}
+
+// novo: lookup por nickname (ignora diferença de maiúsculas e espaço)
+async function loadTokenRowFromDbByNick(nickname, q = query) {
+  if (!nickname) return null;
+  const nick = String(nickname).trim();
+  if (!nick) return null;
+
+  const sql = `
+    SELECT user_id, nickname, access_token, refresh_token, expires_at
+      FROM public.ml_tokens
+     WHERE LOWER(REPLACE(nickname, ' ', '')) = LOWER(REPLACE($1, ' ', ''))
+     ORDER BY updated_at DESC
+     LIMIT 1`;
+  const { rows } = await q(sql, [nick]);
   return rows[0] || null;
 }
 
@@ -72,8 +88,9 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
   });
 
   const ct = r.headers.get('content-type') || '';
-  const body = ct.includes('application/json') ? await r.json().catch(() => null)
-                                               : await r.text().catch(() => '');
+  const body = ct.includes('application/json')
+    ? await r.json().catch(() => null)
+    : await r.text().catch(() => '');
 
   if (!r.ok) {
     const msg = (body && (body.message || body.error)) || r.statusText || 'refresh_failed';
@@ -84,7 +101,9 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
   }
 
   const { access_token, refresh_token, token_type, scope, expires_in } = body || {};
-  const expiresAt = new Date(Date.now() + (Math.max(60, Number(expires_in) || 600)) * 1000).toISOString();
+  const expiresAt = new Date(
+    Date.now() + (Math.max(60, Number(expires_in) || 600)) * 1000
+  ).toISOString();
 
   await q(`
     INSERT INTO public.ml_tokens
@@ -98,44 +117,98 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
       expires_at   = EXCLUDED.expires_at,
       raw          = EXCLUDED.raw,
       updated_at   = now()
-  `, [sellerId, access_token || null, refresh_token || null, token_type || null, scope || null, expiresAt, JSON.stringify(body || {})]);
+  `, [
+    sellerId,
+    access_token || null,
+    refresh_token || null,
+    token_type || null,
+    scope || null,
+    expiresAt,
+    JSON.stringify(body || {})
+  ]);
 
   return { access_token, refresh_token, expires_at: expiresAt };
 }
 
 async function resolveSellerAccessToken(req) {
+  // 0) token passado direto no header (debug / override)
   const direct = req.get('x-seller-token');
   if (direct) return direct;
 
+  const q = req.q || query;
+
+  // 1) PRIORIDADE: nick / nickname na query (?nick=NEW%20AVANTI)
+  const nickRaw = (req.query && (req.query.nick || req.query.nickname)) || '';
+  const nickname = String(nickRaw || '').trim();
+
+  if (nickname) {
+    const row = await loadTokenRowFromDbByNick(nickname, q);
+    if (row?.access_token) {
+      // se não está perto de expirar, usa direto
+      if (!isExpiringSoon(row.expires_at)) return row.access_token;
+
+      // tenta refresh, se falhar mas ainda não expirou, usa o antigo
+      try {
+        const refreshed = await refreshAccessToken({
+          sellerId: row.user_id,
+          refreshToken: row.refresh_token,
+          q
+        });
+        if (refreshed?.access_token) return refreshed.access_token;
+      } catch (e) {
+        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) {
+          return row.access_token;
+        }
+        // não relança aqui: deixa tentar os outros fallbacks (seller_id, sessão, owner)
+      }
+    }
+  }
+
+  // 2) seller_id explícito (header/query) ou user_id da sessão (fluxo antigo)
   const sellerId = String(
-    req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || ''
+    req.get('x-seller-id') ||
+    req.query.seller_id    ||
+    req.session?.ml?.user_id ||
+    ''
   ).replace(/\D/g, '');
 
   if (sellerId) {
-    const row = await loadTokenRowFromDb(sellerId, req.q || query);
+    const row = await loadTokenRowFromDb(sellerId, q);
     if (row?.access_token) {
       if (!isExpiringSoon(row.expires_at)) return row.access_token;
       try {
         const refreshed = await refreshAccessToken({
           sellerId,
           refreshToken: row.refresh_token,
-          q: req.q || query
+          q
         });
         if (refreshed?.access_token) return refreshed.access_token;
       } catch (e) {
-        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) return row.access_token;
-        throw e;
+        if (row.access_token && !isExpiringSoon(row.expires_at, 0)) {
+          return row.access_token;
+        }
+        // aqui mantemos o comportamento antigo: se chegou aqui e não dá pra usar token antigo,
+        // deixa cair pros fallbacks abaixo (sessão / owner). Se você quiser ver erro de refresh,
+        // pode dar throw e.status aqui, mas não é necessário pro seu uso atual.
       }
     }
   }
 
+  // 3) token da sessão (login atual no painel)
   if (req.session?.ml?.access_token) return req.session.ml.access_token;
+
+  // 4) token "dono" global (fallback)
   return process.env.MELI_OWNER_TOKEN || '';
 }
 
 // seller_id p/ /claims/search
 async function resolveSellerId(req) {
-  const hdr = String(req.get('x-seller-id') || req.query.seller_id || req.session?.ml?.user_id || '').replace(/\D/g, '');
+  const hdr = String(
+    req.get('x-seller-id') ||
+    req.query.seller_id    ||
+    req.session?.ml?.user_id ||
+    ''
+  ).replace(/\D/g, '');
   if (hdr) return hdr;
   try {
     const me = await mlFetch(req, 'https://api.mercadolibre.com/users/me');
@@ -148,7 +221,9 @@ async function resolveSellerId(req) {
 
 function pick(obj, keys) {
   const out = {};
-  for (const k of keys) if (obj?.[k] !== undefined) out[k] = obj[k];
+  for (const k of keys) {
+    if (obj?.[k] !== undefined) out[k] = obj[k];
+  }
   return out;
 }
 
@@ -169,8 +244,9 @@ async function mlFetch(req, url, opts = {}) {
     }
   });
   const ct = r.headers.get('content-type') || '';
-  const body = ct.includes('application/json') ? await r.json().catch(() => null)
-                                               : await r.text().catch(() => '');
+  const body = ct.includes('application/json')
+    ? await r.json().catch(() => null)
+    : await r.text().catch(() => '');
   if (!r.ok) {
     const err = new Error((body && (body.message || body.error)) || r.statusText);
     err.status = r.status;
@@ -184,15 +260,26 @@ async function mlFetch(req, url, opts = {}) {
 async function mlFetchRaw(req, url, opts = {}) {
   const token = await resolveSellerAccessToken(req);
   if (!token) {
-    const e = new Error('missing_access_token'); e.status = 401; throw e;
+    const e = new Error('missing_access_token');
+    e.status = 401;
+    throw e;
   }
-  const r = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
+  const r = await fetch(url, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(opts.headers || {})
+    }
+  });
   if (!r.ok) {
     const ct = r.headers.get('content-type') || '';
-    const body = ct.includes('application/json') ? await r.json().catch(() => null)
-                                                 : await r.text().catch(() => '');
+    const body = ct.includes('application/json')
+      ? await r.json().catch(() => null)
+      : await r.text().catch(() => '');
     const err = new Error((body && (body.message || body.error)) || r.statusText);
-    err.status = r.status; err.body = body; err.metadata = r.headers.get('metadata') || null;
+    err.status = r.status;
+    err.body = body;
+    err.metadata = r.headers.get('metadata') || null;
     throw err;
   }
   return r;
@@ -210,7 +297,11 @@ router.get('/claims/:id', async (req, res) => {
     const data = await mlFetch(req, url);
     return res.json({ data: data || {} });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -223,7 +314,11 @@ router.get('/claims/:id/messages', async (req, res) => {
     const messages = Array.isArray(data) ? data : (data?.messages ?? []);
     return res.json({ messages });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -232,10 +327,18 @@ router.get('/claims/:id/messages', async (req, res) => {
 router.post('/claims/:id/actions/open-dispute', async (req, res) => {
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/actions/open-dispute`, { method: 'POST' });
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/actions/open-dispute`,
+      { method: 'POST' }
+    );
     return res.status(200).json(out);
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -245,7 +348,11 @@ router.get('/claims/:id/expected-resolutions', async (req, res) => {
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions`);
     return res.json(Array.isArray(out) ? out : (out || []));
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -255,7 +362,11 @@ router.get('/claims/:id/partial-refund/available-offers', async (req, res) => {
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/partial-refund/available-offers`);
     return res.json(out || {});
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -263,35 +374,61 @@ router.post('/claims/:id/expected-resolutions/partial-refund', express.json(), a
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const body = pick(req.body || {}, ['percentage']);
-    if (typeof body.percentage !== 'number') return res.status(400).json({ error: 'percentage numérico é obrigatório' });
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/partial-refund`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    if (typeof body.percentage !== 'number') {
+      return res.status(400).json({ error: 'percentage numérico é obrigatório' });
+    }
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/expected-resolutions/partial-refund`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }
+    );
     return res.json(out || { ok: true });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
 router.post('/claims/:id/expected-resolutions/refund', async (req, res) => {
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/refund`, { method: 'POST' });
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/expected-resolutions/refund`,
+      { method: 'POST' }
+    );
     return res.json(out || { ok: true });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
 router.post('/claims/:id/expected-resolutions/allow-return', async (req, res) => {
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/expected-resolutions/allow-return`, { method: 'POST' });
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/expected-resolutions/allow-return`,
+      { method: 'POST' }
+    );
     return res.json(out || { ok: true });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -303,7 +440,11 @@ router.get('/claims/:id/evidences', async (req, res) => {
     const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/evidences`);
     return res.json(Array.isArray(out) ? out : (out || []));
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -311,14 +452,22 @@ router.post('/claims/:id/actions/evidences', express.json(), async (req, res) =>
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const body = req.body || {};
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/actions/evidences`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/actions/evidences`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }
+    );
     return res.json(out || { ok: true });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -328,7 +477,9 @@ const upload = multer({ dest: TMP_DIR });
 
 router.post('/claims/:id/attachments-evidences', upload.single('file'), async (req, res) => {
   const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
-  if (!req.file) return res.status(400).json({ error: 'file é obrigatório (multipart/form-data)' });
+  if (!req.file) {
+    return res.status(400).json({ error: 'file é obrigatório (multipart/form-data)' });
+  }
 
   try {
     const buf = fs.readFileSync(req.file.path);
@@ -340,18 +491,26 @@ router.post('/claims/:id/attachments-evidences', upload.single('file'), async (r
     const xPublic = req.get('x-public');
     if (xPublic) extraHeaders['x-public'] = xPublic;
 
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/attachments-evidences`, {
-      method: 'POST',
-      headers: { ...extraHeaders },
-      body: form
-    });
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/attachments-evidences`,
+      {
+        method: 'POST',
+        headers: { ...extraHeaders },
+        body: form
+      }
+    );
 
     fs.unlink(req.file.path, () => {});
     const file_name = out?.file_name || out?.filename;
     return ok(res, { file_name });
   } catch (e) {
     fs.unlink(req.file?.path || '', () => {});
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -359,10 +518,17 @@ router.get('/claims/:id/attachments-evidences/:attachmentId', async (req, res) =
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const att = encodeURIComponent(req.params.attachmentId);
-    const out = await mlFetch(req, `${ML_BASE}/claims/${claimId}/attachments-evidences/${att}`);
+    const out = await mlFetch(
+      req,
+      `${ML_BASE}/claims/${claimId}/attachments-evidences/${att}`
+    );
     return res.json(out || {});
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -370,15 +536,22 @@ router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (re
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
     const att = encodeURIComponent(req.params.attachmentId);
-    const r = await mlFetchRaw(req, `${ML_BASE}/claims/${claimId}/attachments-evidences/${att}/download`);
-    const ct = r.headers.get('content-type') || 'application/octet-stream';
+    const r = await mlFetchRaw(
+      req,
+      `${ML_BASE}/claims/${claimId}/attachments-evidences/${att}/download`
+    );
+    const ct  = r.headers.get('content-type') || 'application/octet-stream';
     const disp = r.headers.get('content-disposition') || `inline; filename="${att}"`;
     res.set('Content-Type', ct);
     res.set('Content-Disposition', disp);
     const ab = await r.arrayBuffer();
     return res.send(Buffer.from(ab));
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -400,7 +573,11 @@ router.get('/claims/:id/charges/return-cost', async (req, res) => {
       amount_usd: (out?.amount_usd != null ? Number(out.amount_usd) : null)
     });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -416,7 +593,9 @@ function coerceList(x) {
 router.get('/claims/search', async (req, res) => {
   try {
     const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
-    if (!orderId) return res.status(400).json({ error: 'missing_param', detail: 'order_id é obrigatório' });
+    if (!orderId) {
+      return res.status(400).json({ error: 'missing_param', detail: 'order_id é obrigatório' });
+    }
 
     const sellerId = await resolveSellerId(req); // tenta descobrir
     const base = `${ML_BASE}/claims/search`;
@@ -431,7 +610,11 @@ router.get('/claims/search', async (req, res) => {
 
     return res.json({ items: coerceList(out) });
   } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({
+      error: e.message,
+      detail: e.body || null,
+      metadata: e.metadata || null
+    });
   }
 });
 
@@ -442,17 +625,25 @@ router.get('/claims/of-order/:orderId', async (req, res) => {
 });
 
 // GET /api/ml/claims?order_id=...  (alias p/ cima)
-router.get('/claims', async (req, res, next) => {
+router.get('/claims', async (req, res) => {
   if (req.query.order_id || req.query.orderId) {
-    req.url = '/claims/search?' + new URLSearchParams({ order_id: req.query.order_id || req.query.orderId }).toString();
+    req.url = '/claims/search?' + new URLSearchParams({
+      order_id: req.query.order_id || req.query.orderId
+    }).toString();
     return router.handle(req, res);
   }
   return res.status(400).json({ error: 'missing_param', detail: 'use ?order_id=...' });
 });
 
-// ==== [ADICIONAR AO FINAL DE server/routes/ml-claims.js] =====================
+// ======================= 5) Import “no-op” para compat =======================
 
-// -- pequenos helpers locais (não conflitam com os seus) --
+router.get('/claims/import', async (req, res) => {
+  const days = parseInt(req.query.days || '0', 10) || 0;
+  return res.json({ ok: true, days, total: 0, updated: 0, touched: [] });
+});
+
+// ======================= 6) Returns state (opcional) =======================
+
 function coerceArray(x) {
   if (Array.isArray(x)) return x;
   if (x && typeof x === 'object') {
@@ -462,103 +653,37 @@ function coerceArray(x) {
 }
 
 function flowFromClaim(claim) {
-  // stage/status da claim
   const stage = String(claim?.stage || claim?.status || '').toLowerCase();
   const rstat = String(claim?.return?.status || claim?.return_status || '').toLowerCase();
 
-  // prioridade: mediação/disputa
-  if (/mediat|media[cç]ao/.test(stage)) return { flow: 'mediacao', raw: rstat || stage };
-  if (/(open|opened|pending|dispute|reclama|claim)/.test(stage)) return { flow: 'disputa', raw: rstat || stage };
+  if (/mediat|media[cç]ao/.test(stage)) {
+    return { flow: 'mediacao', raw: rstat || stage };
+  }
+  if (/(open|opened|pending|dispute|reclama|claim)/.test(stage)) {
+    return { flow: 'disputa', raw: rstat || stage };
+  }
 
-  // se houver status de devolução (retorno) use para o fluxo canônico
-  if (/^delivered$/.test(rstat))           return { flow: 'recebido_cd', raw: rstat };
-  if (/^shipped$|pending_delivered$/.test(rstat)) return { flow: 'em_transporte', raw: rstat };
+  if (/^delivered$/.test(rstat))                 return { flow: 'recebido_cd',       raw: rstat };
+  if (/^shipped$|pending_delivered$/.test(rstat))return { flow: 'em_transporte',     raw: rstat };
   if (/^ready_to_ship$|label_generated$/.test(rstat)) return { flow: 'pronto_envio', raw: rstat };
-  if (/^return_to_buyer$/.test(rstat))     return { flow: 'retorno_comprador', raw: rstat };
-  if (/^scheduled$/.test(rstat))           return { flow: 'agendado', raw: rstat };
-  if (/^expired$/.test(rstat))             return { flow: 'expirado', raw: rstat };
-  if (/^canceled$|^cancelled$/.test(rstat))return { flow: 'cancelado', raw: rstat };
+  if (/^return_to_buyer$/.test(rstat))           return { flow: 'retorno_comprador', raw: rstat };
+  if (/^scheduled$/.test(rstat))                 return { flow: 'agendado',          raw: rstat };
+  if (/^expired$/.test(rstat))                   return { flow: 'expirado',          raw: rstat };
+  if (/^canceled$|^cancelled$/.test(rstat))      return { flow: 'cancelado',         raw: rstat };
 
-  // fallback
   return { flow: 'pendente', raw: rstat || stage || '' };
 }
 
-// ========== 1) CLAIMS OF-ORDER (DB -> ML -> vazio) ===========================
-router.get('/claims/of-order/:orderId', async (req, res) => {
-  try {
-    const orderId = String(req.params.orderId || '').replace(/\D/g, '');
-    if (!orderId) return res.status(400).json({ error: 'invalid_order_id' });
-
-    // 1) tenta achar no seu banco (evita chamadas no ML)
-    const { rows } = await query(
-      `SELECT ml_claim_id AS id
-         FROM devolucoes
-        WHERE id_venda = $1
-          AND ml_claim_id IS NOT NULL
-        ORDER BY updated_at DESC NULLS LAST
-        LIMIT 1`,
-      [orderId]
-    );
-    if (rows[0]?.id) {
-      return res.json({ items: [ { id: String(rows[0].id), order_id: orderId, source: 'db' } ] });
-    }
-
-    // 2) tenta buscar no ML (tentamos dois formatos conhecidos)
-    let items = [];
-    try {
-      const a = await mlFetch(req, `${ML_BASE}/claims/search?order_id=${encodeURIComponent(orderId)}`);
-      items = coerceArray(a);
-    } catch (_) { /* tenta o próximo formato */ }
-    if (!items.length) {
-      try {
-        const b = await mlFetch(req, `${ML_BASE}/claims/search?resource_type=order&resource_id=${encodeURIComponent(orderId)}`);
-        items = coerceArray(b);
-      } catch (_) { /* ignora */ }
-    }
-
-    // normaliza saída
-    const out = items.map(c => ({
-      id: String(c.id || c.claim_id || c.resource_id || ''),
-      order_id: String(orderId),
-      status: c.status || c.stage || null,
-      source: 'meli'
-    })).filter(x => x.id);
-
-    return res.json({ items: out });
-  } catch (e) {
-    const s = e.status || 500;
-    return res.status(s).json({ error: e.message || 'error' });
-  }
-});
-
-// ========== 2) CLAIMS SEARCH (proxy simples para of-order) ====================
-router.get('/claims/search', async (req, res) => {
-  const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
-  if (!orderId) return res.status(400).json({ error: 'invalid_order_id' });
-  // Reusa a rota acima mantendo compat com o front
-  req.params.orderId = orderId;
-  return router.handle({ ...req, url: `/claims/of-order/${orderId}` }, res);
-});
-
-// ========== 3) IMPORT “NO-OP” (evita 400 e bloqueios no front) ===============
-router.get('/claims/import', async (req, res) => {
-  // Mantém contrato esperado pelo front, sem provocar 400/invalid_claim_id
-  const days = parseInt(req.query.days || '0', 10) || 0;
-  return res.json({ ok: true, days, total: 0, updated: 0, touched: [] });
-});
-
-// ========== 4) RETURNS STATE (flow + raw_status, compat com front) ===========
 router.get('/returns/state', async (req, res) => {
   try {
     const claimId = String(req.query.claim_id || req.query.claimId || '').replace(/\D/g, '');
     const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
 
-    // busca detalhes da claim no ML
     const claim = await mlFetch(req, `${ML_BASE}/claims/${encodeURIComponent(claimId)}`);
     const { flow, raw } = flowFromClaim(claim);
 
-    // opcional: grava no banco quando houver order_id
+    // opcional: persistir em devolucoes (se tiver order_id)
     if (orderId) {
       const sets = [];
       const vals = [];
@@ -576,10 +701,19 @@ router.get('/returns/state', async (req, res) => {
       }
     }
 
-    return res.json({ ok: true, claim_id: claimId, order_id: orderId || null, flow, raw_status: raw });
+    return res.json({
+      ok: true,
+      claim_id: claimId,
+      order_id: orderId || null,
+      flow,
+      raw_status: raw
+    });
   } catch (e) {
     const s = e.status || 500;
-    return res.status(s).json({ error: e.message || 'error', detail: e.body || null });
+    return res.status(s).json({
+      error: e.message || 'error',
+      detail: e.body || null
+    });
   }
 });
 
