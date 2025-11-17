@@ -11,14 +11,16 @@
   <div class="devolucao-page">
     <!-- Topbar -->
     <div class="topbar-mini">
-      <a href="index.html" class="topbar-back">
-        <button type="button" class="voltar" aria-label="Voltar para Devoluções" onclick="history.back()">
-          <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
-          <span>Voltar</span>
-        </button>
-      </a>
+      <button
+        type="button"
+        class="topbar-back voltar"
+        aria-label="Voltar para Devoluções"
+        onclick="(history.length > 1) ? history.back() : (location.href='index.html')">
+        <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M19 12H5M12 19l-7-7 7-7"/>
+        </svg>
+        <span>Voltar</span>
+      </button>
     </div>
 
     <main class="page-wrap" role="main">
@@ -26,7 +28,7 @@
       <header class="page-head">
         <div>
           <h1 class="title">
-            Devolução 
+            Devolução
             <span id="dv-id" class="kbd" aria-live="polite"></span>
           </h1>
           <p class="hint">
@@ -37,13 +39,13 @@
 
         <div class="actions" role="group" aria-label="Ações da devolução">
           <button id="btn-enrich" class="btn btn--ghost btn--lg" type="button" title="Atualizar dados a partir do ML">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
             </svg>
             <span>Atualizar dados (ML)</span>
           </button>
 
-          <span class="actions-split"></span>
+          <span class="actions-split" aria-hidden="true"></span>
 
           <!-- Marcação operacional -->
           <div class="mark-wrap">
@@ -55,11 +57,11 @@
               <option value="troca">Troca</option>
               <option value="reembolso_parcial">Reembolso parcial</option>
             </select>
-            
+
             <input id="mark-obs" type="text" class="input-lg" placeholder="Observação (opcional)" />
-            
+
             <button id="btn-mark" class="btn btn--success btn--lg" type="button" title="Aplicar marcação">
-              <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
               <span>Aplicar</span>
@@ -67,7 +69,7 @@
           </div>
 
           <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
               <polyline points="17 21 17 13 7 13 7 21"/>
               <polyline points="7 3 7 8 15 8"/>
@@ -97,12 +99,8 @@
 
           <div class="dialog-actions">
             <div class="dialog-actions-right">
-              <button type="button" class="btn btn--ghost" id="rcd-cancel">
-                Cancelar
-              </button>
-              <button id="rcd-save" type="submit" class="btn btn--primary">
-                Salvar
-              </button>
+              <button type="button" class="btn btn--ghost" id="rcd-cancel">Cancelar</button>
+              <button id="rcd-save" type="submit" class="btn btn--primary">Salvar</button>
             </div>
           </div>
 
@@ -123,12 +121,8 @@
           </div>
 
           <div class="dialog-actions-simple">
-            <button type="button" class="btn btn--ghost" id="insp-cancel">
-              Cancelar
-            </button>
-            <button type="submit" class="btn btn--primary" id="insp-confirm">
-              Confirmar
-            </button>
+            <button type="button" class="btn btn--ghost" id="insp-cancel">Cancelar</button>
+            <button type="submit" class="btn btn--primary" id="insp-confirm">Confirmar</button>
           </div>
         </form>
       </dialog>
@@ -214,20 +208,28 @@
             <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="input-readonly" readonly />
           </div>
 
-          <!-- Resumo ML (somente informativo) -->
+          <!-- Resumo ML (informativo) -->
           <div class="ml-summary" aria-live="polite">
-            <div class="ml-pair">
-              <span>Produto (ML):</span>
-              <strong id="ml-product-sum">—</strong>
-            </div>
-            <div class="ml-pair">
-              <span>Frete (ML):</span>
-              <strong id="ml-freight">—</strong>
-            </div>
+            <div class="ml-pair"><span>Produto (ML):</span> <strong id="ml-product-sum">—</strong></div>
+            <div class="ml-pair"><span>Frete (ML):</span>   <strong id="ml-freight">—</strong></div>
             <div class="ml-pair">
               <span>Return cost (ML):</span>
               <strong id="ml-return-cost">—</strong>
               <small id="ml-return-cost-usd" class="muted">—</small>
+            </div>
+            <!-- Âncoras extras que o JS preenche se existirem -->
+            <div class="ml-pair"><span>Pedido:</span>      <strong id="ml-order-display">—</strong></div>
+            <div class="ml-pair"><span>Loja/Nick:</span>   <strong id="ml-nick-display">—</strong></div>
+            <div class="ml-pair"><span>Data compra:</span> <strong id="ml-date-display">—</strong></div>
+          </div>
+
+          <!-- Indicadores de mediação/estado ML (opcional, o JS usa se existir) -->
+          <div class="ml-claim-status">
+            <span class="status-label">Mediação</span>
+            <span id="pill-mediacao" class="pill -neutro">—</span>
+            <div class="ml-status-line">
+              <small id="ml-status-desc" class="muted">—</small>
+              <a id="claim-open-link" href="#" target="_blank" rel="noopener">Abrir Claim</a>
             </div>
           </div>
 
@@ -235,22 +237,16 @@
           <div class="status-box">
             <div class="status-item">
               <span class="status-label">Status da Logística</span>
-              <span id="pill-log" class="pill -neutro">
-                Pendente
-              </span>
+              <span id="pill-log" class="pill -neutro">Pendente</span>
             </div>
 
             <div class="status-item">
               <span class="status-label">Recebimento no CD</span>
-              <button type="button" class="btn btn--sm btn--outline" id="btn-cd">
-                Gerenciar
-              </button>
+              <button type="button" class="btn btn--sm btn--outline" id="btn-cd">Gerenciar</button>
             </div>
 
             <div class="cd-details" id="cd-info">
-              <span id="pill-cd" class="pill -neutro">
-                Não recebido
-              </span>
+              <span id="pill-cd" class="pill -neutro">Não recebido</span>
               <span id="cd-sep" class="cd-sep" hidden>·</span>
               <span id="cd-resp" class="cd-text" hidden></span>
               <span id="cd-when" class="cd-text" hidden></span>
@@ -259,12 +255,8 @@
             <div class="status-item insp-inline">
               <span class="status-label">Inspeção</span>
               <div class="btn-group-sm">
-                <button id="btn-insp-aprova" class="btn btn--success btn--sm" type="button" title="Inspeção aprovada">
-                  Aprovar
-                </button>
-                <button id="btn-insp-reprova" class="btn btn--danger btn--sm" type="button" title="Inspeção reprovada">
-                  Reprovar
-                </button>
+                <button id="btn-insp-aprova" class="btn btn--success btn--sm" type="button" title="Inspeção aprovada">Aprovar</button>
+                <button id="btn-insp-reprova" class="btn btn--danger btn--sm" type="button" title="Inspeção reprovada">Reprovar</button>
               </div>
             </div>
           </div>
@@ -309,6 +301,6 @@
     <div id="toast" class="toast" aria-live="polite"></div>
   </div>
 
-  <script src="js/devolucao-editar.js"></script>
+  <script src="js/devolucao-editar.js" defer></script>
 </body>
 </html>
