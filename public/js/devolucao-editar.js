@@ -1,4 +1,4 @@
-// /public/js/devolucao-editar.js — ML enriched + fallback completo (claim + order) + return-cost + persist meta
+// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + campos essenciais
 (function () {
   /* ================= Helpers ================= */
   var $  = function (id) { return document.getElementById(id); };
@@ -74,7 +74,7 @@
     type = type || 'info';
     var t = $('toast'); if (!t) { try{ console.warn('[toast]', type, msg);}catch(_){alert(msg);} return; }
     t.className = 'toast ' + type; t.textContent = msg;
-    requestAnimationFrame(function(){ t.classList.add('show'); setTimeout(function(){ t.classList.remove('show'); }, 3000); });
+    requestAnimationFrame(function(){ t.classList.add('show'); setTimeout(function(){ t.classList.remove('show'); }, 3500); });
   }
   function setAutoHint(txt){ var el=$('auto-hint'); if(el) el.textContent = txt || ''; }
 
@@ -325,67 +325,6 @@
     return fetch(url, { headers: { 'Accept':'application/json' } })
       .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)); });
   }
-  function fetchReasonCanonById(reasonId){
-    if (!reasonId) return Promise.resolve(null);
-    var rid = encodeURIComponent(reasonId);
-    var candidates = ['/api/ml/claims/reasons/' + rid, '/api/ml/reasons/' + rid, '/api/ml/claim-reasons/' + rid];
-    var idx = 0;
-    function next(){
-      if (idx >= candidates.length) return Promise.resolve(null);
-      var url = candidates[idx++]; 
-      return fetchJsonOk(url).then(function(info){
-        var obj = (info && (info.data || info)) || info;
-        var canon = (function (info) {
-          try{
-            var name = String((info && info.name) || '').toLowerCase();
-            var detail = String((info && info.detail) || '').toLowerCase();
-            if (name && REASONNAME_TO_CANON[name]) return REASONNAME_TO_CANON[name];
-            return canonFromText(name + ' ' + detail);
-          }catch(_){ return null; }
-        })(obj);
-        return (canon ? canon : next());
-      }).catch(next);
-    }
-    return next();
-  }
-  function setMotivoCanon(canon, lock){
-    var sel = getMotivoSelect(); if (!sel || !canon) return false;
-    for (var i=0;i<sel.options.length;i++){
-      if (sel.options[i].value === canon) {
-        sel.value = canon; sel.dispatchEvent(new Event('change'));
-        if (lock) lockMotivo(true,'(ML)'); return true;
-      }
-    }
-    var wanted = (CANON_LABELS[canon] || []).map(norm);
-    for (var j=0;j<sel.options.length;j++){
-      var opt = sel.options[j];
-      var labelN = norm(opt.text || opt.label || '');
-      if (labelN && (labelN === norm(canon) || wanted.indexOf(labelN) >= 0)) {
-        sel.value = opt.value; sel.dispatchEvent(new Event('change'));
-        if (lock) lockMotivo(true,'(ML)'); return true;
-      }
-    }
-    return false;
-  }
-  function lockMotivo(lock, hint){
-    var sel = getMotivoSelect(); if (!sel) return;
-    sel.disabled = !!lock;
-    var id = 'motivo-hint';
-    var hintEl = document.getElementById(id);
-    if (lock) {
-      if (!hintEl){
-        hintEl = document.createElement('small');
-        hintEl.id = id;
-        hintEl.style.marginLeft = '8px';
-        hintEl.style.opacity = '0.8';
-        sel.insertAdjacentElement('afterend', hintEl);
-      }
-      hintEl.textContent = hint || '(automático)';
-      hintEl.hidden = false;
-    } else {
-      if (hintEl) hintEl.hidden = true;
-    }
-  }
 
   /* ================= Preenchimento UI ================= */
   function fill(d){
@@ -488,7 +427,7 @@
                     sources: { claim_id: (current.raw && (current.raw.ml_claim_id || current.raw.claim_id)) || null } });
   }
 
-  // Claim UI
+  // Claim UI (resumo básico + motivo)
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
   function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
@@ -522,26 +461,8 @@
       var role = p.role || '-';
       var type = p.type || '-';
       var uid  = p.user_id || '-';
-      pushLi('claim-players', '<b>'+role+'</b> • '+type+' • #'+uid);
+      pushLi('claim-players', `<b>${role}</b> • ${type} • #${uid}`);
     });
-
-    clearList('claim-actions');
-    var actions = Array.isArray(claim.available_actions) ? claim.available_actions : [];
-    actions.forEach(function(a){
-      var due = a.due_date ? (' · até ' + new Date(a.due_date).toLocaleString('pt-BR')) : '';
-      pushLi('claim-actions', '<code>'+(a.action || '-')+'</code>'+(a.mandatory ? ' (obrigatória)' : '')+due);
-    });
-
-    var res = claim.resolution || {};
-    setTxt('claim-res-reason',    res.reason || res.reason_id || res.reason_name);
-    setTxt('claim-res-benefited', res.benefited);
-    setTxt('claim-res-closed-by', res.closed_by);
-    setTxt('claim-res-applied',   String(res.applied_coverage ?? '—'));
-    setTxt('claim-res-date',      res.data_created ? new Date(res.data_created).toLocaleString('pt-BR') : '—');
-
-    clearList('claim-related');
-    var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
-    related.forEach(function(r){ pushLi('claim-related', '<b>'+(r.type || '-')+'</b> • '+(r.id || '-')); });
 
     var prefer = (function (root) {
       function canonFromPayload(root){
@@ -556,26 +477,7 @@
       return canonFromPayload({ reason_key: claim.reason_key, reason_name: claim.reason_name, reason_id: claim.reason_id, reason_detail: claim.reason_detail })
              || canonFromCode(claim.reason_id);
     })();
-
-    if (prefer) {
-      setMotivoCanon(prefer, true);
-    } else {
-      var rid = claim.reason_id || (claim.reason && claim.reason.id) || null;
-      if (rid) {
-        fetchReasonCanonById(rid).then(function(canon){
-          if (canon && setMotivoCanon(canon, true)) {
-            var id = current.id || returnId;
-            if (id) {
-              fetch('/api/returns/' + encodeURIComponent(id), {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-reason-lookup' })
-              }).catch(function(){});
-            }
-          }
-        }).catch(function(){});
-      }
-    }
+    if (prefer) { setMotivoCanon(prefer, true); }
 
     try {
       var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
@@ -591,25 +493,137 @@
       setTxt('ml-status-desc', human);
     } catch(_){}
 
-    if (claim.id) {
-      fetchAndApplyReturnCost(String(claim.id), { persist: true });
-    }
+    if (claim.id) fetchAndApplyReturnCost(String(claim.id), { persist: true });
   }
 
-  function tryFetchClaimDetails(claimId){
-    if (!claimId) return Promise.resolve();
+  /* =========== FALLBACK via ORDER (preenche produto/frete/cliente/SKU/data/loja) =========== */
+  function fetchOrderInfo(orderId){
+    if (!orderId) return Promise.resolve(null);
     var nk = sellerNick();
-    var q = nk ? ('?nick=' + encodeURIComponent(nk)) : '';
-    return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + q, { headers: { 'Accept': 'application/json' } })
-      .then(function(r){
-        if (r.status === 403 && q) {
-          return fetch('/api/ml/claims/' + encodeURIComponent(claimId), { headers: { 'Accept':'application/json' } });
-        }
-        return r;
-      })
-      .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function(j){ var c = j && (j.data || j.claim || j); if (c && typeof c==='object') fillClaimUI(c); })
-      .catch(function(){});
+    var base = '/api/ml/orders/' + encodeURIComponent(orderId);
+    var candidates = [
+      base + (nk ? ('?nick=' + encodeURIComponent(nk)) : ''),
+      base,
+      '/api/ml/order/' + encodeURIComponent(orderId) + (nk ? ('?nick=' + encodeURIComponent(nk)) : ''),
+      '/api/ml/sales/' + encodeURIComponent(orderId) + (nk ? ('?nick=' + encodeURIComponent(nk)) : '')
+    ];
+    var i=0;
+    function next(){
+      if (i >= candidates.length) return Promise.resolve(null);
+      var url = candidates[i++];
+      return fetch(url, { headers: { 'Accept': 'application/json' } })
+        .then(function(r){ return r.text().then(function (txt) {
+            var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
+            if (!r.ok) return next();
+            return (j && (j.data || j.order || j.sale || j)) || null;
+        });})
+        .catch(next);
+    }
+    return next();
+  }
+
+  function applyOrderToUi(ord, opts){
+    opts = opts || {};
+    if (!ord || typeof ord !== 'object') return false;
+
+    // buyer
+    var buyerName =
+      (ord.buyer && ((ord.buyer.first_name && ord.buyer.last_name) ? (ord.buyer.first_name + ' ' + ord.buyer.last_name) : (ord.buyer.nickname || ord.buyer.name || ord.buyer.first_name))) ||
+      (ord.shipping && ord.shipping.receiver_address && ord.shipping.receiver_address.receiver_name) || null;
+
+    // loja/nick
+    var nick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || null;
+
+    // sku
+    var sku = null;
+    if (Array.isArray(ord.order_items) && ord.order_items.length) {
+      var it0 = ord.order_items[0];
+      var it  = it0.item || it0;
+      sku = it0.seller_sku || it0.variation_sku || it.seller_sku || it.sku || it.id || null;
+    }
+
+    // datas
+    var when = ord.date_created || ord.paid_at || ord.created_at || null;
+
+    // valores
+    var product = null;
+    if (Array.isArray(ord.order_items) && ord.order_items.length) {
+      product = ord.order_items.reduce(function(acc, oi){
+        var q = toNum(oi.quantity || 1);
+        var p = toNum(oi.unit_price != null ? oi.unit_price : (oi.full_unit_price != null ? oi.full_unit_price : oi.price));
+        return acc + (isFinite(p*q) ? p*q : 0);
+      }, 0);
+    } else if (ord.total_paid_amount != null) product = toNum(ord.total_paid_amount);
+      else if (ord.total_amount != null)   product = toNum(ord.total_amount);
+      else if (ord.amount != null)         product = toNum(ord.amount);
+
+    var freight = null;
+    var s = ord.shipping || ord.shipment || null;
+    if (s) {
+      freight = firstNonEmpty(
+        s.shipping_cost, s.base_cost, s.cost, s.paid_cost,
+        s.shipping_option && s.shipping_option.cost,
+        s.logistic_cost, s.logistics_cost, s.amount_shipping, s.total_shipping_cost
+      );
+      freight = (freight != null) ? toNum(freight) : null;
+    } else {
+      freight = firstNonEmpty(ord.shipping_cost, ord.freight, ord.logistics_cost, ord.amount_shipping);
+      freight = (freight != null) ? toNum(freight) : null;
+    }
+
+    // aplica nos inputs (respeitando dirty)
+    var changed = false;
+    if (buyerName) {
+      if (setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], buyerName)) changed = true;
+    }
+    if (nick && !current.loja_nome) {
+      if (setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], 'Mercado Livre · ' + nick)) changed = true;
+    }
+    if (when) {
+      if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], String(when).slice(0,10))) changed = true;
+    }
+    if (sku) {
+      if (setFirst(['#sku','input[name="sku"]','.js-sku'], String(sku).toUpperCase(), {upper:true})) changed = true;
+      current.sku = String(sku).toUpperCase();
+    }
+
+    var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
+    var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
+    if (product != null && ip && ip.dataset.dirty!=='1') { ip.value = String(product); current.valor_produto = product; changed = true; }
+    if (freight != null && ifr && ifr.dataset.dirty!=='1') { ifr.value = String(freight); current.valor_frete = freight; changed = true; }
+
+    if (changed) {
+      recalc();
+      updateSummary(Object.assign({}, current, capture()));
+      toast('Dados do pedido aplicados do ML.', 'success');
+    }
+    // persist meta/amounts
+    var patchMeta = {};
+    if (buyerName && !current.cliente_nome) patchMeta.cliente_nome = buyerName;
+    if (nick && !current.loja_nome) patchMeta.loja_nome = 'Mercado Livre · ' + nick;
+    if (when && !current.data_compra) patchMeta.data_compra = when;
+    if (sku && !current.sku) patchMeta.sku = String(sku).toUpperCase();
+
+    var patchAmounts = {};
+    if (product != null) patchAmounts.valor_produto = product;
+    if (freight != null) patchAmounts.valor_frete   = freight;
+
+    var idp = current.id || returnId;
+    if (idp) {
+      if (Object.keys(patchMeta).length) {
+        fetch('/api/returns/' + encodeURIComponent(idp), {
+          method:'PATCH', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(Object.assign({}, patchMeta, { updated_by:'frontend-order-fallback-meta' }))
+        }).catch(function(){});
+      }
+      if (Object.keys(patchAmounts).length) {
+        fetch('/api/returns/' + encodeURIComponent(idp), {
+          method:'PATCH', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(Object.assign({}, patchAmounts, { updated_by:'frontend-order-fallback-amounts' }))
+        }).catch(function(){});
+      }
+    }
+    return changed;
   }
 
   /* ================= Return-cost (ML) ================= */
@@ -671,11 +685,7 @@
     limit = limit || 100; offset = offset || 0;
     var url = '/api/returns/' + encodeURIComponent(id) + '/events?limit=' + limit + '&offset=' + offset;
     return fetch(url, { headers: { 'Accept': 'application/json' } })
-      .then(function(r){
-        if (r.status === 404) return []; // tolera backend sem rota de eventos
-        if(!r.ok) return [];
-        return r.json();
-      })
+      .then(function(r){ if(!r.ok) return []; return r.json(); })
       .then(function (j) { var arr = coerceEventsPayload(j); return Array.isArray(arr) ? arr : []; })
       .catch(function(){ return []; });
   }
@@ -935,167 +945,54 @@
       body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' })) }
     ).catch(function(){});
   }
-
-  // === NOVO: buscar pedido do ML para preencher cliente, SKU, data, valor produto ===
-  function fetchOrderBasic(orderId){
-    if (!orderId) return Promise.resolve(null);
+  function searchClaimsByOrder(orderId){
+    if (!orderId) return Promise.resolve([]);
     var nk = sellerNick();
-    var urls = [
-      '/api/ml/orders/' + encodeURIComponent(orderId) + (nk ? ('?nick=' + encodeURIComponent(nk)) : ''),
-      // fallback sem nick
-      '/api/ml/orders/' + encodeURIComponent(orderId)
-    ];
-    var i = 0;
-    function tryOne(){
-      if (i >= urls.length) return Promise.resolve(null);
-      var u = urls[i++]; 
-      return fetch(u, { headers:{Accept:'application/json'} })
-        .then(function(r){ if(!r.ok){ if (r.status===403 && i<urls.length) return tryOne(); if (r.status===404) return null; throw new Error('HTTP '+r.status);} return r.json(); })
-        .then(function(j){ 
-          if (!j) return null;
-          var o = j.data || j.order || j;
-          return (o && typeof o==='object') ? o : null;
-        })
-        .catch(function(){ return null; });
-    }
-    return tryOne();
-  }
-
-  function pickBuyerName(order){
-    try{
-      var b = order.buyer || order.payer || {};
-      if (b.first_name || b.last_name) return [b.first_name, b.last_name].filter(Boolean).join(' ').trim();
-      return b.nickname || b.name || null;
-    }catch(_){ return null; }
-  }
-
-  function sumProductValue(order){
-    try{
-      if (order.total_paid_amount != null) return toNum(order.total_paid_amount);
-      if (order.paid_amount != null)       return toNum(order.paid_amount);
-      if (order.order_items && order.order_items.length){
-        return order.order_items.reduce(function(acc, it){
-          var up = toNum((it.unit_price!=null)?it.unit_price:(it.item && it.item.price));
-          var q  = toNum(it.quantity || 1);
-          return acc + (up*q);
-        }, 0);
-      }
-    }catch(_){}
-    return null;
-  }
-
-  function pickSku(order){
-    try{
-      if (order.order_items && order.order_items.length){
-        var it = order.order_items[0];
-        return (it.item && it.item.id) ? String(it.item.id).toUpperCase() : (it.item_id ? String(it.item_id).toUpperCase() : null);
-      }
-    }catch(_){}
-    return null;
-  }
-
-  function applyOrderToUi(order){
-    if (!order) return { changed:false, patch:{} };
-    var buyer   = pickBuyerName(order);
-    var sku     = pickSku(order);
-    var produto = sumProductValue(order);
-    var when    = order.date_created || order.paid_at || order.created_at || null;
-    var sellerNickFromOrder = order.seller && (order.seller.nickname || order.seller.nick_name);
-
-    var patch = {};
-    var changed = false;
-
-    // Cliente
-    if (buyer && setFirst(['#cliente_nome','#cliente','input[name="cliente_nome"]','.js-cliente','.js-cliente-nome'], buyer)) { current.cliente_nome = buyer; changed = true; patch.cliente_nome = buyer; }
-
-    // SKU
-    if (sku && setFirst(['#sku','input[name="sku"]','.js-sku'], sku, { upper:true })) { current.sku = sku; changed = true; patch.sku = sku; }
-
-    // Data da compra
-    if (when) {
-      var ds = String(when).slice(0,10);
-      if (setFirst(['#data_compra','input[name="data_compra"]','.js-data'], ds)) { current.data_compra = ds; changed = true; patch.data_compra = ds; }
-    }
-
-    // Loja (apelido)
-    if (sellerNickFromOrder) {
-      var lojaNome = 'Mercado Livre · ' + sellerNickFromOrder;
-      if (setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], lojaNome)) { current.loja_nome = lojaNome; changed = true; patch.loja_nome = lojaNome; }
-      setFirst(['#ml-nick-display','.js-ml-nick'], 'Mercado Livre · ' + sellerNickFromOrder);
-    }
-
-    // Valor do produto
-    if (produto != null) {
-      var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
-      var isDirty = ip && ip.dataset.dirty === '1';
-      if (!isDirty) {
-        if (ip) ip.value = String(toNum(produto));
-        current.valor_produto = toNum(produto);
-        changed = true; patch.valor_produto = toNum(produto);
-      }
-      setFirst(['#ml-product-sum','.js-ml-produto'], moneyBRL(produto));
-    }
-
-    // Order ID
-    if (order.id || order.order_id) {
-      var oid = String(order.id || order.order_id);
-      if (setFirst(ORDER_ID_SELECTORS, oid)) { current.id_venda = oid; patch.id_venda = oid; }
-    }
-
-    return { changed: changed, patch: patch, orderApplied: order };
-  }
-
-  // === Fallback quando /claims/:id/returns/enriched não existir (404) ===
-  function fetchClaimBasic(claimId){
-    var nk = sellerNick();
-    var q  = nk ? ('?nick=' + encodeURIComponent(nk)) : '';
-    return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + q, { headers:{Accept:'application/json'} })
+    var url = '/api/ml/claims/search?order_id=' + encodeURIComponent(orderId) + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
+    return fetch(url, { headers: { 'Accept':'application/json' } })
       .then(function(r){
-        if (r.status === 403 && q) {
-          return fetch('/api/ml/claims/' + encodeURIComponent(claimId), { headers:{Accept:'application/json'} });
+        if (r.status === 403 && nk) {
+          return fetch('/api/ml/claims/search?order_id=' + encodeURIComponent(orderId), { headers: { 'Accept':'application/json' } });
         }
         return r;
       })
-      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-      .then(function(j){ return (j && (j.data || j.claim || j)) || {}; });
+      .then(function(r){ if (!r.ok) return []; return r.json(); })
+      .then(function(j){ var items = (j && (j.items || j.results || j.claims)) || []; return Array.isArray(items) ? items : []; })
+      .catch(function(){ return []; });
+  }
+  function pickLatestClaimId(items){
+    if (!Array.isArray(items) || !items.length) return null;
+    items.sort(function(a,b){
+      var da = new Date(a.created_date || a.date_created || 0).getTime();
+      var db = new Date(b.created_date || b.date_created || 0).getTime();
+      return db - da;
+    });
+    return String(items[0].id || items[0].claim_id || '').replace(/\D+/g,'') || null;
   }
 
-  function fallbackEnrichmentFromClaim(claimId){
-    return fetchClaimBasic(claimId).then(function(claim){
-      try { fillClaimUI(claim); } catch(_){}
-      var ordId = claim && (claim.resource_id || (claim.order && claim.order.id)) || readFirst(ORDER_ID_SELECTORS) || current.id_venda || qs.get('order_id');
-
-      // 1) return-cost
-      var p1 = fetchAndApplyReturnCost(String(claimId), { persist: true });
-
-      // 2) order → preencher cliente, sku, data, valor produto
-      var p2 = Promise.resolve().then(function(){
-        if (!ordId) return null;
-        return fetchOrderBasic(String(ordId)).then(function(order){
-          var res = applyOrderToUi(order || {});
-          // persist meta/valores se veio algo
-          var idp = current.id || returnId;
-          var toPersist = Object.assign({}, res.patch);
-          if (Object.keys(toPersist).length && idp) {
-            return fetch('/api/returns/' + encodeURIComponent(idp), {
-              method: 'PATCH',
-              headers: { 'Content-Type':'application/json' },
-              body: JSON.stringify(Object.assign({}, toPersist, { updated_by: 'frontend-order-fallback' }))
-            }).catch(function(){});
+  function tryFetchClaimDetails(claimId){
+    if (!claimId) return Promise.resolve();
+    var nk = sellerNick();
+    var q = nk ? ('?nick=' + encodeURIComponent(nk)) : '';
+    return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + q, { headers: { 'Accept': 'application/json' } })
+      .then(function(r){
+        if (r.status === 403 && q) {
+          return fetch('/api/ml/claims/' + encodeURIComponent(claimId), { headers: { 'Accept':'application/json' } });
+        }
+        return r;
+      })
+      .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(j){
+        var c = j && (j.data || j.claim || j);
+        if (c && typeof c==='object') {
+          fillClaimUI(c);
+          // se claim trouxe order, salva pra fallback
+          if (c.resource_id && !readFirst(ORDER_ID_SELECTORS)) {
+            setFirst(ORDER_ID_SELECTORS, String(c.resource_id));
           }
-        });
-      });
-
-      // 3) preencher summary “visual”
-      var p3 = Promise.resolve().then(function(){
-        var el = $('ml-return-cost');
-        var brl = el && el.dataset && el.dataset.value ? Number(el.dataset.value) : null;
-        var rc  = (brl != null) ? { amount: brl } : null;
-        fillMlSummary({ order: ordId ? { id: ordId, order_id: ordId, seller: claim.seller } : null, return_cost: rc, sources: { claim_id: claimId } });
-      });
-
-      return Promise.all([p1,p2,p3]).then(function(){ return { ok:true }; });
-    });
+        }
+      })
+      .catch(function(){});
   }
 
   function enrichFromML(reason){
@@ -1109,7 +1006,7 @@
     var typedClaimId = readFirst(CLAIM_ID_SELECTORS) || qs.get('claim_id');
 
     function enrichedFetchByClaim(cId){
-      if (!cId) return Promise.reject(new Error('no_claim'));
+      if (!cId) return Promise.reject(Object.assign(new Error('no_claim'), {status:400}));
       var nk = sellerNick();
       var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
       return fetch(url, { headers: { 'Accept':'application/json' } })
@@ -1119,23 +1016,13 @@
           }
           return r;
         })
-        .then(function(r){
-          return r.text().then(function (txt) {
-            var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
-            if (!r.ok) {
-              if (r.status === 404) {
-                if (qs.has('debug')) console.warn('[enriched] 404 — usando fallback claim+order+return-cost');
-                return fallbackEnrichmentFromClaim(cId); // <- Fallback aqui
-              }
-              var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status));
-              err.status = r.status; throw err;
-            }
-            return j;
-          });
-        });
+        .then(function(r){ return r.text().then(function (txt) {
+          var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
+          if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status)); err.status = r.status; throw err; }
+          return j;
+        });});
     }
 
-    // Resolve claimId
     var claimPromise;
     if (typedClaimId) {
       claimPromise = Promise.resolve(String(typedClaimId).replace(/\D+/g,''));
@@ -1148,28 +1035,29 @@
 
     return claimPromise
       .then(function(claimId){
-        if (!claimId) throw new Error('Sem claim para enriquecer');
+        if (!claimId) throw Object.assign(new Error('Sem claim para enriquecer'), {status:404});
         return enrichedFetchByClaim(claimId).then(function(j){ return { claimId: claimId, payload: j }; });
       })
       .then(function(res){
-        // Se veio do fallback, res.payload pode ser {ok:true}. Só seguir reload/persist.
         var j = res.payload || {};
-        var gotOrders = Array.isArray(j.orders) && j.orders.length;
-        var product = null, freight = null;
+        try {
+          var anyOrder = (j.orders && j.orders[0]) || null;
+          var ordMeta = anyOrder ? { id: anyOrder.order_id, seller: anyOrder.seller } : null;
+          fillMlSummary({ order: ordMeta, return_cost: j.return_cost });
+        } catch(_){}
 
-        if (gotOrders) {
+        var product = null;
+        if (Array.isArray(j.orders) && j.orders.length) {
           product = j.orders.reduce(function(acc, o){
             var p = (o.total_paid != null ? toNum(o.total_paid) : toNum(o.unit_price) * toNum(o.quantity || 1));
             return acc + (isFinite(p) ? p : 0);
           }, 0);
         }
-        if (j.return_cost && j.return_cost.amount != null) freight = toNum(j.return_cost.amount);
+        var freight = (j.return_cost && j.return_cost.amount != null) ? toNum(j.return_cost.amount) : null;
 
         var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
         var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
-
-        var changed = false, gotAny = (product !== null) || (freight !== null);
-
+        var changed = false;
         if (product !== null && toNum(product) !== toNum(current.valor_produto)) { current.valor_produto = toNum(product); if (ip && ip.dataset.dirty!=='1')  { ip.value  = String(current.valor_produto); changed = true; } }
         if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   { current.valor_frete   = toNum(freight); if (ifr && ifr.dataset.dirty!=='1'){ ifr.value = String(current.valor_frete);   changed = true; } }
 
@@ -1178,31 +1066,43 @@
           toast('Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados' +
                ((product !== null) ? ' · produto ' + moneyBRL(product) : '') +
                ((freight !== null) ? ' · frete '   + moneyBRL(freight) : ''), 'success');
-        } else if (!gotAny) {
-          toast('ML não retornou valores de produto/frete para este claim.', 'info');
         } else {
-          toast('Valores do ML já estavam corretos.', 'info');
+          toast('ML não retornou valores de produto/frete para este claim. Tentando pelo pedido…', 'warning');
         }
 
-        // Persist
+        // persist amounts
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
         if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
-        var persistMoney = Promise.resolve();
-        if (Object.keys(amountsPatch).length && (current.id || returnId)) {
-          var body = Object.assign({}, amountsPatch, { updated_by: 'frontend-auto-enrich' });
-          persistMoney = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        if ((current.id || returnId) && Object.keys(amountsPatch).length) {
+          fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, amountsPatch, { updated_by: 'frontend-auto-enrich' }))
           }).catch(function(){});
         }
 
-        tryFetchClaimDetails(res.claimId);
-        fetchAndApplyReturnCost(res.claimId, { persist: true });
+        tryFetchClaimDetails(res.claimId);               // detalhes para motivo/status
+        fetchAndApplyReturnCost(res.claimId, { persist: true }); // frete devolução
 
-        return Promise.all([persistMoney]);
+        // === FALLBACK via ORDER quando ainda faltam campos/valores ===
+        var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id);
+        if (!orderId) {
+          // às vezes vem em claim.resource_id mas só depois do tryFetchClaimDetails
+          orderId = (current.raw && (current.raw.order_id || current.raw.resource_id)) || null;
+        }
+        if (needsEnrichment(Object.assign({}, current, capture()))) {
+          return fetchOrderInfo(orderId).then(function(ord){ if (ord) applyOrderToUi(ord, {persist:true}); });
+        }
       })
       .then(function(){ return reloadCurrent(); })
       .catch(function (e) {
+        // Se enriched falhou (404/403), tentar direto pelo pedido digitado
+        var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id');
+        if (orderId) {
+          return fetchOrderInfo(String(orderId).replace(/\D+/g,''))
+            .then(function(ord){ if (ord) { applyOrderToUi(ord, {persist:true}); return reloadCurrent(); } })
+            .catch(function(){});
+        }
         if (e && e.status === 404) toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
         else toast((e && e.message) || 'Não foi possível obter dados do ML', 'error');
       })

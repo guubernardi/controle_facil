@@ -817,7 +817,7 @@ class DevolucoesFeed {
       </div>
 
       <div class="devolucao-footer">
-        <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" target="_blank" rel="noopener">
+        <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" rel="noopener">
           <button class="botao botao-outline botao-detalhes" data-action="open">
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0 0 0-5z"/></svg>
             Ver Detalhes
