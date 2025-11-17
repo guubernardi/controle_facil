@@ -1,15 +1,23 @@
-// /public/js/devolucao-editar.js — compatível com o novo HTML
+// /public/js/devolucao-editar.js — ML enriched + fallback 404 + claim link + mark persist
 (function () {
-  // ===== Helpers =====
+  /* ================= Helpers ================= */
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
-  var returnId = qs.get('id') || qs.get('return_id') || (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
 
-  // Seletores centrais
+  // ID da devolução (aceita ?id=, ?return_id=, /devolucoes/123, /returns/123)
+  var returnId = (function () {
+    var qid = qs.get('id') || qs.get('return_id');
+    if (qid) return String(qid).replace(/\D+/g,'');
+    var m = location.pathname.match(/\/(?:devolucoes|returns)\/(\d+)/i);
+    if (m) return m[1];
+    var tail = (location.pathname.split('/').pop() || '').replace(/\D+/g,'');
+    return tail || '';
+  })();
+
+  // seletores canônicos
   var ORDER_ID_SELECTORS = ['#id_venda','input[name="id_venda"]','.js-order-id','#numero_pedido','input[name="numero_pedido"]','#order_id','input[name="order_id"]'];
   var CLAIM_ID_SELECTORS = ['#ml_claim_id','input[name="ml_claim_id"]','.js-claim-id','#claim_id','input[name="claim_id"]'];
 
-  // ---- DOM helpers ----
   function pickEl(sel) {
     if (!sel) return null;
     if (sel[0] === '#' || sel[0] === '.' || /\[.+\]/.test(sel)) return document.querySelector(sel);
@@ -25,7 +33,7 @@
   function setFirst(selectors, value, opts) {
     var el = getFirst(selectors); if (!el) return false;
     if ('value' in el) {
-      if (el.dataset && el.dataset.dirty === '1') return false; // não sobrescreve usuário
+      if (el.dataset && el.dataset.dirty === '1') return false;
       var v = (value == null ? '' : String(value));
       if (opts && opts.upper) v = v.toUpperCase();
       el.value = v;
@@ -44,13 +52,11 @@
     el.addEventListener('input', function(){ el.dataset.dirty = '1'; });
     el.__dirtyBound = true;
   }
-
   function getMotivoSelect() {
     return $('tipo_reclamacao')
         || $('motivo')
         || document.querySelector('#tipo_reclamacao, #motivo, select[name="tipo_reclamacao"], select[name="motivo"]');
   }
-
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return isFinite(v) ? v : 0;
@@ -114,7 +120,7 @@
     if (sep) sep.hidden = false;
   }
 
-  // ===== Regras de cálculo (frente) =====
+  /* ================= Regras de cálculo ================= */
   function calcTotalByRules(d){
     var st = String(d.status || '').toLowerCase();
     var mot= String(d.tipo_reclamacao || d.reclamacao || '').toLowerCase();
@@ -127,7 +133,7 @@
     return vp + vf;
   }
 
-  // ===== Normalização =====
+  /* ================= Normalização ================= */
   function siteIdToName(siteId){ var map={MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre'}; return map[siteId] || 'Mercado Livre'; }
   function firstNonEmpty(){ for (var i=0;i<arguments.length;i++){ var v=arguments[i]; if(v!==undefined && v!==null && String(v).trim()!=='') return v; } return null; }
   function findWarehouseReceivedAt(j){
@@ -208,7 +214,6 @@
 
   var current = {};
 
-  // seller nick a partir do resumo/loja_nome
   function sellerNick(){
     var ln = (current && current.loja_nome) ? String(current.loja_nome) : '';
     if (ln.includes('·')) ln = ln.split('·')[1];
@@ -249,7 +254,6 @@
       cd_recebido_em:  current.cd_recebido_em || null
     };
   }
-
   function recalc(){
     var d = capture();
     setFirst(['#ml-product-sum','.js-ml-produto'], moneyBRL(d.valor_produto));
@@ -258,7 +262,7 @@
     updateSummary(Object.assign({}, current, d));
   }
 
-  // ===== Motivo (select) — normalização =====
+  /* ================= Motivo (canon) ================= */
   function stripAcc(s){ try { return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,''); } catch(_) { return String(s||''); } }
   function norm(s){
     s = stripAcc(String(s||'').toLowerCase());
@@ -317,19 +321,6 @@
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
     return null;
   }
-  function canonFromReasonDetails(info){
-    try{
-      var name = String((info && info.name) || '').toLowerCase();
-      var detail = String((info && info.detail) || '').toLowerCase();
-      var tri = ((info && info.settings && info.settings.rules_engine_triage) || []).map(function(s){return String(s).toLowerCase();});
-      if (tri.includes('repentant')) return 'arrependimento_cliente';
-      if (tri.includes('defective') || tri.includes('not_working')) return 'produto_defeituoso';
-      if (tri.includes('different') || tri.includes('incomplete')) return 'nao_corresponde';
-      if (REASONKEY_TO_CANON[name]) return REASONKEY_TO_CANON[name];
-      if (REASONNAME_TO_CANON[name]) return REASONNAME_TO_CANON[name];
-      return canonFromText(name + ' ' + detail);
-    }catch(_){ return null; }
-  }
   function fetchJsonOk(url){
     return fetch(url, { headers: { 'Accept':'application/json' } })
       .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)); });
@@ -344,7 +335,14 @@
       var url = candidates[idx++]; 
       return fetchJsonOk(url).then(function(info){
         var obj = (info && (info.data || info)) || info;
-        var canon = canonFromReasonDetails(obj);
+        var canon = (function (info) {
+          try{
+            var name = String((info && info.name) || '').toLowerCase();
+            var detail = String((info && info.detail) || '').toLowerCase();
+            if (name && REASONNAME_TO_CANON[name]) return REASONNAME_TO_CANON[name];
+            return canonFromText(name + ' ' + detail);
+          }catch(_){ return null; }
+        })(obj);
         return (canon ? canon : next());
       }).catch(next);
     }
@@ -388,49 +386,8 @@
       if (hintEl) hintEl.hidden = true;
     }
   }
-  function reasonCanonFromPayload(root){
-    if (!root || typeof root !== 'object') return null;
-    function scanProblem(obj){
-      if (!obj || typeof obj !== 'object') return null;
-      var cand =
-        obj.problem || obj.problem_title || obj.problem_description || obj.problem_detail ||
-        obj.sale_problem || obj.issue || obj.issue_title || obj.issue_description || obj.detail ||
-        obj.problem_text || obj.sale && (obj.sale.problem || obj.sale.problem_description);
-      if (cand){ var t = canonFromText(cand); if (t) return t; }
-      return null;
-    }
-    if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
-    if (root.reason_name && REASONNAME_TO_CANON[root.reason_name]) return REASONNAME_TO_CANON[root.reason_name];
-    if (root.reason_name) { var t = canonFromText(root.reason_name); if (t) return t; }
-    if (root.reason_detail) { var td = canonFromText(root.reason_detail); if (td) return td; }
-    if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
-    var pr = scanProblem(root); if (pr) return pr;
-    var ord = root.order || root.order_info || root.sale || root.purchase || null;
-    var pr2 = scanProblem(ord); if (pr2) return pr2;
-    var cl = root.claim || root.ml_claim || null;
-    if (cl){
-      if (cl.reason_key && REASONKEY_TO_CANON[cl.reason_key]) return REASONKEY_TO_CANON[cl.reason_key];
-      if (cl.reason_name && REASONNAME_TO_CANON[cl.reason_name]) return REASONNAME_TO_CANON[cl.reason_name];
-      if (cl.reason_name) { var t2 = canonFromText(cl.reason_name); if (t2) return t2; }
-      if (cl.reason_detail) { var t2d = canonFromText(cl.reason_detail); if (t2d) return t2d; }
-      if (cl.reason_id) { var c2 = canonFromCode(cl.reason_id); if (c2) return c2; }
-      if (cl.reason && (cl.reason.key || cl.reason.id || cl.reason.name || cl.reason.detail)){
-        if (cl.reason.key && REASONKEY_TO_CANON[cl.reason.key]) return REASONKEY_TO_CANON[cl.reason.key];
-        if (cl.reason.name && REASONNAME_TO_CANON[cl.reason.name]) return REASONNAME_TO_CANON[cl.reason.name];
-        if (cl.reason.id)   { var c3 = canonFromCode(cl.reason.id); if (c3) return c3; }
-        if (cl.reason.detail){ var t3 = canonFromText(cl.reason.detail); if (t3) return t3; }
-        if (cl.reason.name) { var t4 = canonFromText(cl.reason.name);   if (t4) return t4; }
-      }
-      var pr3 = scanProblem(cl); if (pr3) return pr3;
-    }
-    var any = root.reason || root.substatus || root.sub_status || root.code || root.detail || null;
-    if (any){
-      var c4 = canonFromCode(any); if (c4) return c4;
-      var t5 = canonFromText(any); if (t5) return t5;
-    }
-    return null;
-  }
 
+  /* ================= Preenchimento UI ================= */
   function fill(d){
     var dvId=$('dv-id'); if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
 
@@ -480,7 +437,7 @@
     updateSummary(d); recalc();
   }
 
-  // === ML summary (informativo) ===
+  // resumo ML
   function fillMlSummary(payload){
     var order = payload && (payload.order || payload.order_info);
     var amounts = payload && payload.amounts;
@@ -505,8 +462,18 @@
     setFirst(['#ml-product-sum','.js-ml-produto'], prodSum != null ? moneyBRL(prodSum) : moneyBRL(current.valor_produto || 0));
     setFirst(['#ml-freight','.js-ml-frete'],     freight != null ? moneyBRL(freight) : moneyBRL(current.valor_frete || 0));
 
+    // link do claim
     var claimId = (payload && payload.sources && payload.sources.claim_id) || readFirst(CLAIM_ID_SELECTORS);
-    var a = $('claim-open-link'); if (a) { a.setAttribute('title', claimId ? ('Claim ID: ' + claimId) : 'Sem Claim ID'); a.href = '#'; }
+    var a = $('claim-open-link');
+    if (a) {
+      if (claimId) {
+        a.href = 'https://www.mercadolivre.com.br/claims/' + encodeURIComponent(String(claimId).replace(/\D+/g,''));
+        a.target = '_blank'; a.rel = 'noopener';
+        a.setAttribute('title', 'Abrir claim #' + claimId + ' no ML');
+      } else {
+        a.href = '#'; a.removeAttribute('target'); a.setAttribute('title', 'Sem Claim ID');
+      }
+    }
 
     if ($('ml-return-cost')) {
       if (retCost && retCost.amount != null) { $('ml-return-cost').textContent = moneyBRL(retCost.amount); $('ml-return-cost').dataset.value = String(toNum(retCost.amount)); }
@@ -521,7 +488,7 @@
                     sources: { claim_id: (current.raw && (current.raw.ml_claim_id || current.raw.claim_id)) || null } });
   }
 
-  // === Claim UI + Mediação/Status ML ===
+  // Claim UI
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
   function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
@@ -531,7 +498,6 @@
     el.className = 'pill ' + (map[state] || '-neutro');
     el.textContent = label;
   }
-
   function fillClaimUI(claim){
     if (!claim || typeof claim !== 'object') return;
 
@@ -577,9 +543,20 @@
     var related = Array.isArray(claim.related_entities) ? claim.related_entities : [];
     related.forEach(function(r){ pushLi('claim-related', `<b>${r.type || '-'}</b> • ${r.id || '-'}`); });
 
-    var prefer =
-      reasonCanonFromPayload({ claim: claim }) ||
-      canonFromCode(claim.reason_id);
+    var prefer = (function (root) {
+      // tenta inferir motivo
+      function canonFromPayload(root){
+        if (!root || typeof root !== 'object') return null;
+        if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
+        if (root.reason_name && REASONNAME_TO_CANON[root.reason_name]) return REASONNAME_TO_CANON[root.reason_name];
+        if (root.reason_name) { var t = canonFromText(root.reason_name); if (t) return t; }
+        if (root.reason_detail) { var td = canonFromText(root.reason_detail); if (td) return td; }
+        if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
+        return null;
+      }
+      return canonFromPayload({ reason_key: claim.reason_key, reason_name: claim.reason_name, reason_id: claim.reason_id, reason_detail: claim.reason_detail })
+             || canonFromCode(claim.reason_id);
+    })();
 
     if (prefer) {
       setMotivoCanon(prefer, true);
@@ -620,24 +597,23 @@
     }
   }
 
-  // fetch claim com fallback se der 403
   function tryFetchClaimDetails(claimId){
     if (!claimId) return Promise.resolve();
     var nk = sellerNick();
     var q = nk ? ('?nick=' + encodeURIComponent(nk)) : '';
     return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + q, { headers: { 'Accept': 'application/json' } })
       .then(function(r){
-        if (r.status === 403 && q) { // tenta sem nick
+        if (r.status === 403 && q) {
           return fetch('/api/ml/claims/' + encodeURIComponent(claimId), { headers: { 'Accept':'application/json' } });
         }
         return r;
       })
       .then(function(r){ if(!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(j){ var c = j && (j.data || j.claim || j); if (c && typeof c==='object') fillClaimUI(c); })
-      .catch(function(){ /* silencioso */ });
+      .catch(function(){});
   }
 
-  // ===== Return-cost (frete de devolução do ML)
+  /* ================= Return-cost (ML) ================= */
   function showReturnCostInUi(data){
     if (!data) return;
     var brl = toNum(data.amount);
@@ -675,7 +651,7 @@
     var base = '/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?' + params.join('&');
     return fetch(base, { headers: { 'Accept': 'application/json' } })
       .then(function(r){
-        if (r.status === 403 && nk) { // tenta sem nick
+        if (r.status === 403 && nk) {
           return fetch('/api/ml/claims/' + encodeURIComponent(claimId) + '/charges/return-cost?usd=true', { headers: { 'Accept':'application/json' } });
         }
         return r;
@@ -690,224 +666,7 @@
       .catch(function(){});
   }
 
-  // Debug opcional
-  function showDebug(raw, normd){
-    if (!qs.has('debug')) return;
-    var pre = document.createElement('details');
-    pre.open = true; pre.style.margin = '12px 0';
-    pre.innerHTML = '<summary style="cursor:pointer">Debug: payload recebido / normalizado</summary>' +
-      '<pre style="white-space:pre-wrap;font-size:12px;background:#f7f7f8;border:1px solid #e6e6eb;padding:10px;border-radius:8px;overflow:auto;max-height:320px"></pre>';
-    var main = document.querySelector('.page-wrap');
-    if (main) main.insertBefore(pre, main.firstChild);
-    try { pre.querySelector('pre').textContent = JSON.stringify({raw: raw, normalized: normd}, null, 2); } catch(e){}
-  }
-  function normalizeAndSet(j){ var n = normalize(j); current = n; try{ console.debug('[devolucao-editar] raw->norm', j, n);}catch(e){} fill(n); showDebug(j,n); }
-
-  // ===== API =====
-  function safeJson(res){ if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status)); if (res.status === 204) return {}; return res.json(); }
-  function reloadCurrent(){
-    if (!returnId) return Promise.resolve();
-    return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
-      .then(safeJson)
-      .then(function (j) { var data = (j && (j.data || j.item || j.return || j)) || j || {}; normalizeAndSet(data); });
-  }
-
-  // Busca claim por order_id (com /api/ml/claims/search)
-  function searchClaimsByOrder(orderId){
-    if (!orderId) return Promise.resolve([]);
-    var nk = sellerNick();
-    var url = '/api/ml/claims/search?order_id=' + encodeURIComponent(orderId) + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
-    return fetch(url, { headers: { 'Accept':'application/json' } })
-      .then(function(r){
-        if (r.status === 403 && nk) {
-          return fetch('/api/ml/claims/search?order_id=' + encodeURIComponent(orderId), { headers: { 'Accept':'application/json' } });
-        }
-        return r;
-      })
-      .then(function(r){ if (!r.ok) return []; return r.json(); })
-      .then(function(j){ var items = (j && (j.items || j.results || j.claims)) || []; return Array.isArray(items) ? items : []; })
-      .catch(function(){ return []; });
-  }
-  function pickLatestClaimId(items){
-    if (!Array.isArray(items) || !items.length) return null;
-    items.sort(function(a,b){
-      var da = new Date(a.created_date || a.date_created || 0).getTime();
-      var db = new Date(b.created_date || b.date_created || 0).getTime();
-      return db - da;
-    });
-    return String(items[0].id || items[0].claim_id || '').replace(/\D+/g,'') || null;
-  }
-
-  // ===== ENRIQUECIMENTO (via /claims/:claim_id/returns/enriched)
-  var ENRICH_TTL_MS = 10 * 60 * 1000;
-  function lojaEhML(nome){ var s=String(nome||'').toLowerCase(); return s.indexOf('mercado')>=0 || s.indexOf('meli')>=0 || s.indexOf('ml')>=0; }
-  function parecePedidoML(pedido){ return /^\d{6,}$/.test(String(pedido || '')); }
-  function needsEnrichment(d){
-    var faltamValores = !d || toNum(d.valor_produto) === 0 || toNum(d.valor_frete) === 0;
-    var faltamMetadados = !d || !d.id_venda || !d.cliente_nome || !d.loja_nome || !d.data_compra;
-    return faltamValores || faltamMetadados;
-  }
-  function canEnrichNow(){ var key='rf_enrich_'+returnId; var last=Number(localStorage.getItem(key) || 0); var ok=!last || (Date.now()-last)>ENRICH_TTL_MS; if(ok) localStorage.setItem(key,String(Date.now())); return ok; }
-
-  function pickSkuFromOrder(ord){
-    if (!ord) return null;
-    var arr = ord.order_items || ord.items || [];
-    var first = arr[0] || {};
-    var it = first.item || first;
-    var sku = (first.seller_sku || first.variation_sku || it.seller_sku || it.sku || it.id || null);
-    return sku ? String(sku).toUpperCase() : null;
-  }
-  function applyIfEmpty(acc, field, value){
-    if (value == null || value === '') return acc;
-    var cur=current[field];
-    if (cur == null || String(cur).trim() === '') acc[field] = (field==='sku' ? String(value).toUpperCase() : value);
-    return acc;
-  }
-
-  function persistMetaPatch(patch){
-    var idp = current.id || returnId;
-    if (!idp || !Object.keys(patch).length) return Promise.resolve();
-    return fetch('/api/returns/' + encodeURIComponent(idp), {
-      method: 'PATCH',
-      headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' })) }
-    ).catch(function(){});
-  }
-
-  function enrichFromML(reason){
-    reason = reason || 'auto';
-    if (!current || !current.id) return Promise.resolve(false);
-
-    disableHead(true);
-    setAutoHint('(buscando valores no ML…)');
-
-    var typedOrderId = readFirst(ORDER_ID_SELECTORS);
-    var typedClaimId = readFirst(CLAIM_ID_SELECTORS);
-
-    function enrichedFetchByClaim(cId){
-      if (!cId) return Promise.reject(new Error('no_claim'));
-      var nk = sellerNick();
-      var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
-      return fetch(url, { headers: { 'Accept':'application/json' } })
-        .then(function(r){
-          if (r.status === 403 && nk) {
-            return fetch('/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true', { headers: { 'Accept':'application/json' } });
-          }
-          return r;
-        })
-        .then(function(r){
-          return r.text().then(function (txt) {
-            var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
-            if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status)); err.status = r.status; throw err; }
-            return j;
-          });
-        });
-    }
-
-    var claimPromise;
-    if (typedClaimId) {
-      claimPromise = Promise.resolve(String(typedClaimId).replace(/\D+/g,''));
-    } else if (typedOrderId) {
-      claimPromise = searchClaimsByOrder(String(typedOrderId).replace(/\D+/g,''))
-        .then(pickLatestClaimId);
-    } else {
-      claimPromise = Promise.resolve(null);
-    }
-
-    return claimPromise
-      .then(function(claimId){
-        if (!claimId) throw new Error('Sem claim para enriquecer');
-        return enrichedFetchByClaim(claimId).then(function(j){ return { claimId: claimId, payload: j }; });
-      })
-      .then(function(res){
-        var j = res.payload || {};
-        // j: { claim_id, returns, reviews, return_cost, orders, summary }
-
-        // aplicar resumo UI (ordem/data/nick & frete)
-        try {
-          var anyOrder = (j.orders && j.orders[0]) || null;
-          var ordMeta = anyOrder ? { id: anyOrder.order_id } : null;
-          fillMlSummary({ order: ordMeta, return_cost: j.return_cost });
-        } catch(_){}
-
-        // produto: soma de total_paid (fallback unit_price*quantity)
-        var product = null;
-        if (Array.isArray(j.orders) && j.orders.length) {
-          product = j.orders.reduce(function(acc, o){
-            var p = (o.total_paid != null ? toNum(o.total_paid) : toNum(o.unit_price) * toNum(o.quantity || 1));
-            return acc + (isFinite(p) ? p : 0);
-          }, 0);
-        }
-
-        // frete: return_cost.amount
-        var freight = (j.return_cost && j.return_cost.amount != null) ? toNum(j.return_cost.amount) : null;
-
-        // aplica nos inputs se vazio/0 (respeitando dirty)
-        var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
-        var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
-        var changed = false;
-        if (product !== null && toNum(product) !== toNum(current.valor_produto)) { current.valor_produto = toNum(product); if (ip && ip.dataset.dirty!=='1')  { ip.value  = String(current.valor_produto); changed = true; } }
-        if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   { current.valor_frete   = toNum(freight); if (ifr && ifr.dataset.dirty!=='1'){ ifr.value = String(current.valor_frete);   changed = true; } }
-
-        if (changed) {
-          recalc(); updateSummary(Object.assign({}, current, capture()));
-          toast('Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados' +
-               ((product !== null) ? ' · produto ' + moneyBRL(product) : '') +
-               ((freight !== null) ? ' · frete '   + moneyBRL(freight) : ''), 'success');
-        } else {
-          toast('Valores do ML já estavam corretos.', 'info');
-        }
-
-        // patch metadados locais se faltando
-        var patch = {};
-        if (Array.isArray(j.orders) && j.orders.length) {
-          var ord = j.orders[0];
-          applyIfEmpty(patch, 'id_venda', ord.order_id);
-          var sku = ord.item_id ? String(ord.item_id).toUpperCase() : null;
-          applyIfEmpty(patch, 'sku', sku);
-        }
-        if (j.summary) {
-          var rr = (j.summary.reasons_from_review || [])[0] || null;
-          var canon = rr ? (canonFromText(rr.seller_reason) || canonFromCode(rr.reason_id)) : null;
-          if (canon) setMotivoCanon(canon, true);
-        }
-        if (Object.keys(patch).length) {
-          setFirst(ORDER_ID_SELECTORS, patch.id_venda);
-          setFirst(['#sku','input[name="sku"]','.js-sku'], patch.sku, { upper:true });
-          current = Object.assign({}, current, patch);
-        }
-
-        // persist money/log e metadados
-        var amountsPatch = {};
-        if (product !== null) amountsPatch.valor_produto = toNum(product);
-        if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
-
-        var persistMoney = Promise.resolve();
-        if (Object.keys(amountsPatch).length) {
-          var body = Object.assign({}, amountsPatch, { updated_by: 'frontend-auto-enrich' });
-          persistMoney = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-          }).catch(function(){});
-        }
-        var persistMeta = persistMetaPatch(patch);
-
-        // claim UI completa (puxa detalhes do claim)
-        tryFetchClaimDetails(res.claimId);
-
-        // return-cost direto
-        fetchAndApplyReturnCost(res.claimId, { persist: true });
-
-        return Promise.all([persistMoney, persistMeta]);
-      })
-      .then(function(){ return reloadCurrent(); })
-      .catch(function (e) {
-        if (e && e.status === 404) toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
-        else toast((e && e.message) || 'Não foi possível obter dados do ML', 'error');
-      })
-      .then(function(){ setAutoHint(''); disableHead(false); });
-  }
-
-  // ===== TIMELINE =====
+  /* ================= Timeline ================= */
   function coerceEventsPayload(j){ if (Array.isArray(j)) return j; if (!j || typeof j !== 'object') return []; return j.items || j.events || j.data || []; }
   function fetchEvents(id, limit, offset){
     limit = limit || 100; offset = offset || 0;
@@ -980,48 +739,9 @@
       .then(function(){ if (elLoad) elLoad.hidden=true; if (elList) elList.setAttribute('aria-busy','false'); });
   }
 
-  // ===== Marcação Operacional =====
-  function handleMarkApply(){
-    var sel = $('mark-op'), obs = $('mark-obs'); if (!sel) return;
-    var mark = (sel.value || '').trim(); var note = (obs && obs.value || '').trim();
-    if (!mark) { toast('Selecione uma marcação.', 'warning'); return; }
-    var id = current.id || returnId; if (!id) { toast('ID inválido.', 'error'); return; }
-
-    disableHead(true);
-
-    // 1) tenta endpoint dedicado
-    fetch('/api/returns/' + encodeURIComponent(id) + '/mark', {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
-      body: JSON.stringify({ mark: mark, note: note, updated_by: 'frontend-mark' })
-    })
-    .then(function(r){
-      if (r.ok) return r.json().catch(function(){});
-      if (r.status === 404) throw new Error('NO_MARK_ENDPOINT');
-      return r.json().catch(function(){ }).then(function(e){ throw new Error((e && e.error) || 'Falha ao marcar'); });
-    })
-    .then(function(){ toast('Marcação aplicada.', 'success'); return Promise.all([reloadCurrent(), refreshTimeline(id)]); })
-    .catch(function(e){
-      if (e && e.message === 'NO_MARK_ENDPOINT') {
-        // 2) fallback: PATCH no recurso principal com campos genéricos
-        return fetch('/api/returns/' + encodeURIComponent(id), {
-          method: 'PATCH',
-          headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
-          body: JSON.stringify({ op_mark: mark, op_note: note, updated_by: 'frontend-mark-fallback' })
-        })
-        .then(function(r){ if(!r.ok) throw new Error('Falha ao marcar'); })
-        .then(function(){ toast('Marcação aplicada (fallback).', 'success'); return Promise.all([reloadCurrent(), refreshTimeline(id)]); });
-      }
-      throw e;
-    })
-    .catch(function(err){ toast((err && err.message) || 'Erro ao aplicar marcação', 'error'); })
-    .then(function(){ disableHead(false); });
-  }
-
-  // ===== Atalhos =====
+  /* ================= Ações header ================= */
   document.addEventListener('keydown', function (e) { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } });
 
-  // ===== Listeners =====
   ['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto',
    '#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete',
    '#status','select[name="status"]'
@@ -1039,4 +759,377 @@
   var rqRec=$('rq-receber'); if (rqRec) rqRec.addEventListener('click', openReceiveDialog);
   var btnCd = $('btn-cd');   if (btnCd) btnCd.addEventListener('click', openReceiveDialog);
 
-  var btnSalvar=$('btn-salvar'); if (btnSalvar) btnSalvar.addEve
+  var btnSalvar=$('btn-salvar'); if (btnSalvar) btnSalvar.addEventListener('click', save);
+
+  // Botão "Aplicar" (marcação rápida)
+  var btnMark=$('btn-mark');
+  if (btnMark) {
+    btnMark.addEventListener('click', function(){
+      var id = current.id || returnId;
+      if (!id) return toast('ID inválido.', 'error');
+      var sel = $('mark-op'); var obs = $('mark-obs');
+      var body = { updated_by: 'frontend-mark' };
+      if (sel && sel.value) body.status = sel.value;
+      if (obs && obs.value) body.mark_obs = obs.value;
+      fetch('/api/returns/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify(body)
+      })
+      .then(function(r){ if(!r.ok) throw new Error('Falha ao aplicar'); })
+      .then(function(){ toast('Aplicado.', 'success'); return Promise.all([reloadCurrent(), refreshTimeline(id)]); })
+      .catch(function(e){ toast(e.message || 'Erro ao aplicar', 'error'); });
+    });
+  }
+
+  var btnEnrich=$('btn-enrich'); if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
+  function disableHead(disabled){
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd','btn-mark']
+      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
+  }
+
+  /* ================= Save ================= */
+  function save(){
+    var body = capture();
+    var id = current.id || returnId;
+    if (!id) { toast('ID inválido.', 'error'); return; }
+    fetch('/api/returns/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(Object.assign({}, body, { updated_by: 'frontend' }))
+    })
+    .then(function (r) {
+      if(!r.ok) return r.json().catch(function(){}).then(function(e){ throw new Error((e && e.error) || 'Falha ao salvar'); });
+    })
+    .then(function(){ return reloadCurrent(); })
+    .then(function(){ toast('Salvo!', 'success'); return refreshTimeline(id); })
+    .catch(function(e){ toast(e.message || 'Erro ao salvar', 'error'); });
+  }
+
+  /* ================= Recebimento no CD ================= */
+  function runReceive(responsavel, whenIso){
+    var id = current.id || returnId;
+    if (!id) return;
+    var when = whenIso || new Date().toISOString();
+    disableHead(true);
+    return fetch('/api/returns/' + encodeURIComponent(id) + '/cd/receive', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'receive-' + id + '-' + when },
+      body: JSON.stringify({ responsavel: responsavel || '', when: when, updated_by: 'frontend' })
+    })
+    .then(function(r){ if(!r.ok) return r.json().catch(function(){}) .then(function(e){ throw new Error((e && e.error) || 'Falha ao marcar recebido');}); })
+    .then(function(){ return reloadCurrent(); })
+    .then(function(){ toast('Recebido no CD registrado!', 'success'); return refreshTimeline(id); })
+    .catch(function(e){ toast(e.message || 'Erro ao marcar recebido', 'error'); })
+    .then(function(){ disableHead(false); });
+  }
+  function openReceiveDialog(){
+    var dlg     = $('dlg-recebido') || $('dlg-receber');
+    if (dlg && (dlg.showModal || dlg.removeAttribute)) {
+      var inputNome   = $('rcd-resp') || $('rcv-name');
+      var inputQuando = $('rcd-when') || $('rcv-when');
+      var btnNo       = $('rcd-cancel') || $('rcv-cancel');
+      var form        = $('rcd-form')   || $('rcv-form');
+
+      if (inputNome) inputNome.value = '';
+      if (inputQuando){
+        var tzFix = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
+        inputQuando.value = tzFix;
+      }
+      function submit(ev){
+        ev && ev.preventDefault();
+        var nome = (inputNome && inputNome.value || '').trim();
+        var whenLocal = inputQuando && inputQuando.value;
+        if (dlg.close) dlg.close(); else dlg.setAttribute('hidden','');
+        runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null);
+        cleanup();
+      }
+      function cancel(){ if (dlg.close) dlg.close(); cleanup(); }
+      function cleanup(){
+        if (form)  form.removeEventListener('submit', submit);
+        if (btnNo) btnNo.removeEventListener('click', cancel);
+      }
+      if (form)  form.addEventListener('submit', submit);
+      if (btnNo) btnNo.addEventListener('click', cancel);
+      if (dlg.showModal) dlg.showModal(); else dlg.removeAttribute('hidden');
+      setTimeout(function(){ inputNome && inputNome.focus(); }, 0);
+      return;
+    }
+    var nome = prompt('Quem recebeu no CD? (nome/assinatura)');
+    if (nome !== null) runReceive(String(nome).trim());
+  }
+
+  /* ================= Inspeção ================= */
+  function openInspectDialog(targetStatus){
+    var dlg = $('dlg-inspecao'); if (!dlg) return performInspectFallback(targetStatus, '');
+    var sub = $('insp-sub'), txt = $('insp-text');
+    var btnCancel = $('insp-cancel'), form = $('insp-form');
+
+    if (sub) sub.textContent = targetStatus === 'aprovado' ? 'Você vai APROVAR a inspeção.' : 'Você vai REPROVAR a inspeção.';
+    if (txt) txt.value = '';
+
+    function submit(ev){
+      ev && ev.preventDefault();
+      var note = (txt && txt.value || '').trim();
+      if (dlg.close) dlg.close();
+      performInspect(targetStatus, note);
+      cleanup();
+    }
+    function cancel(){ if (dlg.close) dlg.close(); cleanup(); }
+    function cleanup(){ if (form) form.removeEventListener('submit', submit); if (btnCancel) btnCancel.removeEventListener('click', cancel); }
+    if (form) form.addEventListener('submit', submit);
+    if (btnCancel) btnCancel.addEventListener('click', cancel);
+    if (dlg.showModal) dlg.showModal(); else dlg.removeAttribute('hidden');
+  }
+  function performInspectFallback(targetStatus, note){
+    var id = current.id || returnId;
+    if (!id) return;
+    var log = (targetStatus === 'aprovado') ? 'aprovado_cd' : 'reprovado_cd';
+    disableHead(true);
+    return fetch('/api/returns/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ log_status: log, insp_note: note, updated_by: 'frontend-inspecao' })
+    })
+    .then(function(r){ if(!r.ok) throw new Error('Falha ao atualizar inspeção'); })
+    .then(function(){ return reloadCurrent(); })
+    .then(function(){ toast('Inspeção registrada.', 'success'); return refreshTimeline(id); })
+    .catch(function(e){ toast(e.message || 'Erro ao registrar inspeção', 'error'); })
+    .then(function(){ disableHead(false); });
+  }
+  function performInspect(targetStatus, note){
+    var id = current.id || returnId; if (!id) return;
+    disableHead(true);
+    return fetch('/api/returns/' + encodeURIComponent(id) + '/cd/inspect', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result: (targetStatus === 'aprovado' ? 'approve' : 'reject'), note: note || '', updated_by: 'frontend-inspecao' })
+    })
+    .then(function(r){ if (r.ok) return; return performInspectFallback(targetStatus, note); })
+    .then(function(){ return reloadCurrent(); })
+    .then(function(){ toast('Inspeção registrada.', 'success'); return refreshTimeline(id); })
+    .catch(function(){})
+    .then(function(){ disableHead(false); });
+  }
+
+  /* ================= Enriquecimento (ML) ================= */
+  var ENRICH_TTL_MS = 10 * 60 * 1000;
+  function lojaEhML(nome){ var s=String(nome||'').toLowerCase(); return s.indexOf('mercado')>=0 || s.indexOf('meli')>=0 || s.indexOf('ml')>=0; }
+  function parecePedidoML(pedido){ return /^\d{6,}$/.test(String(pedido || '')); }
+  function needsEnrichment(d){
+    var faltamValores = !d || toNum(d.valor_produto) === 0 || toNum(d.valor_frete) === 0;
+    var faltamMetadados = !d || !d.id_venda || !d.cliente_nome || !d.loja_nome || !d.data_compra;
+    return faltamValores || faltamMetadados;
+  }
+  function canEnrichNow(){ var key='rf_enrich_'+returnId; var last=Number(localStorage.getItem(key) || 0); var ok=!last || (Date.now()-last)>ENRICH_TTL_MS; if(ok) localStorage.setItem(key,String(Date.now())); return ok; }
+
+  function persistMetaPatch(patch){
+    var idp = current.id || returnId;
+    if (!idp || !Object.keys(patch).length) return Promise.resolve();
+    return fetch('/api/returns/' + encodeURIComponent(idp), {
+      method: 'PATCH',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' })) }
+    ).catch(function(){});
+  }
+  function searchClaimsByOrder(orderId){
+    if (!orderId) return Promise.resolve([]);
+    var nk = sellerNick();
+    var url = '/api/ml/claims/search?order_id=' + encodeURIComponent(orderId) + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
+    return fetch(url, { headers: { 'Accept':'application/json' } })
+      .then(function(r){
+        if (r.status === 403 && nk) {
+          return fetch('/api/ml/claims/search?order_id=' + encodeURIComponent(orderId), { headers: { 'Accept':'application/json' } });
+        }
+        return r;
+      })
+      .then(function(r){ if (!r.ok) return []; return r.json(); })
+      .then(function(j){ var items = (j && (j.items || j.results || j.claims)) || []; return Array.isArray(items) ? items : []; })
+      .catch(function(){ return []; });
+  }
+  function pickLatestClaimId(items){
+    if (!Array.isArray(items) || !items.length) return null;
+    items.sort(function(a,b){
+      var da = new Date(a.created_date || a.date_created || 0).getTime();
+      var db = new Date(b.created_date || b.date_created || 0).getTime();
+      return db - da;
+    });
+    return String(items[0].id || items[0].claim_id || '').replace(/\D+/g,'') || null;
+  }
+
+  function enrichFromML(reason){
+    reason = reason || 'auto';
+    if (!current || !current.id) current = { id: returnId }; // garante id para persist
+
+    disableHead(true);
+    setAutoHint('(buscando valores no ML…)');
+
+    var typedOrderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id');
+    var typedClaimId = readFirst(CLAIM_ID_SELECTORS) || qs.get('claim_id');
+
+    function enrichedFetchByClaim(cId){
+      if (!cId) return Promise.reject(new Error('no_claim'));
+      var nk = sellerNick();
+      var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
+      return fetch(url, { headers: { 'Accept':'application/json' } })
+        .then(function(r){
+          if (r.status === 403 && nk) {
+            return fetch('/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true', { headers: { 'Accept':'application/json' } });
+          }
+          return r;
+        })
+        .then(function(r){ return r.text().then(function (txt) {
+          var j={}; try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
+          if (!r.ok) { var err = new Error((j && (j.error || j.message)) || ('HTTP '+r.status)); err.status = r.status; throw err; }
+          return j;
+        });});
+    }
+
+    var claimPromise;
+    if (typedClaimId) {
+      claimPromise = Promise.resolve(String(typedClaimId).replace(/\D+/g,''));
+    } else if (typedOrderId) {
+      claimPromise = searchClaimsByOrder(String(typedOrderId).replace(/\D+/g,''))
+        .then(pickLatestClaimId);
+    } else {
+      claimPromise = Promise.resolve(null);
+    }
+
+    return claimPromise
+      .then(function(claimId){
+        if (!claimId) throw new Error('Sem claim para enriquecer');
+        return enrichedFetchByClaim(claimId).then(function(j){ return { claimId: claimId, payload: j }; });
+      })
+      .then(function(res){
+        var j = res.payload || {};
+        try {
+          var anyOrder = (j.orders && j.orders[0]) || null;
+          var ordMeta = anyOrder ? { id: anyOrder.order_id } : null;
+          fillMlSummary({ order: ordMeta, return_cost: j.return_cost });
+        } catch(_){}
+
+        var product = null;
+        if (Array.isArray(j.orders) && j.orders.length) {
+          product = j.orders.reduce(function(acc, o){
+            var p = (o.total_paid != null ? toNum(o.total_paid) : toNum(o.unit_price) * toNum(o.quantity || 1));
+            return acc + (isFinite(p) ? p : 0);
+          }, 0);
+        }
+        var freight = (j.return_cost && j.return_cost.amount != null) ? toNum(j.return_cost.amount) : null;
+
+        var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
+        var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
+        var changed = false;
+        if (product !== null && toNum(product) !== toNum(current.valor_produto)) { current.valor_produto = toNum(product); if (ip && ip.dataset.dirty!=='1')  { ip.value  = String(current.valor_produto); changed = true; } }
+        if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   { current.valor_frete   = toNum(freight); if (ifr && ifr.dataset.dirty!=='1'){ ifr.value = String(current.valor_frete);   changed = true; } }
+
+        if (changed) {
+          recalc(); updateSummary(Object.assign({}, current, capture()));
+          toast('Valores do ML ' + (reason === 'auto' ? '(auto) ' : '') + 'aplicados' +
+               ((product !== null) ? ' · produto ' + moneyBRL(product) : '') +
+               ((freight !== null) ? ' · frete '   + moneyBRL(freight) : ''), 'success');
+        } else {
+          toast('Valores do ML já estavam corretos.', 'info');
+        }
+
+        var patch = {};
+        if (Array.isArray(j.orders) && j.orders.length) {
+          var ord = j.orders[0];
+          if (!current.id_venda) patch.id_venda = ord.order_id;
+          var sku = ord.item_id ? String(ord.item_id).toUpperCase() : null;
+          if (!current.sku && sku) patch.sku = sku;
+        }
+        if (Object.keys(patch).length) {
+          if (patch.id_venda) setFirst(ORDER_ID_SELECTORS, patch.id_venda);
+          if (patch.sku) setFirst(['#sku','input[name="sku"]','.js-sku'], patch.sku, { upper:true });
+          current = Object.assign({}, current, patch);
+        }
+
+        var amountsPatch = {};
+        if (product !== null) amountsPatch.valor_produto = toNum(product);
+        if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
+
+        var persistMoney = Promise.resolve();
+        if (Object.keys(amountsPatch).length && (current.id || returnId)) {
+          var body = Object.assign({}, amountsPatch, { updated_by: 'frontend-auto-enrich' });
+          persistMoney = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+          }).catch(function(){});
+        }
+        var persistMeta = persistMetaPatch(patch);
+
+        tryFetchClaimDetails(res.claimId);
+        fetchAndApplyReturnCost(res.claimId, { persist: true });
+
+        return Promise.all([persistMoney, persistMeta]);
+      })
+      .then(function(){ return reloadCurrent(); })
+      .catch(function (e) {
+        if (e && e.status === 404) toast('Sem dados do Mercado Livre para esta devolução.', 'warning');
+        else toast((e && e.message) || 'Não foi possível obter dados do ML', 'error');
+      })
+      .then(function(){ setAutoHint(''); disableHead(false); });
+  }
+
+  /* ================= API local ================= */
+  function safeJson(res){ if (!res.ok) return Promise.reject(new Error('HTTP ' + res.status)); if (res.status === 204) return {}; return res.json(); }
+  function normalizeAndSet(j){ var n = normalize(j); current = n; fill(n); if (qs.has('debug')) try{ console.debug('[devolucao-editar] raw->norm', j, n);}catch(e){} }
+
+  function reloadCurrent(){
+    if (!returnId) return Promise.resolve();
+    return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
+      .then(function(r){
+        if (r.status === 404) {
+          // fallback: inicializa estado mínimo e não trava fluxo
+          current = { id: returnId };
+          return Promise.reject(Object.assign(new Error('404'), { status: 404 }));
+        }
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        return r.json();
+      })
+      .then(function (j) { var data = (j && (j.data || j.item || j.return || j)) || j || {}; normalizeAndSet(data); })
+      .catch(function (e) {
+        if (e && e.status === 404) return; // seguimos com enrich
+        throw e;
+      });
+  }
+
+  /* ================= Load inicial ================= */
+  function load(){
+    if (!returnId) {
+      var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>ID não informado.</b></div>'; return;
+    }
+    reloadCurrent()
+      .then(function(){
+        upperSKUInstant();
+        [getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
+         getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
+        ].forEach(bindDirty);
+      })
+      .catch(function(){ /* 404 tratado em reloadCurrent */ })
+      .then(function(){
+        var needMotivoConvert = !!current.tipo_reclamacao && !/_/.test(String(current.tipo_reclamacao)) && current.tipo_reclamacao !== 'nao_corresponde';
+        var podeML = lojaEhML(current.loja_nome) || parecePedidoML(current.id_venda) || !!readFirst(CLAIM_ID_SELECTORS) || !!qs.get('order_id') || !!qs.get('claim_id');
+
+        if (needMotivoConvert) return enrichFromML('motivo');
+        if (podeML && canEnrichNow() && needsEnrichment(current)) return enrichFromML('auto');
+      })
+      .then(function(){
+        var ls = String(current.log_status || '').toLowerCase();
+        if (ls === 'aprovado_cd' || ls === 'reprovado_cd') {
+          var btnA=$('btn-insp-aprova'), btnR=$('btn-insp-reprova'); if (btnA && btnA.style) btnA.style.display='none'; if (btnR && btnR.style) btnR.style.display='none';
+          var rqA2=$('rq-aprovar'), rqR2=$('rq-reprovar'); if (rqA2) rqA2.setAttribute('disabled','true'); if (rqR2) rqR2.setAttribute('disabled','true');
+        }
+
+        var cid = readFirst(CLAIM_ID_SELECTORS) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
+        if (cid && !(current.raw && current.raw.claim)) tryFetchClaimDetails(cid);
+        if (cid) fetchAndApplyReturnCost(String(cid), { persist: true });
+
+        return (current.id || returnId) ? refreshTimeline(current.id || returnId) : null;
+      })
+      .catch(function (e) {
+        var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>'+(e.message || 'Falha ao carregar.')+'</b></div>';
+      });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load); else load();
+})();

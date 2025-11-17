@@ -11,16 +11,14 @@
   <div class="devolucao-page">
     <!-- Topbar -->
     <div class="topbar-mini">
-      <button
-        type="button"
-        class="topbar-back voltar"
-        aria-label="Voltar para Devoluções"
-        onclick="(history.length > 1) ? history.back() : (location.href='index.html')">
-        <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M19 12H5M12 19l-7-7 7-7"/>
-        </svg>
-        <span>Voltar</span>
-      </button>
+      <a href="index.html" class="topbar-back" aria-label="Voltar para Devoluções">
+        <button type="button" class="voltar" onclick="history.back()">
+          <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+          <span>Voltar</span>
+        </button>
+      </a>
     </div>
 
     <main class="page-wrap" role="main">
@@ -28,7 +26,7 @@
       <header class="page-head">
         <div>
           <h1 class="title">
-            Devolução
+            Devolução 
             <span id="dv-id" class="kbd" aria-live="polite"></span>
           </h1>
           <p class="hint">
@@ -57,9 +55,9 @@
               <option value="troca">Troca</option>
               <option value="reembolso_parcial">Reembolso parcial</option>
             </select>
-
+            
             <input id="mark-obs" type="text" class="input-lg" placeholder="Observação (opcional)" />
-
+            
             <button id="btn-mark" class="btn btn--success btn--lg" type="button" title="Aplicar marcação">
               <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <polyline points="20 6 9 17 4 12"/>
@@ -129,6 +127,7 @@
 
       <!-- Grid de Cards -->
       <div class="grid">
+
         <!-- Dados da Devolução -->
         <section class="card" aria-labelledby="sec-dados">
           <h2 id="sec-dados">Dados da Devolução</h2>
@@ -209,27 +208,44 @@
           </div>
 
           <!-- Resumo ML (informativo) -->
-          <div class="ml-summary" aria-live="polite">
-            <div class="ml-pair"><span>Produto (ML):</span> <strong id="ml-product-sum">—</strong></div>
-            <div class="ml-pair"><span>Frete (ML):</span>   <strong id="ml-freight">—</strong></div>
+          <div class="ml-summary" aria-live="polite" id="ml-summary">
             <div class="ml-pair">
+              <span>Produto (ML):</span>
+              <strong id="ml-product-sum">—</strong>
+            </div>
+            <div class="ml-pair">
+              <span>Frete (ML):</span>
+              <strong id="ml-freight">—</strong>
+            </div>
+            <!-- Coluna REMOVIDA visualmente (mantida oculta p/ JS) -->
+            <div class="ml-pair" hidden aria-hidden="true">
               <span>Return cost (ML):</span>
               <strong id="ml-return-cost">—</strong>
               <small id="ml-return-cost-usd" class="muted">—</small>
             </div>
-            <!-- Âncoras extras que o JS preenche se existirem -->
-            <div class="ml-pair"><span>Pedido:</span>      <strong id="ml-order-display">—</strong></div>
-            <div class="ml-pair"><span>Loja/Nick:</span>   <strong id="ml-nick-display">—</strong></div>
-            <div class="ml-pair"><span>Data compra:</span> <strong id="ml-date-display">—</strong></div>
+            <div class="ml-pair">
+              <span>Pedido:</span>
+              <strong id="ml-order-display">—</strong>
+            </div>
+            <div class="ml-pair">
+              <span>Loja/Nick:</span>
+              <strong id="ml-nick-display">—</strong>
+            </div>
+            <div class="ml-pair">
+              <span>Data compra:</span>
+              <strong id="ml-date-display">—</strong>
+            </div>
           </div>
 
-          <!-- Indicadores de mediação/estado ML (opcional, o JS usa se existir) -->
-          <div class="ml-claim-status">
-            <span class="status-label">Mediação</span>
-            <span id="pill-mediacao" class="pill -neutro">—</span>
-            <div class="ml-status-line">
-              <small id="ml-status-desc" class="muted">—</small>
+          <!-- Mediação / Claim -->
+          <div class="ml-claim">
+            <div class="ml-claim-left">
+              <span class="status-label">Mediação</span>
+              <span id="pill-mediacao" class="pill -neutro">—</span>
+            </div>
+            <div class="ml-claim-right">
               <a id="claim-open-link" href="#" target="_blank" rel="noopener">Abrir Claim</a>
+              <small id="ml-status-desc" class="muted"></small>
             </div>
           </div>
 
@@ -265,12 +281,10 @@
         <!-- Nota Fiscal -->
         <section class="card" aria-labelledby="sec-nfe">
           <h2 id="sec-nfe">Nota Fiscal</h2>
-
           <div class="row">
             <label for="nfe_numero">Número da NF-e</label>
             <input id="nfe_numero" name="nfe_numero" type="text" placeholder="Ex.: 12345" autocomplete="off" />
           </div>
-
           <div class="row">
             <label for="nfe_chave">Chave de acesso (44 dígitos)</label>
             <input id="nfe_chave" name="nfe_chave" type="text" placeholder="35240112345678901234567890123456789012345678" maxlength="44" class="font-mono" autocomplete="off" />
@@ -280,7 +294,6 @@
         <!-- Observações -->
         <section class="card" aria-labelledby="sec-obs">
           <h2 id="sec-obs">Observações</h2>
-
           <div class="row">
             <label for="reclamacao">Detalhes da reclamação</label>
             <textarea id="reclamacao" name="reclamacao" rows="6" placeholder="Descreva o motivo da devolução..."></textarea>
@@ -301,6 +314,6 @@
     <div id="toast" class="toast" aria-live="polite"></div>
   </div>
 
-  <script src="js/devolucao-editar.js" defer></script>
+  <script src="js/devolucao-editar.js"></script>
 </body>
 </html>
