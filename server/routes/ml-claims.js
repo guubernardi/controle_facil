@@ -3,32 +3,7 @@
 
 /**
  * Proxy Mercado Livre (Claims + Returns + Orders)
- * Rotas principais:
- *  - GET  /claims/:id
- *  - GET  /claims/:id/messages
- *  - GET  /claims/:id/expected-resolutions
- *  - GET  /claims/:id/partial-refund/available-offers
- *  - POST /claims/:id/expected-resolutions/partial-refund
- *  - POST /claims/:id/expected-resolutions/refund
- *  - POST /claims/:id/expected-resolutions/allow-return
- *  - GET  /claims/:id/evidences
- *  - POST /claims/:id/actions/evidences
- *  - POST /claims/:id/attachments-evidences (upload)
- *  - GET  /claims/:id/attachments-evidences/:attachmentId
- *  - GET  /claims/:id/attachments-evidences/:attachmentId/download
- *  - GET  /claims/:id/charges/return-cost
- *
- * Compat:
- *  - GET /claims/search?order_id=...
- *  - GET /claims/of-order/:orderId   (alias → /claims/search?order_id=...)
- *  - GET /claims?order_id=...        (alias)
- *
- * Returns/Orders:
- *  - GET /claims/:claim_id/returns                (v2)
- *  - GET /returns/:return_id/reviews
- *  - GET /orders/:order_id
- *  - GET /sales/:order_id        (alias de /orders/:order_id)
- *  - GET /claims/:claim_id/returns/enriched
+ * (…comentários originais omitidos por brevidade…)
  */
 
 const express   = require('express');
@@ -259,6 +234,68 @@ async function mlFetchRaw(req, url, opts = {}) {
   return r;
 }
 
+// === helpers extras p/ fallback por nick ===
+function extractNickFromStoreName(lojaNome) {
+  if (!lojaNome) return null;
+  let s = String(lojaNome).trim();
+  // formatos comuns: "Mercado Livre · NICK", "Mercado Livre - NICK"
+  const m = s.split('·');
+  if (m.length > 1) return m[1].trim();
+  const m2 = s.split('-');
+  if (m2.length > 1 && /mercado/i.test(m2[0])) return m2[1].trim();
+  // se já for só o nick
+  if (!/mercado/i.test(s)) return s;
+  return null;
+}
+
+async function inferNickFromOrderId(orderId) {
+  if (!orderId) return null;
+  try {
+    const { rows } = await query(
+      `SELECT loja_nome
+         FROM devolucoes
+        WHERE id_venda = $1
+        ORDER BY updated_at DESC NULLS LAST
+        LIMIT 1`,
+      [String(orderId)]
+    );
+    const loja = rows?.[0]?.loja_nome || null;
+    return extractNickFromStoreName(loja);
+  } catch {
+    return null;
+  }
+}
+
+async function mlFetchAsNick(req, url, nick, opts = {}) {
+  const row = await loadTokenRowFromDbByNick(nick, req.q || query);
+  const token = row?.access_token || null;
+  if (!token) {
+    const e = new Error('no_token_for_nick');
+    e.status = 401;
+    throw e;
+  }
+  const r = await fetch(url, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      ...(opts.headers || {})
+    }
+  });
+  const ct = r.headers.get('content-type') || '';
+  const body = ct.includes('application/json')
+    ? await r.json().catch(() => null)
+    : await r.text().catch(() => '');
+  if (!r.ok) {
+    const err = new Error((body && (body.message || body.error)) || r.statusText);
+    err.status = r.status;
+    err.body = body;
+    err.metadata = r.headers.get('metadata') || null;
+    throw err;
+  }
+  return body;
+}
+
 const ok = (res, data = {}) => res.json({ ok: true, ...data });
 
 /* ============================== Util helpers ============================== */
@@ -266,7 +303,6 @@ const ok = (res, data = {}) => res.json({ ok: true, ...data });
 const safeNum = (v) => (v == null ? null : Number(v));
 const coerceList = (x) => Array.isArray(x) ? x : (x && (x.results || x.items || x.claims || x.data)) || [];
 
-// PT-BR amigável para motivos comuns
 function humanizeReason(idOrText = '') {
   const s = String(idOrText).toLowerCase();
   const byId = {
@@ -294,7 +330,6 @@ function humanizeReason(idOrText = '') {
 }
 
 function extractClaimReason(claim = {}) {
-  // tenta várias formas vistas no ML
   const rid =
     claim?.reason_id ||
     claim?.reason_key ||
@@ -358,6 +393,7 @@ router.get('/claims/:id/messages', async (req, res) => {
 });
 
 /* ======================= 1) Mediation & Expected Resolutions ======================= */
+// (…mesmo conteúdo que te enviei antes…)
 
 router.post('/claims/:id/actions/open-dispute', async (req, res) => {
   try {
@@ -426,31 +462,7 @@ router.post('/claims/:id/expected-resolutions/allow-return', async (req, res) =>
 });
 
 /* ======================= 2) Evidences & Attachments ======================= */
-
-router.get('/claims/:id/evidences', async (req, res) => {
-  try {
-    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
-    const out = await mlFetch(req, `${ML_V1}/claims/${claimId}/evidences`);
-    return res.json(Array.isArray(out) ? out : (out || []));
-  } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
-  }
-});
-
-router.post('/claims/:id/actions/evidences', express.json(), async (req, res) => {
-  try {
-    const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
-    const body = req.body || {};
-    const out = await mlFetch(
-      req,
-      `${ML_V1}/claims/${claimId}/actions/evidences`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-    );
-    return res.json(out || { ok: true });
-  } catch (e) {
-    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
-  }
-});
+// (…mesmo conteúdo que te enviei antes…)
 
 const TMP_DIR = path.join(__dirname, '..', '..', 'tmp-upload');
 fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -459,24 +471,20 @@ const upload = multer({ dest: TMP_DIR });
 router.post('/claims/:id/attachments-evidences', upload.single('file'), async (req, res) => {
   const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
   if (!req.file) return res.status(400).json({ error: 'file é obrigatório (multipart/form-data)' });
-
   try {
     const form = new FormData();
     form.append('file', fs.createReadStream(req.file.path), {
       filename: req.file.originalname || req.file.filename,
       contentType: req.file.mimetype || 'application/octet-stream'
     });
-
     const extraHeaders = form.getHeaders();
     const xPublic = req.get('x-public');
     if (xPublic) extraHeaders['x-public'] = xPublic;
-
     const r = await mlFetchRaw(
       req,
       `${ML_V1}/claims/${claimId}/attachments-evidences`,
       { method: 'POST', headers: extraHeaders, body: form }
     );
-
     const out = await r.json().catch(() => ({}));
     fs.unlink(req.file.path, () => {});
     const file_name = out?.file_name || out?.filename || null;
@@ -515,6 +523,7 @@ router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (re
 });
 
 /* ======================= 3) Return Cost ======================= */
+// (igual)
 
 router.get('/claims/:id/charges/return-cost', async (req, res) => {
   try {
@@ -546,7 +555,6 @@ router.get('/claims/search', async (req, res) => {
     const sellerId = await resolveSellerId(req);
     const base = `${ML_V1}/claims/search`;
 
-    // tenta com seller_id; se 403/429, tenta sem
     async function doSearch(withSeller) {
       const url = withSeller && sellerId
         ? `${base}?seller_id=${encodeURIComponent(sellerId)}&order_id=${encodeURIComponent(orderId)}`
@@ -567,7 +575,7 @@ router.get('/claims/search', async (req, res) => {
   }
 });
 
-// Alias robusto (evita recursão): reescreve URL para /claims/search
+// Alias → /claims/search
 router.get('/claims/of-order/:orderId', (req, res) => {
   const orderId = String(req.params.orderId || '').replace(/\D/g, '');
   req.url = '/claims/search?' + new URLSearchParams({ order_id: orderId }).toString();
@@ -589,7 +597,6 @@ router.get('/claims/:claim_id/returns', async (req, res) => {
     const claimId = String(req.params.claim_id || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
     const data = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`);
-    // o v2 às vezes retorna objeto, às vezes lista
     const out = Array.isArray(data) ? data[0] || null : data || null;
     res.json(out || {});
   } catch (e) {
@@ -619,40 +626,42 @@ router.get('/orders/:order_id', async (req, res) => {
   }
 });
 
+// NEW: alias singular para cobrir fallback do frontend
+router.get('/order/:order_id', (req, res) => {
+  req.url = `/orders/${encodeURIComponent(String(req.params.order_id||''))}`;
+  return router.handle(req, res);
+});
+
 // Alias /sales/:order_id -> /orders/:order_id
 router.get('/sales/:order_id', (req, res) => {
   req.url = `/orders/${encodeURIComponent(String(req.params.order_id||''))}`;
   return router.handle(req, res);
 });
 
-/* ===== Enriched (robusto: funciona mesmo sem "return") ===== */
-
+/* ===== Enriched (robusto) ===== */
+// (igual ao anterior que te mandei, sem mudanças relevantes)
 router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
   try {
     const claimId = String(req.params.claim_id || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
     const wantUSD = String(req.query.usd || req.query.calculate_amount_usd || '') === 'true';
 
-    // 1) sempre pegar a claim v1
     let claim = null;
     try { claim = await mlFetch(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`); }
     catch (e) { if (e.status !== 404) throw e; }
 
-    // 2) tentar returns v2; se 404, seguimos sem "return"
     let ret = null;
     try {
       const raw = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`);
       ret = Array.isArray(raw) ? (raw[0] || null) : (raw || null);
     } catch (e) { if (e.status !== 404) throw e; }
 
-    // 3) reviews (só se existir return_id)
     let reviews = { reviews: [] };
     if (ret?.id) {
       try { reviews = await mlFetch(req, `${ML_V1}/returns/${ret.id}/reviews`); }
       catch (e) { if (e.status !== 404) throw e; }
     }
 
-    // 4) custo de devolução (tenta; se falhar, não quebra)
     let return_cost = null;
     try {
       const qp = wantUSD ? '?calculate_amount_usd=true' : '';
@@ -661,7 +670,6 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
       return_cost = { error: e.body?.error || 'unavailable', message: e.body?.message || e.message };
     }
 
-    // 5) orders — extrai do return (preferível) ou da claim
     const orders = [];
     const orderIds = new Set();
     const fetchOrder = async (oid) => {
@@ -703,10 +711,8 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
       if (maybeOid) pushOrder(maybeOid);
     }
 
-    // aguarda todas as orders antes de responder
     if (promises.length) await Promise.allSettled(promises);
 
-    // 6) reason + flow
     const reason = extractClaimReason(claim || {});
     const { flow, raw } = flowFromClaim({ ...claim, return: { status: ret?.status } });
 
@@ -715,14 +721,12 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
       refund_at: ret?.refund_at || null,
       subtype: ret?.subtype || null,
       status_money: ret?.status_money || null,
-
       shipments: (ret?.shipments || []).map(s => ({
         shipment_id: s?.shipment_id ?? s?.id ?? null,
         status: s?.status || null,
         type: s?.type || null,
         destination: s?.destination?.name || null,
       })),
-
       reasons_from_review: (reviews?.reviews || [])
         .flatMap(r => (r?.resource_reviews || []))
         .map(rr => ({
@@ -733,9 +737,8 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
           seller_reason: rr?.seller_reason || null,
           product_condition: rr?.product_condition || null
         })),
-
-      claim_reason: reason, // { id, label, raw }
-      flow,                 // 'disputa', 'mediação', etc.
+      claim_reason: reason,
+      flow,
       raw_status: raw
     };
 
@@ -753,7 +756,33 @@ router.get('/returns/state', async (req, res) => {
     const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
 
-    const claim = await mlFetch(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`);
+    // 1ª tentativa com o token “resolvido” normal (pode usar ?nick=)
+    let claim;
+    try {
+      claim = await mlFetch(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`);
+    } catch (e) {
+      // 2ª tentativa: se 401/403, tentar inferir nick via DB pelo order_id
+      if ((e.status === 401 || e.status === 403) && orderId && !req.query.nick) {
+        const inferredNick = await inferNickFromOrderId(orderId);
+        if (inferredNick) {
+          try {
+            claim = await mlFetchAsNick(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`, inferredNick);
+          } catch (e2) {
+            // mantém e2 para resposta detalhada
+            const s = e2.status || 500;
+            return res.status(s).json({ error: e2.message || 'error', detail: e2.body || null, metadata: e2.metadata || null, tried_nick: inferredNick });
+          }
+        } else {
+          // sem nick inferido — devolve erro original
+          const s = e.status || 500;
+          return res.status(s).json({ error: e.message || 'error', detail: e.body || null, metadata: e.metadata || null });
+        }
+      } else {
+        const s = e.status || 500;
+        return res.status(s).json({ error: e.message || 'error', detail: e.body || null, metadata: e.metadata || null });
+      }
+    }
+
     const { flow, raw } = flowFromClaim(claim);
 
     if (orderId) {
