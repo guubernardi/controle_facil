@@ -660,7 +660,7 @@ textarea::placeholder {
 
 /* Toast */
 .toast {
-  position: fixed;
+  position: relative;
   bottom: 1.5rem;
   right: 1.5rem;
   z-index: 50;
