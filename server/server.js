@@ -143,6 +143,8 @@ app.use('/api/auth/login', loginLimiter);
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 
+
+
 app.get('/api/auth/session', (req, res) => {
   const u = req.session?.user || null;
   res.json(u ? { id:u.id, nome:u.nome, email:u.email, roles:u.roles||[] } : null);
@@ -275,6 +277,9 @@ try {
 } catch (e) {
   console.warn('[BOOT] ML Shipping opcional:', e?.message || e);
 }
+
+// Rotas ML – orders/users (fallbacks do front)
+app.use('/api/ml', require('./routes/ml-orders'));
 
 /* Demais módulos */
 try {
