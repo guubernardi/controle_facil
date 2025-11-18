@@ -4,6 +4,23 @@
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
 
+  // --- util para evitar submit implícito de botões dentro de <form> ---
+  function neutralizeSubmit(id) {
+    var el = $(id);
+    if (!el) return;
+    if (el.tagName && el.tagName.toLowerCase() === 'button') {
+      try { if ((el.type || '').toLowerCase() !== 'button') el.type = 'button'; } catch(_) {}
+    }
+  }
+  function safeOnClick(el, fn) {
+    if (!el || el.__safeBound) return;
+    el.addEventListener('click', function(e){
+      try { e.preventDefault(); e.stopPropagation(); } catch(_) {}
+      fn(e);
+    });
+    el.__safeBound = true;
+  }
+
   var returnId = (function () {
     var qid = qs.get('id') || qs.get('return_id');
     if (qid) return String(qid).replace(/\D+/g,'');
@@ -957,22 +974,26 @@
   ].forEach(function(sel){ var el=pickEl(sel); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc); });
   (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', recalc); } })();
 
+  // Neutraliza submits implícitos e liga handlers seguros
+  ['btn-insp-aprova','btn-insp-reprova','rq-aprovar','rq-reprovar','rq-receber','btn-cd','btn-salvar','btn-mark','btn-enrich']
+    .forEach(neutralizeSubmit);
+
   var btnIA=$('btn-insp-aprova'), btnIR=$('btn-insp-reprova');
-  if (btnIA) btnIA.addEventListener('click', function(){ openInspectDialog('aprovado'); });
-  if (btnIR) btnIR.addEventListener('click', function(){ openInspectDialog('rejeitado'); });
+  if (btnIA) safeOnClick(btnIA, function(){ openInspectDialog('aprovado'); });
+  if (btnIR) safeOnClick(btnIR, function(){ openInspectDialog('rejeitado'); });
 
   var rqA=$('rq-aprovar'), rqR=$('rq-reprovar');
-  if (rqA) rqA.addEventListener('click', function(){ openInspectDialog('aprovado'); });
-  if (rqR) rqR.addEventListener('click', function(){ openInspectDialog('rejeitado'); });
+  if (rqA) safeOnClick(rqA, function(){ openInspectDialog('aprovado'); });
+  if (rqR) safeOnClick(rqR, function(){ openInspectDialog('rejeitado'); });
 
-  var rqRec=$('rq-receber'); if (rqRec) rqRec.addEventListener('click', openReceiveDialog);
-  var btnCd = $('btn-cd');   if (btnCd) btnCd.addEventListener('click', openReceiveDialog);
+  var rqRec=$('rq-receber'); if (rqRec) safeOnClick(rqRec, openReceiveDialog);
+  var btnCd = $('btn-cd');   if (btnCd) safeOnClick(btnCd, openReceiveDialog);
 
-  var btnSalvar=$('btn-salvar'); if (btnSalvar) btnSalvar.addEventListener('click', save);
+  var btnSalvar=$('btn-salvar'); if (btnSalvar) safeOnClick(btnSalvar, save);
 
   var btnMark=$('btn-mark');
   if (btnMark) {
-    btnMark.addEventListener('click', function(){
+    safeOnClick(btnMark, function(){
       var id = current.id || returnId;
       if (!id) return toast('ID inválido.', 'error');
       var sel = $('mark-op'); var obs = $('mark-obs');
@@ -990,7 +1011,7 @@
     });
   }
 
-  var btnEnrich=$('btn-enrich'); if (btnEnrich) btnEnrich.addEventListener('click', function(){ enrichFromML('manual'); });
+  var btnEnrich=$('btn-enrich'); if (btnEnrich) safeOnClick(btnEnrich, function(){ enrichFromML('manual'); });
   function disableHead(disabled){
     ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd','btn-mark']
       .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
