@@ -66,15 +66,6 @@
               <span>Aplicar</span>
             </button>
           </div>
-
-          <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-              <polyline points="17 21 17 13 7 13 7 21"/>
-              <polyline points="7 3 7 8 15 8"/>
-            </svg>
-            <span>Salvar</span>
-          </button>
         </div>
       </header>
 
@@ -106,23 +97,6 @@
           <p class="dialog-hint">
             Dica: se deixar o responsável vazio, será usado <b>cd</b>. Se não escolher uma data, uso a data/hora atual.
           </p>
-        </form>
-      </dialog>
-
-      <dialog id="dlg-inspecao" class="dialog" aria-labelledby="insp-title">
-        <form method="dialog" id="insp-form">
-          <h3 id="insp-title">Inspeção</h3>
-          <div id="insp-sub" class="dialog-subtitle"></div>
-
-          <div>
-            <label for="insp-text" class="dialog-label">Observação (opcional)</label>
-            <textarea id="insp-text" rows="4" placeholder="Adicione detalhes sobre a inspeção..."></textarea>
-          </div>
-
-          <div class="dialog-actions-simple">
-            <button type="button" class="btn btn--ghost" id="insp-cancel">Cancelar</button>
-            <button type="submit" class="btn btn--primary" id="insp-confirm">Confirmar</button>
-          </div>
         </form>
       </dialog>
 
@@ -227,14 +201,6 @@
               <span id="cd-resp" class="cd-text" hidden></span>
               <span id="cd-when" class="cd-text" hidden></span>
             </div>
-
-            <div class="status-item insp-inline">
-              <span class="status-label">Inspeção</span>
-              <div class="btn-group-sm">
-                <button id="btn-insp-aprova" class="btn btn--success btn--sm" type="button" title="Inspeção aprovada">Aprovar</button>
-                <button id="btn-insp-reprova" class="btn btn--danger btn--sm" type="button" title="Inspeção reprovada">Reprovar</button>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -252,12 +218,9 @@
         </section>
 
         <!-- Observações -->
-        <section class="card" aria-labelledby="sec-obs">
+        <section class="card card-span" aria-labelledby="sec-obs">
           <h2 id="sec-obs">Observações</h2>
-          <div class="row">
-            <label for="reclamacao">Detalhes da reclamação</label>
-            <textarea id="reclamacao" name="reclamacao" rows="6" placeholder="Descreva o motivo da devolução..."></textarea>
-          </div>
+          <textarea id="reclamacao" name="reclamacao" rows="4" placeholder="Adicione observações sobre esta devolução..."></textarea>
         </section>
 
         <!-- Histórico (Timeline) -->
@@ -268,6 +231,24 @@
           <div id="events-list" class="timeline"></div>
         </section>
       </div>
+
+      <!-- Footer com ações -->
+      <footer class="page-footer">
+        <div class="footer-actions">
+          <button type="button" class="btn btn--ghost btn--lg" onclick="history.back()">
+            <span>Cancelar</span>
+          </button>
+          <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
+            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            <span>Salvar</span>
+          </button>
+        </div>
+      </footer>
+
     </main>
 
     <!-- Toast -->

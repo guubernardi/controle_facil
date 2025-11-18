@@ -65,6 +65,8 @@ body {
 /* Layout */
 .devolucao-page {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .topbar-mini {
@@ -110,9 +112,11 @@ body {
 }
 
 .page-wrap {
+  flex: 1;
   max-width: 100rem;
   margin: 0 auto;
   padding: 2rem 1rem;
+  padding-bottom: 6rem;
 }
 
 @media (min-width: 640px) {
@@ -130,6 +134,11 @@ body {
 /* Header */
 .page-head {
   margin-bottom: 2rem;
+  padding: 1.5rem;
+  background-color: var(--card);
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 .page-head > div:first-child {
@@ -353,6 +362,10 @@ textarea::placeholder {
   .grid {
     grid-template-columns: repeat(2, 1fr);
   }
+  
+  .card-span {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Card */
@@ -534,6 +547,37 @@ textarea::placeholder {
 .pill.-neutro {
   background-color: var(--muted);
   color: var(--muted-foreground);
+}
+
+/* Footer */
+.page-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background-color: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+  padding: 1rem 1.5rem;
+}
+
+.footer-actions {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .footer-actions {
+    justify-content: stretch;
+  }
+  
+  .footer-actions .btn {
+    flex: 1;
+  }
 }
 
 /* Dialogs */
