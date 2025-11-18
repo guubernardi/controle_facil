@@ -86,8 +86,7 @@ app.use(session({
   cookie:sessCookie
 }));
 
-/* ================== Static & básicos ================== */
-app.use(express.static(path.join(__dirname, '..', 'public')));
+/* ================== Básicos ================== */
 app.get('/api/health', (_req, res) => res.json({ ok:true, time:new Date().toISOString() }));
 app.get('/docs', (_req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'docs', 'index.html')));
 app.get('/docs/:slug', (req, res) => res.redirect(`/docs/index.html?g=${encodeURIComponent(req.params.slug||'')}`));
@@ -266,8 +265,20 @@ async function addReturnEvent(args = {}, req) {
 /* ================== Rotas base ================== */
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
-/* === ML: Claims/Returns/Orders/Users (NÚCLEO) === */
-app.use('/api/ml', require('./routes/ml-claims')); // <- garante /orders, /order, /sales, /users etc.
+/* === ML: Claims/Returns/Orders/Users (NÚCLEO) ===
+   Tenta ml-claims.js e, se não existir, ml-claim.js (singular). */
+(() => {
+  let mlClaimsRouter = null;
+  let used = null;
+  try { mlClaimsRouter = require('./routes/ml-claims'); used = 'ml-claims'; } catch (_) {}
+  if (!mlClaimsRouter) { try { mlClaimsRouter = require('./routes/ml-claim'); used = 'ml-claim'; } catch (_) {} }
+  if (mlClaimsRouter) {
+    app.use('/api/ml', mlClaimsRouter);
+    console.log(`[BOOT] ML Claims router ON via ${used}`);
+  } else {
+    console.warn('[BOOT] ML Claims router NÃO encontrado (ml-claims.js/ml-claim.js)');
+  }
+})();
 
 /* === ML Shipping (opcional) === */
 try {
@@ -730,6 +741,9 @@ app.get('/api/_debug/tenant', async (req, res) => {
     res.status(500).json({ error:String(e?.message||e) });
   }
 });
+
+/* ================== Static (DEPOIS das rotas de API!) ================== */
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 /* ================== 404 /api (sempre por último!) ================== */
 app.use('/api', (req, res) => res.status(404).json({ error:'Not found' }));
