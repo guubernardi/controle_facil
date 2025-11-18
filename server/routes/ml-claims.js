@@ -3,7 +3,6 @@
 
 /**
  * Proxy Mercado Livre (Claims + Returns + Orders)
- * (…comentários originais omitidos por brevidade…)
  */
 
 const express   = require('express');
@@ -41,7 +40,7 @@ async function loadTokenRowFromDbByNick(nickname, q = query) {
   const { rows } = await q(`
     SELECT user_id, nickname, access_token, refresh_token, expires_at
       FROM public.ml_tokens
-     WHERE LOWER(REPLACE(nickname,' ','')) = LOWER(REPLACE($1,' ',''))
+     WHERE LOWER(REPLACE(nickname,' ','')) = LOWER(REPLACE($1,' ','')) 
      ORDER BY updated_at DESC
      LIMIT 1
   `, [String(nickname || '').trim()]);
@@ -234,16 +233,14 @@ async function mlFetchRaw(req, url, opts = {}) {
   return r;
 }
 
-// === helpers extras p/ fallback por nick ===
+/* ===== helpers extra p/ fallback por nick/loja ===== */
 function extractNickFromStoreName(lojaNome) {
   if (!lojaNome) return null;
   let s = String(lojaNome).trim();
-  // formatos comuns: "Mercado Livre · NICK", "Mercado Livre - NICK"
   const m = s.split('·');
   if (m.length > 1) return m[1].trim();
   const m2 = s.split('-');
   if (m2.length > 1 && /mercado/i.test(m2[0])) return m2[1].trim();
-  // se já for só o nick
   if (!/mercado/i.test(s)) return s;
   return null;
 }
@@ -393,7 +390,6 @@ router.get('/claims/:id/messages', async (req, res) => {
 });
 
 /* ======================= 1) Mediation & Expected Resolutions ======================= */
-// (…mesmo conteúdo que te enviei antes…)
 
 router.post('/claims/:id/actions/open-dispute', async (req, res) => {
   try {
@@ -462,7 +458,6 @@ router.post('/claims/:id/expected-resolutions/allow-return', async (req, res) =>
 });
 
 /* ======================= 2) Evidences & Attachments ======================= */
-// (…mesmo conteúdo que te enviei antes…)
 
 const TMP_DIR = path.join(__dirname, '..', '..', 'tmp-upload');
 fs.mkdirSync(TMP_DIR, { recursive: true });
@@ -523,7 +518,6 @@ router.get('/claims/:id/attachments-evidences/:attachmentId/download', async (re
 });
 
 /* ======================= 3) Return Cost ======================= */
-// (igual)
 
 router.get('/claims/:id/charges/return-cost', async (req, res) => {
   try {
@@ -575,7 +569,6 @@ router.get('/claims/search', async (req, res) => {
   }
 });
 
-// Alias → /claims/search
 router.get('/claims/of-order/:orderId', (req, res) => {
   const orderId = String(req.params.orderId || '').replace(/\D/g, '');
   req.url = '/claims/search?' + new URLSearchParams({ order_id: orderId }).toString();
@@ -626,20 +619,18 @@ router.get('/orders/:order_id', async (req, res) => {
   }
 });
 
-// NEW: alias singular para cobrir fallback do frontend
+// Aliases para cobrir variações do front
 router.get('/order/:order_id', (req, res) => {
   req.url = `/orders/${encodeURIComponent(String(req.params.order_id||''))}`;
   return router.handle(req, res);
 });
-
-// Alias /sales/:order_id -> /orders/:order_id
 router.get('/sales/:order_id', (req, res) => {
   req.url = `/orders/${encodeURIComponent(String(req.params.order_id||''))}`;
   return router.handle(req, res);
 });
 
 /* ===== Enriched (robusto) ===== */
-// (igual ao anterior que te mandei, sem mudanças relevantes)
+
 router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
   try {
     const claimId = String(req.params.claim_id || '').replace(/\D/g, '');
@@ -756,42 +747,44 @@ router.get('/returns/state', async (req, res) => {
     const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
 
-    // 1ª tentativa com o token “resolvido” normal (pode usar ?nick=)
-    let claim;
+    // 1) claim v1 (com tentativa por nick inferido se 401/403)
+    let claim = null;
     try {
       claim = await mlFetch(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`);
     } catch (e) {
-      // 2ª tentativa: se 401/403, tentar inferir nick via DB pelo order_id
       if ((e.status === 401 || e.status === 403) && orderId && !req.query.nick) {
         const inferredNick = await inferNickFromOrderId(orderId);
         if (inferredNick) {
-          try {
-            claim = await mlFetchAsNick(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`, inferredNick);
-          } catch (e2) {
-            // mantém e2 para resposta detalhada
-            const s = e2.status || 500;
-            return res.status(s).json({ error: e2.message || 'error', detail: e2.body || null, metadata: e2.metadata || null, tried_nick: inferredNick });
-          }
+          claim = await mlFetchAsNick(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}`, inferredNick);
         } else {
-          // sem nick inferido — devolve erro original
-          const s = e.status || 500;
-          return res.status(s).json({ error: e.message || 'error', detail: e.body || null, metadata: e.metadata || null });
+          throw e;
         }
       } else {
-        const s = e.status || 500;
-        return res.status(s).json({ error: e.message || 'error', detail: e.body || null, metadata: e.metadata || null });
+        throw e;
       }
     }
 
-    const { flow, raw } = flowFromClaim(claim);
+    // 2) return v2 (status logístico real)
+    let ret = null;
+    try {
+      const raw = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`);
+      ret = Array.isArray(raw) ? (raw[0] || null) : (raw || null);
+    } catch (e) {
+      if (e.status !== 404) throw e;
+    }
 
+    // 3) Deriva fluxo usando claim + return.status (se houver)
+    const rstat = ret?.status || claim?.return_status || null;
+    const { flow, raw } = flowFromClaim({ ...(claim || {}), return: { status: rstat } });
+
+    // 4) Atualiza tabela se veio orderId
     if (orderId) {
       const sets = [];
       const vals = [];
       let p = 1;
 
-      if (raw)  { sets.push(`ml_return_status = $${p++}`); vals.push(raw); }
-      if (flow) { sets.push(`log_status = $${p++}`);       vals.push(flow); }
+      if (rstat) { sets.push(`ml_return_status = $${p++}`); vals.push(String(rstat)); }
+      if (flow)  { sets.push(`log_status       = $${p++}`); vals.push(String(flow)); }
       if (sets.length) {
         sets.push(`updated_at = now()`);
         vals.push(orderId);
@@ -799,7 +792,14 @@ router.get('/returns/state', async (req, res) => {
       }
     }
 
-    return res.json({ ok: true, claim_id: claimId, order_id: orderId || null, flow, raw_status: raw });
+    return res.json({
+      ok: true,
+      claim_id: claimId,
+      order_id: orderId || null,
+      flow,
+      ml_return_status: rstat || null,
+      raw_status: raw || null
+    });
   } catch (e) {
     const s = e.status || 500;
     return res.status(s).json({ error: e.message || 'error', detail: e.body || null, metadata: e.metadata || null });
