@@ -300,6 +300,7 @@ const ok = (res, data = {}) => res.json({ ok: true, ...data });
 const safeNum = (v) => (v == null ? null : Number(v));
 const coerceList = (x) => Array.isArray(x) ? x : (x && (x.results || x.items || x.claims || x.data)) || [];
 
+/* ---- Reason helpers ---- */
 function humanizeReason(idOrText = '') {
   const s = String(idOrText).toLowerCase();
   const byId = {
@@ -346,22 +347,32 @@ function extractClaimReason(claim = {}) {
   return { id: rid || null, label, raw: (rtext || rid || null) };
 }
 
-function flowFromClaim(claim) {
-  const stage = String(claim?.stage || claim?.stage_name || claim?.status || '').toLowerCase();
-  const rstat = String(claim?.return?.status || claim?.return_status || '').toLowerCase();
+/* ---- Flow helpers (PRIORIDADE: logística) ---- */
+function flowFromReturnStatus(rstat) {
+  const s = String(rstat || '').toLowerCase();
+  if (!s) return null;
+  if (s === 'delivered')                           return 'recebido_cd';
+  if (s === 'shipped' || s === 'pending_delivered')return 'em_transporte';
+  if (s === 'ready_to_ship' || s === 'label_generated') return 'pronto_envio';
+  if (s === 'return_to_buyer')                     return 'retorno_comprador';
+  if (s === 'scheduled')                           return 'agendado';
+  if (s === 'expired')                             return 'expirado';
+  if (s === 'canceled' || s === 'cancelled')       return 'cancelado';
+  return null;
+}
 
-  if (/mediat|media[cç]ao/.test(stage)) return { flow: 'mediacao', raw: rstat || stage };
-  if (/(open|opened|pending|dispute|reclama|claim)/.test(stage)) return { flow: 'disputa', raw: rstat || stage };
+function flowFromClaimStage(stageLike) {
+  const s = String(stageLike || '').toLowerCase();
+  if (/mediat|media[cç]ao/.test(s)) return 'mediacao';
+  if (/(open|opened|pending|dispute|reclama|claim)/.test(s)) return 'disputa';
+  return null;
+}
 
-  if (/^delivered$/.test(rstat))                      return { flow: 'recebido_cd',       raw: rstat };
-  if (/^shipped$|pending_delivered$/.test(rstat))     return { flow: 'em_transporte',     raw: rstat };
-  if (/^ready_to_ship$|label_generated$/.test(rstat)) return { flow: 'pronto_envio',      raw: rstat };
-  if (/^return_to_buyer$/.test(rstat))                return { flow: 'retorno_comprador', raw: rstat };
-  if (/^scheduled$/.test(rstat))                      return { flow: 'agendado',          raw: rstat };
-  if (/^expired$/.test(rstat))                        return { flow: 'expirado',          raw: rstat };
-  if (/^canceled$|^cancelled$/.test(rstat))           return { flow: 'cancelado',         raw: rstat };
-
-  return { flow: 'pendente', raw: rstat || stage || '' };
+function flowFromClaimPreferReturn(claim = {}, ret = {}) {
+  const prefer = flowFromReturnStatus(ret?.status || claim?.return_status);
+  if (prefer) return { flow: prefer, raw: ret?.status || claim?.return_status || '' };
+  const stageFlow = flowFromClaimStage(claim?.stage || claim?.stage_name || claim?.status);
+  return { flow: stageFlow || 'pendente', raw: ret?.status || claim?.return_status || stageFlow || '' };
 }
 
 /* ======================= 0) Claim & Messages ======================= */
@@ -619,7 +630,7 @@ router.get('/orders/:order_id', async (req, res) => {
   }
 });
 
-// Aliases para cobrir variações do front
+// Aliases p/ variações do front
 router.get('/order/:order_id', (req, res) => {
   req.url = `/orders/${encodeURIComponent(String(req.params.order_id||''))}`;
   return router.handle(req, res);
@@ -705,7 +716,7 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
     if (promises.length) await Promise.allSettled(promises);
 
     const reason = extractClaimReason(claim || {});
-    const { flow, raw } = flowFromClaim({ ...claim, return: { status: ret?.status } });
+    const { flow, raw } = flowFromClaimPreferReturn(claim, { status: ret?.status });
 
     const summary = {
       status: ret?.status || (claim?.stage || claim?.status || null),
@@ -773,9 +784,9 @@ router.get('/returns/state', async (req, res) => {
       if (e.status !== 404) throw e;
     }
 
-    // 3) Deriva fluxo usando claim + return.status (se houver)
+    // 3) Deriva fluxo priorizando logística
     const rstat = ret?.status || claim?.return_status || null;
-    const { flow, raw } = flowFromClaim({ ...(claim || {}), return: { status: rstat } });
+    const { flow, raw } = flowFromClaimPreferReturn(claim, { status: rstat });
 
     // 4) Atualiza tabela se veio orderId
     if (orderId) {
