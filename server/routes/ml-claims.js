@@ -5,12 +5,12 @@
  * Proxy Mercado Livre (Claims + Returns + Orders)
  */
 
-const express   = require('express');
-const fs        = require('fs');
-const path      = require('path');
-const multer    = require('multer');
-const FormData  = require('form-data');
-const { query } = require('../db');
+const express  = require('express');
+const fs       = require('fs');
+const path     = require('path');
+const multer   = require('multer');
+const FormData = require('form-data');
+const { query }= require('../db');
 
 if (typeof fetch !== 'function') {
   global.fetch = (...args) => import('node-fetch').then(m => m.default(...args));
@@ -351,13 +351,13 @@ function extractClaimReason(claim = {}) {
 function flowFromReturnStatus(rstat) {
   const s = String(rstat || '').toLowerCase();
   if (!s) return null;
-  if (s === 'delivered')                           return 'recebido_cd';
-  if (s === 'shipped' || s === 'pending_delivered')return 'em_transporte';
+  if (s === 'delivered')                            return 'recebido_cd';
+  if (s === 'shipped' || s === 'pending_delivered') return 'em_transporte';
   if (s === 'ready_to_ship' || s === 'label_generated') return 'pronto_envio';
-  if (s === 'return_to_buyer')                     return 'retorno_comprador';
-  if (s === 'scheduled')                           return 'agendado';
-  if (s === 'expired')                             return 'expirado';
-  if (s === 'canceled' || s === 'cancelled')       return 'cancelado';
+  if (s === 'return_to_buyer')                      return 'retorno_comprador';
+  if (s === 'scheduled')                            return 'agendado';
+  if (s === 'expired')                              return 'expirado';
+  if (s === 'canceled' || s === 'cancelled')        return 'cancelado';
   return null;
 }
 
@@ -753,11 +753,11 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
 /* ======================= 6) Returns state (helper) ======================= */
 
 router.get('/returns/state', async (req, res) => {
-  try {
-    const claimId = String(req.query.claim_id || req.query.claimId || '').replace(/\D/g, '');
-    const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
-    if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
+  const claimId = String(req.query.claim_id || req.query.claimId || '').replace(/\D/g, '');
+  const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
+  if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
 
+  try {
     // 1) claim v1 (com tentativa por nick inferido se 401/403)
     let claim = null;
     try {
@@ -788,7 +788,7 @@ router.get('/returns/state', async (req, res) => {
     const rstat = ret?.status || claim?.return_status || null;
     const { flow, raw } = flowFromClaimPreferReturn(claim, { status: rstat });
 
-    // 4) Atualiza tabela se veio orderId
+    // 4) Atualiza tabela se veio orderId (best-effort)
     if (orderId) {
       const sets = [];
       const vals = [];
@@ -812,6 +812,30 @@ router.get('/returns/state', async (req, res) => {
       raw_status: raw || null
     });
   } catch (e) {
+    // === Fallback “gracioso”: não quebra a UI em 401/403 ===
+    if ((e.status === 401 || e.status === 403) && orderId) {
+      let last = null;
+      try {
+        const { rows } = await query(
+          `SELECT ml_return_status, log_status
+             FROM devolucoes
+            WHERE id_venda = $1
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1`,
+          [orderId]
+        );
+        last = rows?.[0] || null;
+      } catch {}
+
+      return res.json({
+        ok: false,
+        claim_id: claimId,
+        order_id: orderId,
+        reason: 'forbidden',
+        flow: last?.log_status || null,
+        ml_return_status: last?.ml_return_status || null
+      });
+    }
     const s = e.status || 500;
     return res.status(s).json({ error: e.message || 'error', detail: e.body || null, metadata: e.metadata || null });
   }
