@@ -48,7 +48,8 @@ if (process.env.NODE_ENV !== 'production') {
     methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
     allowedHeaders: [
       'Content-Type','Accept','Idempotency-Key','x-job-token',
-      'x-seller-token','x-owner','x-seller-id','x-seller-nick','Authorization'
+      'x-seller-token','x-owner','x-seller-id','x-seller-nick',
+      'x-public','Authorization'
     ]
   }));
 }
@@ -142,8 +143,6 @@ app.use('/api/auth/login', loginLimiter);
 
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
-
-
 
 app.get('/api/auth/session', (req, res) => {
   const u = req.session?.user || null;
@@ -267,10 +266,10 @@ async function addReturnEvent(args = {}, req) {
 /* ================== Rotas base ================== */
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
-/* === NOVAS ROTAS DE RECLAMAÇÕES === */
-app.use('/api/ml', require('./routes/ml-claims'));
+/* === ML: Claims/Returns/Orders/Users (NÚCLEO) === */
+app.use('/api/ml', require('./routes/ml-claims')); // <- garante /orders, /order, /sales, /users etc.
 
-/* === NOVAS ROTAS DE SHIPPING === */
+/* === ML Shipping (opcional) === */
 try {
   app.use('/api/ml', require('./routes/ml-shipping'));
   console.log('[BOOT] ML Shipping ok');
@@ -278,8 +277,13 @@ try {
   console.warn('[BOOT] ML Shipping opcional:', e?.message || e);
 }
 
-// Rotas ML – orders/users (fallbacks do front)
-app.use('/api/ml', require('./routes/ml-orders'));
+/* === Fallbacks ML Orders/Users (se existirem) === */
+try {
+  app.use('/api/ml', require('./routes/ml-orders'));
+  console.log('[BOOT] ML Orders extra ok');
+} catch (e) {
+  console.warn('[BOOT] ML Orders extra opcional:', e?.message || e);
+}
 
 /* Demais módulos */
 try {
@@ -619,9 +623,6 @@ catch (e) { console.warn('[BOOT] ML OAuth opcional:', e?.message || e); }
 try { const r = require('./routes/ml-api'); if (typeof r === 'function') r(app); console.log('[BOOT] ML API ok'); }
 catch (e) { console.warn('[BOOT] ML API opcional:', e?.message || e); }
 
-try { const r = require('./routes/ml-amounts'); if (typeof r === 'function') r(app); console.log('[BOOT] ML Amounts ok'); }
-catch (e) { console.warn('[BOOT] ML Amounts opcional:', e?.message || e); }
-
 try {
   const r = require('./routes/ml-enrich');
   if (typeof r === 'function') (r.length >= 2 ? r(app, { addReturnEvent }) : r(app));
@@ -654,18 +655,11 @@ try {
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 
-/* === ML RETURNS (router + agendador) ===
-   OBS: seu arquivo se chama routes/returns.js (não ml-returns.js).
-   Abaixo tentamos carregar ml-returns; se não existir, criamos alias
-   /api/ml/returns/{sync,state} -> /api/returns/{sync,state}.
-*/
+/* === ML RETURNS (router + agendador) === */
 let _mlReturnsMounted = false;
 try {
-  // 1) tenta o nome "ml-returns" (se no futuro você criar)
   let raw = null;
   try { raw = require('./routes/ml-returns'); } catch (_) {}
-
-  // 2) senão, usa o "returns.js" existente
   if (!raw) raw = require('./routes/returns');
 
   const routerLike = raw?.default || raw?.router || raw;
@@ -711,17 +705,17 @@ app.get('/api/db/ping', async (req, res) => {
 
 app.get('/api/_debug/routes', (_req, res) => {
   const acc = [];
-  const dump = (stack, base='') => {
+  const dump = (stack) => {
     stack?.forEach(layer => {
       if (layer.route) {
         const methods = Object.keys(layer.route.methods || {}).filter(m => layer.route.methods[m]);
-        acc.push({ path: base + layer.route.path, methods });
+        acc.push({ path: layer.route.path, methods });
       } else if (layer.name === 'router' && layer.handle?.stack) {
-        dump(layer.handle.stack, base);
+        dump(layer.handle.stack);
       }
     });
   };
-  dump(app._router?.stack, '');
+  dump(app._router?.stack);
   res.json(acc);
 });
 

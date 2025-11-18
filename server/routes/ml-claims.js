@@ -3,7 +3,7 @@
 
 /**
  * Proxy Mercado Livre (Claims + Returns)
- * Inclui:
+ * Rotas principais:
  *  - GET  /claims/:id
  *  - GET  /claims/:id/messages
  *  - GET  /claims/:id/expected-resolutions
@@ -18,26 +18,31 @@
  *  - GET  /claims/:id/attachments-evidences/:attachmentId/download
  *  - GET  /claims/:id/charges/return-cost
  *
- *  Compat com front (busca):
+ * Busca/compat:
  *  - GET /claims/search?order_id=...
- *  - GET /claims/of-order/:orderId
- *  - GET /claims?order_id=...
+ *  - GET /claims/of-order/:orderId   (alias para search)
+ *  - GET /claims?order_id=...        (atalho para search)
  *
- *  Returns (novos):
+ * Returns/Orders:
  *  - GET /claims/:claim_id/returns             (v2)
+ *  - GET /claims/:claim_id/returns/enriched    (agregador tolerante)
  *  - GET /returns/:return_id/reviews
  *  - GET /orders/:order_id
- *  - GET /claims/:claim_id/returns/enriched    (agregador p/ front)
+ *  - GET /order/:order_id                      (alias)
+ *  - GET /sales/:order_id                      (alias)
  *
- *  Util:
+ * Users:
+ *  - GET /users/:id
+ *
+ * Helper:
  *  - GET /returns/state?claim_id=&order_id=
  */
 
-const express = require('express');
-const fs      = require('fs');
-const path    = require('path');
-const multer  = require('multer');
-const FormData = require('form-data'); // compat Node
+const express  = require('express');
+const fs       = require('fs');
+const path     = require('path');
+const multer   = require('multer');
+const FormData = require('form-data');
 const { query } = require('../db');
 
 if (typeof fetch !== 'function') {
@@ -50,7 +55,7 @@ const ML_V2        = 'https://api.mercadolibre.com/post-purchase/v2';
 const ML_TOKEN_URL = process.env.ML_TOKEN_URL || 'https://api.mercadolibre.com/oauth/token';
 const AHEAD_SEC    = parseInt(process.env.ML_REFRESH_AHEAD_SEC || '600', 10) || 600;
 
-/* ============================== Helpers de token ============================== */
+/* ============================== Token helpers ============================== */
 
 async function loadTokenRowFromDb(sellerId, q = query) {
   const sql = `
@@ -63,12 +68,10 @@ async function loadTokenRowFromDb(sellerId, q = query) {
   return rows[0] || null;
 }
 
-// lookup por nickname (?nick=NEW%20AVANTI)
 async function loadTokenRowFromDbByNick(nickname, q = query) {
   if (!nickname) return null;
   const nick = String(nickname).trim();
   if (!nick) return null;
-
   const sql = `
     SELECT user_id, nickname, access_token, refresh_token, expires_at
       FROM public.ml_tokens
@@ -146,13 +149,11 @@ async function refreshAccessToken({ sellerId, refreshToken, q = query }) {
 }
 
 async function resolveSellerAccessToken(req) {
-  // 0) token passado direto (debug)
   const direct = req.get('x-seller-token');
   if (direct) return direct;
 
   const q = req.q || query;
 
-  // 1) por nickname
   const nickRaw = (req.query && (req.query.nick || req.query.nickname)) || '';
   const nickname = String(nickRaw || '').trim();
 
@@ -167,7 +168,7 @@ async function resolveSellerAccessToken(req) {
           q
         });
         if (refreshed?.access_token) return refreshed.access_token;
-      } catch (e) {
+      } catch {
         if (row.access_token && !isExpiringSoon(row.expires_at, 0)) {
           return row.access_token;
         }
@@ -175,7 +176,6 @@ async function resolveSellerAccessToken(req) {
     }
   }
 
-  // 2) seller_id explícito / sessão antiga
   const sellerId = String(
     req.get('x-seller-id') ||
     req.query.seller_id    ||
@@ -194,7 +194,7 @@ async function resolveSellerAccessToken(req) {
           q
         });
         if (refreshed?.access_token) return refreshed.access_token;
-      } catch (e) {
+      } catch {
         if (row.access_token && !isExpiringSoon(row.expires_at, 0)) {
           return row.access_token;
         }
@@ -202,10 +202,8 @@ async function resolveSellerAccessToken(req) {
     }
   }
 
-  // 3) sessão atual
   if (req.session?.ml?.access_token) return req.session.ml.access_token;
 
-  // 4) fallback global
   return process.env.MELI_OWNER_TOKEN || '';
 }
 
@@ -511,7 +509,6 @@ function coerceList(x) {
   return x.results || x.items || x.claims || x.data || [];
 }
 
-// GET /api/ml/claims/search?order_id=...
 router.get('/claims/search', async (req, res) => {
   try {
     const orderId = String(req.query.order_id || req.query.orderId || '').replace(/\D/g, '');
@@ -534,17 +531,17 @@ router.get('/claims/search', async (req, res) => {
   }
 });
 
-// Alias: /claims/of-order/:orderId
-router.get('/claims/of-order/:orderId', async (req, res) => {
-  req.query.order_id = req.params.orderId;
-  return router.handle(req, res);
+// Alias: /claims/of-order/:orderId -> redireciona internamente para /claims/search
+router.get('/claims/of-order/:orderId', (req, res, next) => {
+  req.url = '/claims/search?' + new URLSearchParams({ order_id: req.params.orderId }).toString();
+  return router.handle(req, res, next);
 });
 
 // Alias: /claims?order_id=...
-router.get('/claims', async (req, res) => {
+router.get('/claims', (req, res, next) => {
   if (req.query.order_id || req.query.orderId) {
     req.url = '/claims/search?' + new URLSearchParams({ order_id: req.query.order_id || req.query.orderId }).toString();
-    return router.handle(req, res);
+    return router.handle(req, res, next);
   }
   return res.status(400).json({ error: 'missing_param', detail: 'use ?order_id=...' });
 });
@@ -573,39 +570,72 @@ router.get('/returns/:return_id/reviews', async (req, res) => {
   }
 });
 
-router.get('/orders/:order_id', async (req, res) => {
+// --- ORDERS + aliases (/order e /sales) ---
+async function getOrderById(req, res) {
   try {
-    const orderId = String(req.params.order_id || '').replace(/\D/g, '');
+    const orderId = String(req.params.order_id || req.params.id || '').replace(/\D/g, '');
     if (!orderId) return res.status(400).json({ error: 'invalid_order_id' });
     const data = await mlFetch(req, `https://api.mercadolibre.com/orders/${encodeURIComponent(orderId)}`);
-    res.json(data);
+    return res.json(data);
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+}
+router.get('/orders/:order_id', getOrderById);
+router.get('/order/:order_id',  getOrderById);
+router.get('/sales/:order_id',  getOrderById);
+
+// --- USERS (para obter nome do comprador) ---
+router.get('/users/:id', async (req, res) => {
+  try {
+    const userId = String(req.params.id || '').replace(/\D/g, '');
+    if (!userId) return res.status(400).json({ error: 'invalid_user_id' });
+    const u = await mlFetch(req, `https://api.mercadolibre.com/users/${encodeURIComponent(userId)}`);
+    return res.json({
+      id: u?.id ?? null,
+      nickname: u?.nickname ?? null,
+      first_name: u?.first_name ?? null,
+      last_name: u?.last_name ?? null,
+      name: (u?.first_name && u?.last_name) ? `${u.first_name} ${u.last_name}` : (u?.nickname ?? null)
+    });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
-// Agregador: /claims/:claim_id/returns/enriched?usd=true
+// Agregador tolerante: /claims/:claim_id/returns/enriched?usd=true
 router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
-  try {
-    const claimId = String(req.params.claim_id || '').replace(/\D/g, '');
-    if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
-    const wantUSD = String(req.query.usd || req.query.calculate_amount_usd || '') === 'true';
+  const claimId = String(req.params.claim_id || '').replace(/\D/g, '');
+  if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
+  const wantUSD = String(req.query.usd || req.query.calculate_amount_usd || '') === 'true';
 
-    const ret = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`);
+  const empty200 = () => res.json({
+    claim_id: claimId,
+    returns: null,
+    reviews: { reviews: [] },
+    return_cost: null,
+    orders: [],
+    summary: {}
+  });
+
+  try {
+    const ret = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`).catch(e => {
+      if (e.status === 404 || e.status === 403) return null;
+      throw e;
+    });
+    if (!ret) return empty200();
 
     let reviews = { reviews: [] };
     if (ret?.id) {
       try { reviews = await mlFetch(req, `${ML_V1}/returns/${ret.id}/reviews`); }
-      catch (e) { if (e.status !== 404) throw e; }
+      catch { /* tolera */ }
     }
 
     let return_cost = null;
     try {
       const qp = wantUSD ? '?calculate_amount_usd=true' : '';
       return_cost = await mlFetch(req, `${ML_V1}/claims/${encodeURIComponent(claimId)}/charges/return-cost${qp}`);
-    } catch (e) {
-      return_cost = { error: e.body?.error || 'unavailable', message: e.body?.message || e.message };
-    }
+    } catch { /* tolera ausência */ }
 
     const orders = [];
     for (const o of (ret?.orders || [])) {
@@ -620,9 +650,11 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
           unit_price: Number(it?.unit_price ?? 0),
           quantity:   Number(it?.quantity ?? 1),
           total_paid: Number(od?.paid_amount ?? (Number(it?.unit_price ?? 0) * Number(it?.quantity ?? 1))),
+          buyer: od?.buyer || null,
+          seller: od?.seller || null
         });
-      } catch (e) {
-        orders.push({ order_id: oid, item_id: o.item_id, error: e.body?.error || 'unavailable', message: e.body?.message || e.message });
+      } catch {
+        orders.push({ order_id: oid, item_id: o.item_id, error: 'unavailable' });
       }
     }
 
@@ -636,19 +668,13 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
         status: s.status,
         type: s.type,
         destination: s?.destination?.name || null,
-      })),
-      reasons_from_review: (reviews?.reviews || []).flatMap(r => (r?.resource_reviews || [])).map(rr => ({
-        status: rr?.status || null,
-        seller_status: rr?.seller_status || null,
-        reason_id: rr?.reason_id || null,
-        seller_reason: rr?.seller_reason || null,
-        product_condition: rr?.product_condition || null
       }))
     };
 
-    res.json({ claim_id: claimId, returns: ret, reviews, return_cost, orders, summary });
+    return res.json({ claim_id: claimId, returns: ret, reviews, return_cost, orders, summary });
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+    if (e.status === 404 || e.status === 403) return empty200();
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
