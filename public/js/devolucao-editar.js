@@ -538,6 +538,96 @@
     if (claim.id) fetchAndApplyReturnCost(String(claim.id), { persist: true });
   }
 
+  /* =============== [ML v2+] Status & Flow helpers =============== */
+  function humanizeReturnStatusML(s){
+    var k = String(s || '').toLowerCase();
+    var map = {
+      'pending_cancel':    'Cancelamento pendente',
+      'pending':           'Devolução criada',
+      'failed':            'Falha ao gerar devolução',
+      'shipped':           'Devolução enviada',
+      'pending_delivered': 'Em processo de entrega',
+      'return_to_buyer':   'Devolução voltando ao comprador',
+      'pending_expiration':'Próxima de expirar',
+      'scheduled':         'Coleta agendada',
+      'pending_failure':   'Processo com falha pendente',
+      'label_generated':   'Etiqueta pronta',
+      'cancelled':         'Devolução cancelada',
+      'canceled':          'Devolução cancelada',
+      'not_delivered':     'Não entregue',
+      'expired':           'Devolução expirada',
+      'delivered':         'Recebida pelo vendedor'
+    };
+    return map[k] || (s ? String(s).replace(/_/g,' ') : '—');
+  }
+  function suggestLogFromMLReturn(s){
+    var k = String(s || '').toLowerCase();
+    if (k === 'delivered')                          return 'recebido_cd';
+    if (k === 'shipped' || k === 'pending_delivered') return 'em_transporte';
+    if (k === 'label_generated' || k === 'ready_to_ship') return 'pronto_envio';
+    if (k === 'return_to_buyer')                    return 'retorno_comprador';
+    if (k === 'cancelled' || k === 'canceled')      return 'cancelado';
+    if (k === 'expired')                            return 'expirado';
+    if (k === 'failed' || k === 'pending_failure')  return 'falha';
+    if (k === 'scheduled')                          return 'agendado';
+    return 'pendente';
+  }
+  function showReturnShipmentsFromRet(ret){
+    try {
+      var destino = (ret.shipments || []).map(function(s){
+        var name = (s.destination && s.destination.name) || '';
+        var status = humanizeReturnStatusML(s.status);
+        return status + (name ? ' · ' + name : '');
+      }).join(' | ');
+      var slot = $('ml-shipments'); if (slot) slot.textContent = destino || '—';
+    } catch(_){}
+  }
+  function syncReturnState(claimId, orderId){
+    if (!claimId) return Promise.resolve();
+    var url = '/api/ml/returns/state?claim_id=' + encodeURIComponent(String(claimId).replace(/\D+/g,''));
+    if (orderId) url += '&order_id=' + encodeURIComponent(String(orderId).replace(/\D+/g,''));
+    return fetch(url, { headers: { 'Accept':'application/json' } })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if (j && j.flow) {
+          var ls = String(current.log_status || '').toLowerCase();
+          if (ls !== 'aprovado_cd' && ls !== 'reprovado_cd') {
+            setLogPill(j.flow);
+            current.log_status = j.flow;
+          }
+        }
+      })
+      .catch(function(){});
+  }
+  function applyEnrichedReturnPayload(j){
+    if (!j || typeof j !== 'object') return;
+    var ret = j.returns || null;
+    var summary = j.summary || null;
+
+    if (ret && ret.status) {
+      var label = humanizeReturnStatusML(ret.status);
+      var el = $('ml-status-desc'); if (el) el.textContent = label;
+      showReturnShipmentsFromRet(ret);
+      // sugere log se não tiver inspeção já fechada
+      var suggested = suggestLogFromMLReturn(ret.status);
+      var ls = String(current.log_status || '').toLowerCase();
+      if (ls !== 'aprovado_cd' && ls !== 'reprovado_cd' && suggested) {
+        setLogPill(suggested);
+        current.log_status = suggested;
+      }
+    }
+    if (summary && summary.claim_reason) {
+      // ajusta motivo (e trava) + exibe label amigável
+      var c = canonFromText(summary.claim_reason.label || summary.claim_reason.raw);
+      if (c) setMotivoCanon(c, true);
+      var cr = $('claim-reason'); if (cr) cr.textContent = summary.claim_reason.label || summary.claim_reason.raw || cr.textContent;
+    }
+    // persiste estado canônico de flow/raw no servidor
+    var cid = j.claim_id || readFirst(CLAIM_ID_SELECTORS);
+    var oid = readFirst(ORDER_ID_SELECTORS) || (Array.isArray(j.orders) && j.orders[0] && j.orders[0].order_id) || null;
+    if (cid) syncReturnState(cid, oid);
+  }
+
   /* =============== Nome do comprador: fallbacks =============== */
   function guessBuyerNameFromOrder(ord){
     try {
@@ -1141,6 +1231,10 @@
       })
       .then(function(res){
         var j = res.payload || {};
+
+        // >>> [NOVO] aplicar status/flow/motivo/shipments do enriched
+        applyEnrichedReturnPayload(j);
+
         try {
           var anyOrder = (j.orders && j.orders[0]) || null;
           var ordMeta = anyOrder ? { id: anyOrder.order_id, seller: anyOrder.seller } : null;
