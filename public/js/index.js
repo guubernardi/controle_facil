@@ -96,33 +96,20 @@ class DevolucoesFeed {
     } catch { return true; }
   }
 
-  // expõe função global p/ o index.html acionar após o PATCH de recebimento no CD
   exposeGlobalReload() {
     const self = this;
     window.rfReloadReturnsList = async function rfReloadReturnsList() {
-      try {
-        await self.carregar();
-        self.renderizar();
-      } catch {}
+      try { await self.carregar(); self.renderizar(); } catch {}
     };
   }
 
-  // escuta eventos inter-abas e intra-aba para recarregar a lista
   wireCrossTabReload() {
-    // 1) CustomEvent no mesmo documento
     document.addEventListener('rf:returns:reload', () => this.queueRefresh(100));
-
-    // 2) BroadcastChannel entre abas
     try {
       const ch = new BroadcastChannel('rf-returns');
-      ch.addEventListener('message', (ev) => {
-        if (ev?.data === 'reload') this.queueRefresh(100);
-      });
-      // expõe atalho pra outros scripts publicarem
+      ch.addEventListener('message', (ev) => { if (ev?.data === 'reload') this.queueRefresh(100); });
       window.rfReturnsBroadcast = () => ch.postMessage('reload');
     } catch {}
-
-    // 3) storage (quando algum script mexe em uma flag conhecida)
     window.addEventListener('storage', (e) => {
       if (!e) return;
       if (String(e.key || '').startsWith('rf:returnCache:')) this.queueRefresh(150);
@@ -139,8 +126,8 @@ class DevolucoesFeed {
     this.purgeOldSeen();
     this.renderizar();
 
-    // → puxa devoluções abertas do ML logo no boot
-    await this.syncClaimsWithFallback();
+    // primeira tentativa de sincronização
+    await this.syncClaimsWithFallback(/*verifyFresh=*/true);
     await this.carregar();
     this.renderizar();
 
@@ -165,7 +152,7 @@ class DevolucoesFeed {
     if (/^\/api\/ml\//.test(url) || /^\/api\/meli\//.test(url)) {
       if (this.sellerId)     h['x-seller-id']     = this.sellerId;
       if (this.sellerNick)   h['x-seller-nick']   = this.sellerNick;
-      if (this.sellerToken)  h['x-seller-token']  = this.sellerToken; // dev override opcional
+      if (this.sellerToken)  h['x-seller-token']  = this.sellerToken;
     }
     return h;
   }
@@ -178,16 +165,13 @@ class DevolucoesFeed {
       if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} }
       else { try{ body = await r.text(); }catch{} }
 
-      // Trata payloads { ok:false } como erro lógico, mesmo em HTTP 200
+      // trata payloads {ok:false} como erro lógico
       if (r.ok && body && typeof body === "object" && body.ok === false) {
-        const detail = (body.error || body.message || "").toString();
-        console.debug("[sync]", url, "→ 200 (app-error)", detail.slice(0,160));
-        return { ok:false, status:r.status, detail, data:body };
+        return { ok:false, status:r.status, detail:(body.error||body.message||"").toString(), data:body, appError:true };
       }
 
       if(!r.ok){
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
-        // logs mais silenciosos (evita spam quando 404)
         if (r.status !== 404) console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
         return { ok:false, status:r.status, detail, data:body };
       }
@@ -239,11 +223,9 @@ class DevolucoesFeed {
   }
 
   // ===== carregar =====
-  getMockData(){ return []; }
   async carregar(){
     this.toggleSkeleton(true);
     try{
-      // 1) banco
       const urls=[
         `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
         `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
@@ -258,13 +240,17 @@ class DevolucoesFeed {
         }catch(e){ last=e; }
       }
       this.items = Array.isArray(list) ? list : [];
-
-      // 2) (opcional) mesclar open returns do ML aqui — DESLIGADO
       if(!list && !this.items.length && last) throw last;
     }catch(e){
       console.warn("[index] Falha ao carregar", e?.message);
       this.toast("Erro", this.GENERIC_ERR, "erro");
     }finally{ this.toggleSkeleton(false); }
+  }
+
+  // ===== checa se veio coisa recente =====
+  hasFreshItems(maxHours = 72){
+    const lim = Date.now() - maxHours*60*60*1000;
+    return (this.items||[]).some(d => this.getDateMs(d) >= lim);
   }
 
   // ===== Circuit breaker claims/import =====
@@ -305,8 +291,6 @@ class DevolucoesFeed {
   // tenta descobrir o claim_id se não veio no card
   async ensureClaimIdOnItem(item){
     if (item.ml_claim_id) return item.ml_claim_id;
-
-    // 1) tenta buscar o registro completo no back
     try{
       const r = await this.fetchQuiet(`/api/returns/${encodeURIComponent(item.id)}`);
       if (r.ok && r.data){
@@ -317,70 +301,55 @@ class DevolucoesFeed {
         }
       }
     }catch{}
-
-    // 2) (mantém desligado se o back não tiver endpoints de claims)
     if (!this.HAS_CLAIMS_SEARCH) return null;
     return null;
   }
 
-  // ===== Syncs curtos =====
+  // ===== Syncs =====
   async _tryReturnsSync(days, statusCsv){
-    // tenta em /api/ml/returns/sync e cai para /api/returns/sync
     for (const base of this.RETURNS_SYNC_ENDPOINTS) {
       const qs = new URLSearchParams({ silent:"1", days:String(days), status:statusCsv });
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
-
       const url = `${base}?${qs.toString()}`;
-      console.debug("[sync] returns/sync:", days+"d", "via", base);
       const r = await this.fetchQuiet(url);
-      if (r.ok) return true;
-
-      // 404 → tenta o próximo endpoint da lista sem alarmar
-      if (r.status === 404) continue;
-
-      // qualquer outro erro → não insiste nessa janela
-      if (!this._lastSyncErrShown && r.status !== 404) {
-        this._lastSyncErrShown = true;
-        this.toast("Erro", this.GENERIC_ERR, "erro");
-      }
+      if (r.ok) return { ok:true, where:base };
+      if (r.appError || r.status === 404) continue; // tenta próximo endpoint
+      break; // outro erro → interrompe essa janela
     }
-    return false;
+    return { ok:false };
   }
 
-  async syncClaimsWithFallback(){
+  async syncClaimsWithFallback(verifyFresh=false){
     const STAT_RETURNS = ['label_generated','pending','shipped','pending_delivered','delivered','not_delivered','return_to_buyer','scheduled','expired','failed','cancelled','canceled'];
     const STAT_CLAIMS  = ['opened','in_progress','shipped','pending_delivered','delivered'];
     const STAT_ALL = Array.from(new Set([...STAT_RETURNS, ...STAT_CLAIMS])).join(',');
 
-    // 1) returns/sync (preferível, com fallback de rota)
-    for (const d of [3,7,30]){
-      const ok = await this._tryReturnsSync(d, STAT_ALL);
-      if (ok) {
+    // 1) returns/sync (1,3,7,30d) com reload + verificação de frescor
+    for (const d of [1,3,7,30]){
+      const r = await this._tryReturnsSync(d, STAT_ALL);
+      if (!r.ok) continue;
+      await this.carregar();
+      if (!verifyFresh || this.hasFreshItems(72)) {
         try { localStorage.removeItem(this.CLAIMS_BLOCK_KEY); } catch {}
         return true;
       }
+      // se não trouxe nada recente, tenta próxima janela
     }
 
     // 2) fallback: claims/import (evita spam se bloqueado)
     if (!this.claimsImportAllowed()) return false;
-    for (const d of [3,7,30]){
+    for (const d of [1,3,7,30]){
       const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), statuses:"opened,in_progress" });
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
-
-      console.debug("[sync] claims/import:", `${d}d opened,in_progress`);
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
-      if (r.ok) return true;
-
-      const detail = (r.detail||"").toString().toLowerCase();
-      const bad = (r.status===400) || detail.includes("invalid_claim_id");
-      if (bad){
+      if (r.ok) {
+        await this.carregar();
+        if (!verifyFresh || this.hasFreshItems(72)) return true;
+      } else if (r.status===400 || String(r.detail||"").toLowerCase().includes("invalid_claim_id")) {
         try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+30*60*1000)); }catch{}
-        if (!this._lastSyncErrShown){
-          this._lastSyncErrShown=true;
-          this.toast("Erro", this.GENERIC_ERR, "erro");
-        }
+        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Erro", this.GENERIC_ERR, "erro"); }
         return false;
       }
     }
@@ -392,7 +361,7 @@ class DevolucoesFeed {
     this._syncInFlight = true;
     try{
       const before=new Set(this.items.map(d=>String(d.id)));
-      await this.syncClaimsWithFallback();
+      await this.syncClaimsWithFallback(true);
       await this.carregar();
       const novos=this.items.filter(d=>!before.has(String(d.id))).length;
       if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -402,7 +371,7 @@ class DevolucoesFeed {
     }
   }
 
-  // ===== Shipping flow (backend retorna .flow/.suggested_log_status) =====
+  // ===== Shipping flow =====
   async fetchShippingFlow(orderId){
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";
@@ -412,17 +381,15 @@ class DevolucoesFeed {
     return String(s.flow || s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
-  // ===== Returns state (com fallback de rota) =====
+  // ===== Returns state (fallback) =====
   async fetchReturnsState({ claimId, orderId }) {
     if (!claimId) return { ok:false };
     const qs = new URLSearchParams({ claim_id:String(claimId), silent:"1" });
     if (orderId) qs.set('order_id', String(orderId));
-
     for (const base of this.RETURNS_STATE_ENDPOINTS) {
       const r = await this.fetchQuiet(`${base}?${qs.toString()}`);
       if (r.ok) return r;
-      if (r.status === 404) continue;
-      // outro erro → não insiste
+      if (r.appError || r.status === 404) continue;
       break;
     }
     return { ok:false };
@@ -431,37 +398,25 @@ class DevolucoesFeed {
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
-
-    // tenta descobrir claim_id se não veio
     const it = this.items.find(x => String(x.id) === String(id));
     if (it && !claimId) claimId = await this.ensureClaimIdOnItem(it);
 
-    // 1) Returns state (com fallback)
     if (claimId){
       const r = await this.fetchReturnsState({ claimId, orderId });
       if (r.ok) {
         const flow = String(r.data?.flow || "").toLowerCase();
         const raw  = String(r.data?.raw_status || "").toLowerCase();
-        if (it){
-          if (flow) it.log_status = flow;
-          if (raw)  it.ml_return_status = raw;
-        }
+        if (it){ if (flow) it.log_status = flow; if (raw) it.ml_return_status = raw; }
         this.setCachedReturn(claimId, raw || "", flow || "");
       }
     }
 
-    // 2) Shipping state (usa /status com update=1 para também persistir no back)
     if (orderId && this.mlShipAllowed()) {
       const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&update=1&silent=1`);
       if (r.ok) {
         const flow = String(r.data?.suggested_log_status || r.data?.ml_substatus || r.data?.ml_status || r.data?.flow || "").toLowerCase();
-        if (flow) {
-          if (it) it.log_status = this.normalizeFlow(flow);
-          this.setCachedFlow(orderId, flow);
-        }
-      } else if (r.status===403) {
-        this.setNoAccess(orderId);
-      }
+        if (flow) { if (it) it.log_status = this.normalizeFlow(flow); this.setCachedFlow(orderId, flow); }
+      } else if (r.status===403) this.setNoAccess(orderId);
     }
 
     this.queueRefresh(250);
@@ -469,27 +424,12 @@ class DevolucoesFeed {
   }
 
   // ===== Fluxo =====
-  extractFlowString(d){
-    const pick=(o,ks)=>{ for(const k of ks){ if(o&&o[k]!=null) return String(o[k]); } return ""; };
-    let s = pick(d,[
-      "log_status","status_log","flow","flow_status","ml_flow",
-      "shipping_status","ship_status","ml_shipping_status","return_shipping_status","current_shipping_status","tracking_status",
-      "claim_status","claim_stage","ml_return_status"
-    ]) || "";
-    if (!s && d.shipping) s = pick(d.shipping,["status","substatus"]);
-    if (!s && d.return)   s = pick(d.return,["status"]);
-    if (!s && d.claim)    s = pick(d.claim, ["stage","status"]);
-    return String(s||"").toLowerCase().trim();
-  }
   computeFlow(d){
     const lower = v => String(v||"").toLowerCase();
-
-    // claim stage
     const cStage = lower(d.claim?.stage || d.claim_stage || d.claim?.status || d.claim_status || d.claim_state);
     if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
     if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
 
-    // shipping (NÃO promove delivered para recebido_cd)
     const sStat = lower(
       d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
       d.current_shipping_status || d.tracking_status ||
@@ -499,10 +439,9 @@ class DevolucoesFeed {
     const ship = [sStat, sSub].join("_");
     if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return "em_preparacao";
     if (/(in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito)/.test(ship)) return "em_transporte";
-    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente"; // não marcamos recebido via shipping
+    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente";
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
-    // returns status (v2) — AQUI sim “delivered” vira Recebido no CD
     const rStat = lower(d.ml_return_status || d.return?.status || d.return_status || d.status_devolucao || d.status_log);
     if (/^label_generated$|ready_to_ship|etiqueta/.test(rStat)) return "pronto_envio";
     if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(rStat)) return "pendente";
@@ -515,7 +454,6 @@ class DevolucoesFeed {
     if (/^failed$/.test(rStat)) return "pendente";
     if (/^cancelled$|canceled$/.test(rStat)) return "cancelado";
 
-    // interno
     const log = lower(d.log_status || d.flow || d.flow_status || d.ml_flow);
     return this.normalizeFlow(log);
   }
@@ -535,11 +473,11 @@ class DevolucoesFeed {
     if (/(prepar|prep|ready_to_ship)/.test(s)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(s)) return "pronto_envio";
     if (/(transit|transito|transporte|shipped|out_for_delivery|returning_to_sender)/.test(s)) return "em_transporte";
-    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente"; // não promovemos aqui
+    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente";
     return "pendente";
   }
 
-  // ===== Resolve de fluxo/returns por card =====
+  // ===== Resolve/patch por card =====
   async resolveAndPatchFlow(d){
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
@@ -549,7 +487,6 @@ class DevolucoesFeed {
     if (!this.shouldTryFlow(orderId)) return;
     this._flowResolvesThisTick++;
 
-    // 1) ensure claim_id e tenta returns/state primeiro (com fallback)
     if (!claimId) claimId = await this.ensureClaimIdOnItem(d);
     if (claimId){
       const r = await this.fetchReturnsState({ claimId, orderId });
@@ -562,7 +499,6 @@ class DevolucoesFeed {
       }
     }
 
-    // 2) shipping para complementar
     const cachedFlow = this.getCachedFlow(orderId);
     if (cachedFlow && cachedFlow !== "__NO_ACCESS__"){
       const canon = this.normalizeFlow(cachedFlow);
@@ -612,7 +548,6 @@ class DevolucoesFeed {
     document.getElementById("filtro-status")?.addEventListener("change", e=>{ this.filtros.status=(e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
     document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
 
-    // grid
     document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
       const card = e.target.closest?.("[data-return-id]"); if(!card) return;
       const id   = card.getAttribute("data-return-id");
@@ -622,7 +557,6 @@ class DevolucoesFeed {
         const claimId = card.getAttribute("data-claim-id") || "";
         return this.quickEnrich(id, orderId, claimId);
       }
-      // obs.: o botão "Receber no CD" é tratado pelo inline do index.html via [data-open-receive]
     });
 
     document.getElementById("paginacao")?.addEventListener("click",(e)=>{
@@ -631,7 +565,6 @@ class DevolucoesFeed {
       this.page=p; this.renderizar();
     });
 
-    // auto-refresh invisível
     const btn=document.createElement("button");
     btn.id="auto-refresh-hidden"; btn.type="button"; btn.style.display="none"; btn.setAttribute("aria-hidden","true");
     btn.addEventListener("click",()=>this.atualizarDados());
@@ -645,7 +578,6 @@ class DevolucoesFeed {
     window.addEventListener("online",()=>setTimeout(fire,500));
   }
 
-  // ===== helpers de status interno =====
   grupoStatus(st){
     const s=String(st||"").toLowerCase();
     for (const [g,set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return g;
@@ -722,7 +654,6 @@ class DevolucoesFeed {
     nav.innerHTML=html;
   }
 
-  // ===== badges =====
   badgeNova(d){ return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
   badgeStatus(d){
     const grp=this.grupoStatus(d.status);
@@ -793,7 +724,6 @@ class DevolucoesFeed {
     return "badge";
   }
 
-  // ===== Card =====
   card(d, index=0){
     const el=document.createElement("div");
     el.className="card-devolucao slide-up";
@@ -804,9 +734,6 @@ class DevolucoesFeed {
 
     const data = this.dataBr(d.created_at || d.data_compra || d.order_date);
     const valorProduto = Number(d.valor_produto||0);
-
-    // mostrar "Receber no CD" se o fluxo indicar ml_return_status=delivered (recebido_cd)
-    // e o status interno AINDA não for finalizado
     const canReceive = this.computeFlow(d)==='recebido_cd' && this.grupoStatus(d.status)!=='finalizado';
 
     el.innerHTML = `
@@ -858,7 +785,7 @@ class DevolucoesFeed {
             </button>` : ``}
           <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" rel="noopener">
             <button class="botao botao-outline botao-detalhes" data-action="open">
-              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0  0 0-5z"/></svg>
+              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0  1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0  0 0-5z"/></svg>
               Ver Detalhes
             </button>
           </a>
@@ -868,7 +795,6 @@ class DevolucoesFeed {
     return el;
   }
 
-  // ações
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
     if (modal && modal.showModal) modal.showModal();
@@ -889,11 +815,9 @@ class DevolucoesFeed {
   }
 }
 
-// boot e exposição global p/ o index.html conseguir chamar rfReloadReturnsList()
 (function start(){
   const boot = () => {
     const inst = new DevolucoesFeed();
-    // guarda (debug/uso avançado)
     window.DevolucoesFeedInstance = inst;
   };
   if (document.readyState==="loading") document.addEventListener("DOMContentLoaded", boot);
