@@ -127,14 +127,14 @@
         <div class="acoes-header">
           <button id="botao-exportar" class="botao botao-outline" type="button">
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
-              <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 1-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0  0 1-2-2v-2.5a.5.5 0  0 1 .5-.5z"/>
+              <path d="M7.646 11.854a.5.5 0  0 0 .708 0l3-3a.5.5 0  0 0-.708-.708L8.5 10.293V1.5a.5.5 0  0 1-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
             </svg>
             Exportar
           </button>
           <button id="btn-nova-devolucao" class="botao botao-principal" type="button">
             <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+              <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0  0 1 0 1h-3v3a.5.5 0  0 1-1 0v-3h-3a.5.5 0  0 1 0-1h3v-3A.5.5 0  0 1 8 4z"/>
             </svg>
             Nova Devolução
           </button>
@@ -244,6 +244,45 @@
     </div>
   </main>
 
+  <!-- MODAL: Recebimento no CD (sincronizado com devolucao-editar fluxo) -->
+  <dialog id="dlg-cd" class="modal-detalhe">
+    <form method="dialog" class="modal-card" id="cd-form" aria-labelledby="cd-title">
+      <header class="modal-header">
+        <h3 id="cd-title">Recebido no CD</h3>
+        <button type="button" class="modal-close" id="cd-x" aria-label="Fechar">✕</button>
+      </header>
+
+      <section class="modal-body">
+        <input type="hidden" id="cd-id">
+        <div class="grid-2">
+          <div class="campo-filtro">
+            <label for="cd-name" class="campo-label">Quem recebeu?</label>
+            <input id="cd-name" class="input-pesquisa" placeholder="Ex.: João (CD)"/>
+          </div>
+          <div class="campo-filtro">
+            <label for="cd-when" class="campo-label">Data/Hora</label>
+            <input id="cd-when" type="datetime-local" class="input-pesquisa"/>
+          </div>
+        </div>
+
+        <div class="campo-filtro" style="margin-top:.5rem">
+          <label class="campo-label">
+            <input id="cd-ok" type="checkbox" />
+            Chegou tudo certo? <span class="descricao-vazio">Finalizar devolução</span>
+          </label>
+        </div>
+        <p class="descricao-vazio" style="margin-top:.25rem">
+          Se <b>não</b> chegou certo, vou sugerir abrir disputa e já marcar <i>disputa</i> aqui.
+        </p>
+      </section>
+
+      <footer class="modal-footer">
+        <button type="button" value="cancel" id="cd-cancel" class="botao botao-outline">Cancelar</button>
+        <button type="submit" id="cd-save" class="botao botao-principal">Salvar</button>
+      </footer>
+    </form>
+  </dialog>
+
   <!-- MODAL DE DETALHES (opcional; index.js usa se existir) -->
   <dialog id="modal-detalhe" class="modal-detalhe">
     <form method="dialog" class="modal-card" aria-labelledby="modal-titulo">
@@ -279,5 +318,119 @@
   <!-- Scripts -->
   <script src="js/navigation.js" defer></script>
   <script src="js/index.js" defer></script>
+
+  <!-- Wire de recebimento (sincroniza com /api/returns/:id/cd/receive e finalização) -->
+  <script>
+    (function(){
+      const $ = (id)=>document.getElementById(id);
+
+      function showToast(titulo, desc, tipo){
+        const toast = $('toast');
+        $('toast-titulo').textContent = titulo || '';
+        $('toast-descricao').textContent = desc || '';
+        toast.classList.remove('success','warning','error','info');
+        toast.classList.add(tipo||'info','show');
+        setTimeout(()=>toast.classList.remove('show'), 3200);
+      }
+
+      function closeDlg(dlg){
+        if (!dlg) return;
+        if (typeof dlg.close === 'function') dlg.close();
+        else dlg.setAttribute('hidden','');
+      }
+
+      function defaultLocalDateTime(){
+        // yyyy-MM-ddTHH:mm (sem timezone) ajustado ao local
+        const d = new Date(Date.now() - new Date().getTimezoneOffset()*60000);
+        return d.toISOString().slice(0,16);
+      }
+
+      async function markReceivedAndFinalize(id, nome, whenISO, ok){
+        // 1) registra recebimento
+        const r1 = await fetch(`/api/returns/${encodeURIComponent(id)}/cd/receive`, {
+          method:'PATCH',
+          headers:{'Content-Type':'application/json','Idempotency-Key':`receive-${id}-${whenISO}`},
+          body: JSON.stringify({ responsavel: nome || 'cd', when: whenISO, updated_by:'frontend-index' })
+        });
+        if(!r1.ok){
+          let msg='Falha ao registrar recebimento no CD';
+          try{ const j=await r1.json(); if(j && j.error) msg=j.error; }catch(_){}
+          throw new Error(msg);
+        }
+
+        // 2) finaliza (aprovado_cd) OU marca disputa (reprovado_cd)
+        const patch = ok
+          ? { status:'concluida', log_status:'aprovado_cd', updated_by:'frontend-index-finalize' }
+          : { status:'disputa',   log_status:'reprovado_cd', updated_by:'frontend-index-dispute' };
+
+        await fetch(`/api/returns/${encodeURIComponent(id)}`, {
+          method:'PATCH',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(patch)
+        }).catch(()=>{ /* segue mesmo se falhar o patch 2; r1 já registrou o CD */ });
+
+        // 3) sinaliza p/ recarregar a lista sem depender de implementação interna
+        if (typeof window.rfReloadReturnsList === 'function') {
+          await window.rfReloadReturnsList();
+        } else {
+          document.dispatchEvent(new CustomEvent('rf:returns:reload'));
+        }
+      }
+
+      function refreshOrReload(){
+        // se ninguém tratou o rf:returns:reload, faz fallback duro
+        setTimeout(()=>{
+          // tenta um render adiado exposto por index.js; senão, recarrega
+          if (typeof window.rfReloadReturnsList !== 'function') location.reload();
+        }, 100);
+      }
+
+      function openReceiveDialog(id){
+        if(!id) return;
+        $('cd-id').value = String(id).replace(/\D+/g,'');
+        $('cd-name').value = '';
+        $('cd-when').value = defaultLocalDateTime();
+        $('cd-ok').checked = false;
+        const dlg = $('dlg-cd');
+        if (dlg.showModal) dlg.showModal(); else dlg.removeAttribute('hidden');
+        setTimeout(()=>$('cd-name').focus(), 0);
+      }
+      window.openReceiveDialog = openReceiveDialog;
+
+      // Delegação: qualquer botão com data-open-receive abre o modal
+      document.addEventListener('click', (ev)=>{
+        const el = ev.target.closest('[data-open-receive]');
+        if (!el) return;
+        const id = el.getAttribute('data-id');
+        if (id) { ev.preventDefault(); openReceiveDialog(id); }
+      });
+
+      // Botões do modal
+      $('cd-x').addEventListener('click', ()=>closeDlg($('dlg-cd')));
+      $('cd-cancel').addEventListener('click', ()=>closeDlg($('dlg-cd')));
+
+      $('cd-form').addEventListener('submit', async (ev)=>{
+        ev.preventDefault();
+        const id   = $('cd-id').value;
+        const nome = ($('cd-name').value||'').trim() || 'cd';
+        const whenLocal = $('cd-when').value;
+        const whenISO = whenLocal ? new Date(whenLocal).toISOString() : new Date().toISOString();
+        const ok   = $('cd-ok').checked;
+
+        try{
+          await markReceivedAndFinalize(id, nome, whenISO, ok);
+          closeDlg($('dlg-cd'));
+          if (ok) {
+            showToast('Recebido e finalizado', 'A devolução foi marcada como concluída (aprovado_cd).', 'success');
+          } else {
+            showToast('Recebido com divergência', 'Marquei Disputa (reprovado_cd). Considere abrir mediação no ML.', 'warning');
+          }
+          refreshOrReload();
+        }catch(e){
+          showToast('Erro', e.message || 'Falha ao registrar recebimento', 'error');
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

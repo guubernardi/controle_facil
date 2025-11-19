@@ -46,6 +46,16 @@ function canonFlowForDb(s){
   return 'pendente';
 }
 
+/** Mapeia fluxo → status interno (usado pelos filtros do index) */
+function statusFromFlow(flow, prevStatus=null){
+  const f = canonFlowForDb(flow);
+  if (f === 'recebido_cd' || f === 'aprovado_cd') return 'concluida'; // cai no grupo "finalizado"
+  if (f === 'reprovado_cd') return 'rejeitada';
+  if (f === 'cancelado')    return 'rejeitada';
+  // não força mudança nos demais
+  return prevStatus || null;
+}
+
 /* ================= column check / upsert ================= */
 const _colsCache = {};
 async function tableHasColumns(table, cols) {
@@ -66,9 +76,11 @@ async function upsertDevolucao(rec) {
   if (!rec || !rec.id_venda) return { inserted:false, updated:false };
 
   if (rec.log_status) rec.log_status = canonFlowForDb(rec.log_status);
+  // Deriva status interno se não veio explícito
+  if (!rec.status) rec.status = statusFromFlow(rec.log_status, rec.status);
 
   const cols = await tableHasColumns('devolucoes', [
-    'id','id_venda','ml_claim_id','ml_return_status','ml_shipping_status','log_status',
+    'id','id_venda','ml_claim_id','ml_return_status','ml_shipping_status','log_status','status',
     'cliente_nome','valor_produto','valor_frete','created_at','updated_at','loja_nome',
     'data_compra','sku','nfe_numero','nfe_chave','reclamacao',
     'cd_recebido_em','cd_responsavel'
@@ -81,6 +93,7 @@ async function upsertDevolucao(rec) {
   add('ml_return_status',   rec.ml_return_status ?? null);
   add('ml_shipping_status', rec.ml_shipping_status ?? null);
   add('log_status',         rec.log_status ?? null);
+  add('status',             rec.status ?? null);
   add('cliente_nome',       rec.cliente_nome ?? null);
   add('valor_produto',      rec.valor_produto ?? null);
   add('valor_frete',        rec.valor_frete ?? null);
@@ -107,6 +120,7 @@ async function upsertDevolucao(rec) {
   ins('ml_return_status',   rec.ml_return_status ?? null);
   ins('ml_shipping_status', rec.ml_shipping_status ?? null);
   ins('log_status',         rec.log_status ?? null);
+  ins('status',             rec.status ?? null);
   ins('cliente_nome',       rec.cliente_nome ?? null);
   ins('valor_produto',      rec.valor_produto ?? null);
   ins('valor_frete',        rec.valor_frete ?? null);
@@ -246,7 +260,7 @@ function suggestFlow(mlReturnStatus, shipStatus, shipSub){
   const ship = [lower(shipStatus||''), lower(shipSub||'')].join('_');
 
   // returns v2
-  if (/^label_generated$|ready_to_ship|etiqueta|prepar/.test(s)) return 'pronto_envio';
+  if (/^label_generated$|ready_to_ship|etiqueta|prepar/.test(s)) return 'em_preparacao';
   if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(s)) return 'pendente';
   if (/^shipped$|pending_delivered$/.test(s)) return 'em_transporte';
   if (/^delivered$/.test(s)) return 'recebido_cd';
@@ -314,11 +328,12 @@ function mapReturnRecord(rec, sellerNick){
     take(rec,['created']) ||
     new Date().toISOString();
 
-  // fluxo sugerido
+  // fluxo sugerido + status interno
   let flow = suggestFlow(mlReturnStatus, mlShipStatus, mlShipSub);
   const fromStage = flowFromStage(stage);
   if (fromStage !== 'pendente') flow = fromStage;
   flow = canonFlowForDb(flow);
+  const internalStatus = statusFromFlow(flow, null);
 
   return {
     id_venda: String(orderId),
@@ -326,6 +341,7 @@ function mapReturnRecord(rec, sellerNick){
     ml_return_status: mlReturnStatus || null,
     ml_shipping_status: mlShipAny || null,
     log_status: flow,
+    status: internalStatus || null,
     cliente_nome: String(buyer),
     valor_produto: saleAmount,
     valor_frete: shippingAmount,
@@ -412,6 +428,13 @@ router.patch('/returns/:id', async (req, res) => {
                  : body[k];
       }
     }
+
+    // se veio log_status e NÃO veio status, derivar status interno
+    if (patch.log_status && !Object.prototype.hasOwnProperty.call(patch,'status')) {
+      const next = statusFromFlow(patch.log_status, row.status);
+      if (next) patch.status = next;
+    }
+
     await updateReturnById(row.id, patch);
 
     // log opcional
@@ -479,10 +502,14 @@ router.patch('/returns/:id/cd/receive', async (req, res) => {
     const whenIso     = req.body.when ? new Date(req.body.when).toISOString() : new Date().toISOString();
     const updated_by  = req.body.updated_by || 'frontend';
 
+    const nextFlow   = canonFlowForDb('recebido_cd');
+    const nextStatus = statusFromFlow(nextFlow, row.status) || row.status;
+
     await updateReturnById(row.id, {
       cd_recebido_em: whenIso,
       cd_responsavel: responsavel,
-      log_status: canonFlowForDb('recebido_cd')
+      log_status: nextFlow,
+      status: nextStatus
     });
 
     await insertLogEvent(row.id, {
@@ -490,7 +517,7 @@ router.patch('/returns/:id/cd/receive', async (req, res) => {
       title:'Recebido no CD',
       message:`Responsável: ${responsavel || '—'}`,
       meta:{ cd:{ responsavel, receivedAt: whenIso } },
-      status:'recebido_cd'
+      status: nextFlow
     });
 
     const fresh = await getReturnRowByIdOrOrder(row.id);
@@ -512,16 +539,18 @@ router.patch('/returns/:id/cd/inspect', async (req, res) => {
     const note   = String(req.body.note || '').trim();
     const updated_by = req.body.updated_by || 'frontend-inspecao';
 
-    const targetStatus = result === 'approve' ? 'aprovado_cd' : 'reprovado_cd';
+    const flowTarget = result === 'approve' ? 'aprovado_cd' : 'reprovado_cd';
+    const nextFlow   = canonFlowForDb(flowTarget);
+    const nextStatus = statusFromFlow(nextFlow, row.status) || row.status;
 
-    await updateReturnById(row.id, { log_status: canonFlowForDb(targetStatus) });
+    await updateReturnById(row.id, { log_status: nextFlow, status: nextStatus });
 
     await insertLogEvent(row.id, {
       type:'status',
       title: result === 'approve' ? 'Inspeção aprovada' : 'Inspeção reprovada',
       message: note || null,
       meta:{ cd:{ inspectedAt: new Date().toISOString() } },
-      status: targetStatus
+      status: nextFlow
     });
 
     const fresh = await getReturnRowByIdOrOrder(row.id);
@@ -584,6 +613,7 @@ router.get('/returns/state', async (req, res) => {
     }
 
     flow = canonFlowForDb(flow || 'pendente');
+    const nextStatus = statusFromFlow(flow, null);
 
     // Atualiza DB se possível
     if (doUpdate && orderId) {
@@ -592,7 +622,8 @@ router.get('/returns/state', async (req, res) => {
           id_venda: String(orderId),
           ml_claim_id: String(claimId),
           ml_return_status: rawStatus || null,
-          log_status: flow
+          log_status: flow,
+          status: nextStatus || null
         });
       } catch(_) {}
     }

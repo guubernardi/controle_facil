@@ -1,4 +1,4 @@
-// /public/js/index.js — Feed com fallback ao vivo das “devoluções abertas” do ML
+// /public/js/index.js — Feed com fallback ao vivo das “devoluções abertas” do ML (sincronizado c/ recebimento no CD)
 class DevolucoesFeed {
   constructor() {
     this.items = [];
@@ -18,7 +18,7 @@ class DevolucoesFeed {
     this._lastSyncErrShown = false;
 
     // circuit breaker claims/import
-    this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000; // padrão (pode ser reduzido caso "invalid_claim_id")
+    this.CLAIMS_BLOCK_MS  = 6 * 60 * 60 * 1000;
     this.CLAIMS_BLOCK_KEY = "rf:claimsImport:blockUntil";
 
     // fluxo cache (shipping)
@@ -44,7 +44,6 @@ class DevolucoesFeed {
                    || localStorage.getItem('rf:sellerId') || '';
     this.sellerNick = document.querySelector('meta[name="ml-seller-nick"]')?.content?.trim()
                    || localStorage.getItem('rf:sellerNick') || '';
-    // token opcional (dev)
     this.sellerToken = document.querySelector('meta[name="ml-seller-token"]')?.content?.trim()
                     || localStorage.getItem('rf:sellerToken') || '';
 
@@ -92,8 +91,46 @@ class DevolucoesFeed {
       return true;
     } catch { return true; }
   }
+
+  // expõe função global p/ o index.html acionar após o PATCH de recebimento no CD
+  exposeGlobalReload() {
+    const self = this;
+    window.rfReloadReturnsList = async function rfReloadReturnsList() {
+      try {
+        await self.carregar();
+        self.renderizar();
+      } catch {}
+    };
+  }
+
+  // escuta eventos inter-abas e intra-aba para recarregar a lista
+  wireCrossTabReload() {
+    // 1) CustomEvent no mesmo documento
+    document.addEventListener('rf:returns:reload', () => this.queueRefresh(100));
+
+    // 2) BroadcastChannel entre abas
+    try {
+      const ch = new BroadcastChannel('rf-returns');
+      ch.addEventListener('message', (ev) => {
+        if (ev?.data === 'reload') this.queueRefresh(100);
+      });
+      // expõe atalho pra outros scripts publicarem
+      window.rfReturnsBroadcast = () => ch.postMessage('reload');
+    } catch {}
+
+    // 3) storage (quando algum script mexe em uma flag conhecida)
+    window.addEventListener('storage', (e) => {
+      if (!e) return;
+      if (String(e.key || '').startsWith('rf:returnCache:')) this.queueRefresh(150);
+      if (String(e.key || '').startsWith('rf:flowCache:')) this.queueRefresh(150);
+    });
+  }
+
   async inicializar() {
     this.configurarUI();
+    this.exposeGlobalReload();
+    this.wireCrossTabReload();
+
     await this.carregar();
     this.purgeOldSeen();
     this.renderizar();
@@ -227,7 +264,7 @@ class DevolucoesFeed {
   }
 
   // ===== carregar =====
-  getMockData(){ return []; } // sem mock p/ não confundir datas
+  getMockData(){ return []; }
   async carregar(){
     this.toggleSkeleton(true);
     try{
@@ -313,19 +350,13 @@ class DevolucoesFeed {
 
   // ===== Syncs curtos =====
   async syncClaimsWithFallback(){
-    // CORREÇÃO: usar o conjunto unido de statuses (v2 returns + v1 claims)
     const STAT_RETURNS = ['label_generated','pending','shipped','pending_delivered','delivered','not_delivered','return_to_buyer','scheduled','expired','failed','cancelled','canceled'];
     const STAT_CLAIMS  = ['opened','in_progress','shipped','pending_delivered','delivered'];
     const STAT_ALL = Array.from(new Set([...STAT_RETURNS, ...STAT_CLAIMS])).join(',');
 
-    // 1) TENTAR returns/sync (preferível): inclui status da devolução (v2)
+    // 1) returns/sync (preferível)
     for (const d of [3,7,30]){
-      const qs = new URLSearchParams({
-        silent: "1",
-        days: String(d),
-        status: STAT_ALL // <-- antes mandava só statuses de claim; agora cobre ambos
-      });
-      // headers são preferidos; query é inofensiva
+      const qs = new URLSearchParams({ silent:"1", days:String(d), status:STAT_ALL });
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
       console.info("[sync] returns/sync:", `${d}d`);
@@ -336,15 +367,10 @@ class DevolucoesFeed {
       }
     }
 
-    // 2) Fallback: claims/import (se permitido)
+    // 2) fallback: claims/import
     if (!this.claimsImportAllowed()) return false;
     for (const d of [3,7,30]){
-      const qs = new URLSearchParams({
-        silent:"1",
-        all:"1",
-        days:String(d),
-        statuses:"opened,in_progress"
-      });
+      const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), statuses:"opened,in_progress" });
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
 
@@ -355,7 +381,6 @@ class DevolucoesFeed {
       const detail = (r.detail||"").toString().toLowerCase();
       const bad = (r.status===400) || detail.includes("invalid_claim_id");
       if (bad){
-        // reduz punição p/ 30 min para não travar operação
         try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+30*60*1000)); }catch{}
         if (!this._lastSyncErrShown){
           this._lastSyncErrShown=true;
@@ -513,7 +538,7 @@ class DevolucoesFeed {
     if (!this.shouldTryFlow(orderId)) return;
     this._flowResolvesThisTick++;
 
-    // 1) ensure claim_id e tenta returns/state primeiro (se existir)
+    // 1) ensure claim_id e tenta returns/state primeiro
     if (!claimId) claimId = await this.ensureClaimIdOnItem(d);
     if (claimId){
       const cached = this.getCachedReturn(claimId);
@@ -592,6 +617,7 @@ class DevolucoesFeed {
         const claimId = card.getAttribute("data-claim-id") || "";
         return this.quickEnrich(id, orderId, claimId);
       }
+      // obs.: o botão "Receber no CD" é tratado pelo inline do index.html via [data-open-receive]
     });
 
     document.getElementById("paginacao")?.addEventListener("click",(e)=>{
@@ -773,7 +799,10 @@ class DevolucoesFeed {
 
     const data = this.dataBr(d.created_at || d.data_compra || d.order_date);
     const valorProduto = Number(d.valor_produto||0);
-    const valorFrete   = Number(d.valor_frete||0);
+
+    // mostrar "Receber no CD" se o fluxo indicar ml_return_status=delivered (recebido_cd)
+    // e o status interno AINDA não for finalizado
+    const canReceive = this.computeFlow(d)==='recebido_cd' && this.grupoStatus(d.status)!=='finalizado';
 
     el.innerHTML = `
       <div class="devolucao-header">
@@ -810,19 +839,25 @@ class DevolucoesFeed {
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0 1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0  1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(Number(d.valor_frete||0))}</span>
         </div>
       </div>
 
       <div class="devolucao-footer">
-        <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" rel="noopener">
-          <button class="botao botao-outline botao-detalhes" data-action="open">
-            <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0 0 0-5z"/></svg>
-            Ver Detalhes
-          </button>
-        </a>
+        <div class="devolucao-cta">
+          ${canReceive ? `
+            <button class="botao botao-principal" data-open-receive data-id="${this.esc(d.id)}" title="Confirmar recebimento no CD">
+              Receber no CD
+            </button>` : ``}
+          <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" rel="noopener">
+            <button class="botao botao-outline botao-detalhes" data-action="open">
+              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0 0 0-5z"/></svg>
+              Ver Detalhes
+            </button>
+          </a>
+        </div>
       </div>
     `;
     return el;
@@ -849,5 +884,13 @@ class DevolucoesFeed {
   }
 }
 
-if (document.readyState==="loading") document.addEventListener("DOMContentLoaded",()=>new DevolucoesFeed());
-else new DevolucoesFeed();
+// boot e exposição global p/ o index.html conseguir chamar rfReloadReturnsList()
+(function start(){
+  const boot = () => {
+    const inst = new DevolucoesFeed();
+    // guarda (debug/uso avançado)
+    window.DevolucoesFeedInstance = inst;
+  };
+  if (document.readyState==="loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+})();
