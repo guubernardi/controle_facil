@@ -70,6 +70,10 @@ class DevolucoesFeed {
     // mensagem de erro genérica
     this.GENERIC_ERR = "Erro ao importar. Tente novamente";
 
+    // Endpoints com fallback
+    this.RETURNS_SYNC_ENDPOINTS  = ['/api/ml/returns/sync',  '/api/returns/sync'];
+    this.RETURNS_STATE_ENDPOINTS = ['/api/ml/returns/state', '/api/returns/state'];
+
     this.inicializar();
   }
 
@@ -177,43 +181,14 @@ class DevolucoesFeed {
       // Trata payloads { ok:false } como erro lógico, mesmo em HTTP 200
       if (r.ok && body && typeof body === "object" && body.ok === false) {
         const detail = (body.error || body.message || "").toString();
-        console.info("[sync]", url, "→ 200 (app-error)", detail.slice(0,160));
+        console.debug("[sync]", url, "→ 200 (app-error)", detail.slice(0,160));
         return { ok:false, status:r.status, detail, data:body };
       }
 
       if(!r.ok){
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
-        console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
-
-        // 401 sem token do ML (qualquer endpoint ML)
-        if (r.status === 401 && (detail||"").toLowerCase().includes('missing_access_token')) {
-          if (!this._lastSyncErrShown){ this._lastSyncErrShown = true; this.toast("Conectar Mercado Livre", "Faça login para sincronizar as devoluções.", "erro"); }
-          return { ok:false, status:r.status, detail, data:body };
-        }
-
-        // Guardas específicos de shipping
-        if (url.includes('/api/ml/shipping')) {
-          if (r.status===401) {
-            this.blockMlShip(30*60*1000);
-            if (!this._lastSyncErrShown){
-              this._lastSyncErrShown = true;
-              this.toast("Erro", this.GENERIC_ERR, "erro");
-            }
-          } else if (r.status===403) {
-            this._ml403BurstCount++;
-            if (!this._ml403BurstTimer) {
-              this._ml403BurstTimer = setTimeout(()=>{
-                this._ml403BurstCount = 0; this._ml403BurstTimer=null;
-              }, 60*1000);
-            }
-            if (this._ml403BurstCount >= 3) {
-              this.blockMlShip();
-              this._ml403BurstCount = 0;
-              clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
-              this.toast("Erro", this.GENERIC_ERR, "erro");
-            }
-          }
-        }
+        // logs mais silenciosos (evita spam quando 404)
+        if (r.status !== 404) console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
         return { ok:false, status:r.status, detail, data:body };
       }
       return { ok:true, status:r.status, data:body };
@@ -349,32 +324,52 @@ class DevolucoesFeed {
   }
 
   // ===== Syncs curtos =====
+  async _tryReturnsSync(days, statusCsv){
+    // tenta em /api/ml/returns/sync e cai para /api/returns/sync
+    for (const base of this.RETURNS_SYNC_ENDPOINTS) {
+      const qs = new URLSearchParams({ silent:"1", days:String(days), status:statusCsv });
+      if (this.sellerId)   qs.set('seller_id', this.sellerId);
+      if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
+
+      const url = `${base}?${qs.toString()}`;
+      console.debug("[sync] returns/sync:", days+"d", "via", base);
+      const r = await this.fetchQuiet(url);
+      if (r.ok) return true;
+
+      // 404 → tenta o próximo endpoint da lista sem alarmar
+      if (r.status === 404) continue;
+
+      // qualquer outro erro → não insiste nessa janela
+      if (!this._lastSyncErrShown && r.status !== 404) {
+        this._lastSyncErrShown = true;
+        this.toast("Erro", this.GENERIC_ERR, "erro");
+      }
+    }
+    return false;
+  }
+
   async syncClaimsWithFallback(){
     const STAT_RETURNS = ['label_generated','pending','shipped','pending_delivered','delivered','not_delivered','return_to_buyer','scheduled','expired','failed','cancelled','canceled'];
     const STAT_CLAIMS  = ['opened','in_progress','shipped','pending_delivered','delivered'];
     const STAT_ALL = Array.from(new Set([...STAT_RETURNS, ...STAT_CLAIMS])).join(',');
 
-    // 1) returns/sync (preferível)
+    // 1) returns/sync (preferível, com fallback de rota)
     for (const d of [3,7,30]){
-      const qs = new URLSearchParams({ silent:"1", days:String(d), status:STAT_ALL });
-      if (this.sellerId)   qs.set('seller_id', this.sellerId);
-      if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
-      console.info("[sync] returns/sync:", `${d}d`);
-      const r = await this.fetchQuiet(`/api/ml/returns/sync?${qs.toString()}`);
-      if (r.ok) {
+      const ok = await this._tryReturnsSync(d, STAT_ALL);
+      if (ok) {
         try { localStorage.removeItem(this.CLAIMS_BLOCK_KEY); } catch {}
         return true;
       }
     }
 
-    // 2) fallback: claims/import
+    // 2) fallback: claims/import (evita spam se bloqueado)
     if (!this.claimsImportAllowed()) return false;
     for (const d of [3,7,30]){
       const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), statuses:"opened,in_progress" });
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
 
-      console.info("[sync] claims/import:", `${d}d opened,in_progress`);
+      console.debug("[sync] claims/import:", `${d}d opened,in_progress`);
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
       if (r.ok) return true;
 
@@ -417,6 +412,22 @@ class DevolucoesFeed {
     return String(s.flow || s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
+  // ===== Returns state (com fallback de rota) =====
+  async fetchReturnsState({ claimId, orderId }) {
+    if (!claimId) return { ok:false };
+    const qs = new URLSearchParams({ claim_id:String(claimId), silent:"1" });
+    if (orderId) qs.set('order_id', String(orderId));
+
+    for (const base of this.RETURNS_STATE_ENDPOINTS) {
+      const r = await this.fetchQuiet(`${base}?${qs.toString()}`);
+      if (r.ok) return r;
+      if (r.status === 404) continue;
+      // outro erro → não insiste
+      break;
+    }
+    return { ok:false };
+  }
+
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
@@ -425,9 +436,9 @@ class DevolucoesFeed {
     const it = this.items.find(x => String(x.id) === String(id));
     if (it && !claimId) claimId = await this.ensureClaimIdOnItem(it);
 
-    // 1) Returns state
+    // 1) Returns state (com fallback)
     if (claimId){
-      const r = await this.fetchQuiet(`/api/ml/returns/state?claim_id=${encodeURIComponent(claimId)}${orderId?`&order_id=${encodeURIComponent(orderId)}`:""}&silent=1`);
+      const r = await this.fetchReturnsState({ claimId, orderId });
       if (r.ok) {
         const flow = String(r.data?.flow || "").toLowerCase();
         const raw  = String(r.data?.raw_status || "").toLowerCase();
@@ -538,22 +549,16 @@ class DevolucoesFeed {
     if (!this.shouldTryFlow(orderId)) return;
     this._flowResolvesThisTick++;
 
-    // 1) ensure claim_id e tenta returns/state primeiro
+    // 1) ensure claim_id e tenta returns/state primeiro (com fallback)
     if (!claimId) claimId = await this.ensureClaimIdOnItem(d);
     if (claimId){
-      const cached = this.getCachedReturn(claimId);
-      if (cached){
-        if (cached.status) d.ml_return_status = cached.status;
-        if (cached.flow)   d.log_status = cached.flow;
-      } else {
-        const r = await this.fetchQuiet(`/api/ml/returns/state?claim_id=${encodeURIComponent(claimId)}&order_id=${encodeURIComponent(orderId)}&silent=1`);
-        if (r.ok){
-          const flow = String(r.data?.flow || "").toLowerCase();
-          const raw  = String(r.data?.raw_status || "").toLowerCase();
-          if (flow) d.log_status = flow;
-          if (raw)  d.ml_return_status = raw;
-          this.setCachedReturn(claimId, raw || "", flow || "");
-        }
+      const r = await this.fetchReturnsState({ claimId, orderId });
+      if (r.ok){
+        const flow = String(r.data?.flow || "").toLowerCase();
+        const raw  = String(r.data?.raw_status || "").toLowerCase();
+        if (flow) d.log_status = flow;
+        if (raw)  d.ml_return_status = raw;
+        this.setCachedReturn(claimId, raw || "", flow || "");
       }
     }
 
@@ -839,7 +844,7 @@ class DevolucoesFeed {
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0  1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0  1 12 3.5V5h1.02a1.5 1.5 0  0  1 1.17.563l1.481 1.85a1.5 1.5 0  0  1 .329.938V10.5a1.5 1.5 0  0  1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0  1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(Number(d.valor_frete||0))}</span>
         </div>
@@ -853,7 +858,7 @@ class DevolucoesFeed {
             </button>` : ``}
           <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" rel="noopener">
             <button class="botao botao-outline botao-detalhes" data-action="open">
-              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0 0 0-5z"/></svg>
+              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0 1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0  0 0-5z"/></svg>
               Ver Detalhes
             </button>
           </a>

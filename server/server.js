@@ -252,7 +252,7 @@ async function addReturnEvent(args = {}, req) {
     if (String(e?.code) === '23505' && idempKey) {
       const { rows } = await q(
         `SELECT id,return_id AS "returnId",type,title,message,meta,
-                created_by AS "createdBy",created_at AS "createdAt",
+                created_by AS "createdBy",created_at AS "CreatedAt",
                 idemp_key AS "idempotencyKey"
            FROM return_events WHERE idemp_key=$1 LIMIT 1`, [idempKey]
       );
@@ -265,8 +265,7 @@ async function addReturnEvent(args = {}, req) {
 /* ================== Rotas base ================== */
 try { app.use(require('./routes/utils')); } catch (e) { console.warn('[BOOT] utils opcional:', e?.message || e); }
 
-/* === ML: Claims/Returns/Orders/Users (NÚCLEO) ===
-   Tenta ml-claims.js e, se não existir, ml-claim.js (singular). */
+/* === ML: Claims/Returns/Orders/Users (NÚCLEO) === */
 (() => {
   let mlClaimsRouter = null;
   let used = null;
@@ -666,16 +665,57 @@ try {
   }
 } catch (e) { console.warn('[BOOT] ML Sync opcional:', e?.message || e); }
 
-/* === ML RETURNS (router + agendador) === */
+/* === ML RETURNS (router + agendador) — com prioridade para /sync e /state === */
 let _mlReturnsMounted = false;
 try {
   let raw = null;
   try { raw = require('./routes/ml-returns'); } catch (_) {}
   if (!raw) raw = require('./routes/returns');
 
+  // Extrai o Router (ou registrador)
   const routerLike = raw?.default || raw?.router || raw;
   const scheduleFn = raw?.scheduleMlReturnsSync || routerLike?.scheduleMlReturnsSync;
 
+  // Se for Router, criamos "handlers" prioritários para /returns/sync e /returns/state
+  if (routerLike && routerLike.stack) {
+    const pickHandler = (method, routePath) => {
+      try {
+        const stack = routerLike.stack || [];
+        for (const layer of stack) {
+          if (layer.route && layer.route.path === routePath && layer.route.methods?.[method]) {
+            const handlers = (layer.route.stack || []).map(s => s.handle).filter(Boolean);
+            // Compose para suportar múltiplos middlewares
+            return (req, res, next) => {
+              let i = 0;
+              const run = (err) => {
+                if (err) return next(err);
+                const fn = handlers[i++];
+                if (!fn) return; // nada mais a fazer
+                try { fn(req, res, run); } catch (e) { next(e); }
+              };
+              run();
+            };
+          }
+        }
+      } catch { /* ignore */ }
+      return null;
+    };
+
+    const syncHandler  = pickHandler('get', '/returns/sync');
+    const stateHandler = pickHandler('get', '/returns/state');
+
+    if (syncHandler) {
+      // Registramos **antes** de montar o router para ganhar prioridade
+      app.get('/api/ml/returns/sync', syncHandler);
+      console.log('[BOOT] ML Returns SYNC handler prioritário ON (/api/ml/returns/sync)');
+    }
+    if (stateHandler) {
+      app.get('/api/ml/returns/state', stateHandler);
+      console.log('[BOOT] ML Returns STATE handler prioritário ON (/api/ml/returns/state)');
+    }
+  }
+
+  // Agora montamos o router normalmente (demais rotas)
   const isRouter = !!routerLike && (routerLike.stack || typeof routerLike.use === 'function' || routerLike.name === 'router');
   if (isRouter) { app.use('/api/ml', routerLike); _mlReturnsMounted = true; }
   else if (typeof routerLike === 'function') { routerLike(app); _mlReturnsMounted = true; }
@@ -690,7 +730,7 @@ try {
   console.warn('[BOOT] ML Returns falhou ao carregar:', e?.message || e);
 }
 
-// Alias se não montou sob /api/ml:
+// Alias só se não montou nada em /api/ml
 if (!_mlReturnsMounted) {
   const alias = (name) => (req, res) => {
     const qs = req.originalUrl.split('?')[1] || '';
