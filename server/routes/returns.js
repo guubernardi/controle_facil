@@ -561,12 +561,37 @@ router.patch('/returns/:id/cd/inspect', async (req, res) => {
   }
 });
 
+/* ========= Fallback local para /returns/state quando ML falhar ========= */
+async function fallbackLocalState({ claimId=null, orderId=null }){
+  const has = await tableHasColumns('devolucoes', ['ml_claim_id','id_venda','ml_return_status','log_status','updated_at']);
+  if (!has.ml_claim_id && !has.id_venda) {
+    return { flow:'pendente', raw_status:null, fallback:true };
+  }
+  const wh = []; const ps = []; let p=1;
+  if (claimId && has.ml_claim_id){ wh.push(`ml_claim_id = $${p++}`); ps.push(String(claimId)); }
+  if (orderId && has.id_venda){    wh.push(`id_venda    = $${p++}`); ps.push(String(orderId)); }
+  if (!wh.length) return { flow:'pendente', raw_status:null, fallback:true };
+
+  const { rows } = await query(`
+    SELECT ml_return_status, log_status
+      FROM devolucoes
+     WHERE ${wh.join(' OR ')}
+     ORDER BY updated_at DESC NULLS LAST
+     LIMIT 1
+  `, ps);
+
+  const r   = rows[0] || {};
+  const raw = r.ml_return_status ?? null;
+  const flow = r.log_status ? canonFlowForDb(r.log_status) : suggestFlow(raw, null, null);
+  return { flow: flow || 'pendente', raw_status: raw || null, fallback: true };
+}
+
 /* ================= /returns/state ================= */
 /**
  * GET /api/ml/returns/state?claim_id=...&order_id=...&update=1
  * - Tenta GET e, se preciso, POST em /post-purchase/v2/claims/{claim_id}/returns
  * - Se não vier, cai para /post-purchase/v1/claims/{claim_id} e usa stage→flow.
- * - Sempre 200 com { ok, flow, raw_status }.
+ * - Sem token ou 401/403/404 → devolve fallback do DB com ok:true (evita "200 (app-error)").
  */
 router.get('/returns/state', async (req, res) => {
   try {
@@ -575,16 +600,44 @@ router.get('/returns/state', async (req, res) => {
     const orderIdQ = req.query.order_id || req.query.orderId || null;
     const doUpdate = String(req.query.update ?? '1') !== '0';
 
-    if (!claimId) return res.json({ ok:false, error:'missing_claim_id' });
+    if (!claimId && !orderIdQ) {
+      return res.status(400).json({ ok:false, error:'missing_param', detail:'Informe claim_id ou order_id' });
+    }
 
-    const { token } = await resolveSellerAccessToken(req);
+    // Resolve token; se não conseguir, devolve fallback 200 ok:true
+    let tokenObj = null;
+    try { tokenObj = await resolveSellerAccessToken(req); } catch { tokenObj = null; }
+    if (!tokenObj?.token) {
+      const fb = await fallbackLocalState({ claimId: claimId || null, orderId: orderIdQ || null });
+      return res.json({
+        ok: true,
+        from_meli: false,
+        claim_id: claimId || null,
+        order_id: orderIdQ || null,
+        ...fb
+      });
+    }
+    const token = tokenObj.token;
 
     let ret = null;
     // 1) GET v2
     try {
       const r = await mlFetch(token, `https://api.mercadolibre.com/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`);
       ret = Array.isArray(r?.data) ? r.data[0] : Array.isArray(r) ? r[0] : r;
-    } catch (_){ /* tenta POST */ }
+    } catch (e) {
+      // tenta POST somente se erro não for permissão. Se for 401/403/404, já cai pro fallback
+      if (e?.status === 401 || e?.status === 403 || e?.status === 404) {
+        const fb = await fallbackLocalState({ claimId, orderId: orderIdQ || null });
+        return res.json({
+          ok: true,
+          from_meli: false,
+          claim_id: claimId || null,
+          order_id: orderIdQ || null,
+          upstream_status: e.status,
+          ...fb
+        });
+      }
+    }
     // 2) POST v2 (algumas contas precisam de POST vazio)
     if (!ret) {
       try {
@@ -594,7 +647,19 @@ router.get('/returns/state', async (req, res) => {
           { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({}) }
         );
         ret = Array.isArray(r?.data) ? r.data[0] : Array.isArray(r) ? r[0] : r;
-      } catch(_){}
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403 || e?.status === 404) {
+          const fb = await fallbackLocalState({ claimId, orderId: orderIdQ || null });
+          return res.json({
+            ok: true,
+            from_meli: false,
+            claim_id: claimId || null,
+            order_id: orderIdQ || null,
+            upstream_status: e.status,
+            ...fb
+          });
+        }
+      }
     }
 
     let rawStatus = ret?.status || ret?.return_status || null;
@@ -609,7 +674,19 @@ router.get('/returns/state', async (req, res) => {
         stage   = c?.stage || c?.status || null;
         orderId = orderId || c?.resource_id || c?.order_id || null;
         flow    = flowFromStage(stage) || flow || 'pendente';
-      } catch(_){}
+      } catch (e) {
+        if (e?.status === 401 || e?.status === 403 || e?.status === 404) {
+          const fb = await fallbackLocalState({ claimId, orderId: orderId || orderIdQ || null });
+          return res.json({
+            ok: true,
+            from_meli: false,
+            claim_id: claimId || null,
+            order_id: orderId || orderIdQ || null,
+            upstream_status: e.status,
+            ...fb
+          });
+        }
+      }
     }
 
     flow = canonFlowForDb(flow || 'pendente');
@@ -630,14 +707,16 @@ router.get('/returns/state', async (req, res) => {
 
     return res.json({
       ok: true,
-      claim_id: claimId,
-      order_id: orderId || null,
+      from_meli: true,
+      claim_id: claimId || null,
+      order_id: orderId || orderIdQ || null,
       raw_status: rawStatus || null,
       stage: stage || null,
       flow
     });
   } catch (e) {
-    return res.json({ ok:false, error:String(e?.message||e) });
+    // erro inesperado → ainda assim evita "200 (app-error)": responde 500 com ok:false
+    return res.status(500).json({ ok:false, error:String(e?.message||e) });
   }
 });
 
