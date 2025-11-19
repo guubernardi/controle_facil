@@ -70,10 +70,6 @@ class DevolucoesFeed {
     // mensagem de erro genérica
     this.GENERIC_ERR = "Erro ao importar. Tente novamente";
 
-    // Endpoints com fallback
-    this.RETURNS_SYNC_ENDPOINTS  = ['/api/ml/returns/sync',  '/api/returns/sync'];
-    this.RETURNS_STATE_ENDPOINTS = ['/api/ml/returns/state', '/api/returns/state'];
-
     this.inicializar();
   }
 
@@ -96,20 +92,33 @@ class DevolucoesFeed {
     } catch { return true; }
   }
 
+  // expõe função global p/ o index.html acionar após o PATCH de recebimento no CD
   exposeGlobalReload() {
     const self = this;
     window.rfReloadReturnsList = async function rfReloadReturnsList() {
-      try { await self.carregar(); self.renderizar(); } catch {}
+      try {
+        await self.carregar();
+        self.renderizar();
+      } catch {}
     };
   }
 
+  // escuta eventos inter-abas e intra-aba para recarregar a lista
   wireCrossTabReload() {
+    // 1) CustomEvent no mesmo documento
     document.addEventListener('rf:returns:reload', () => this.queueRefresh(100));
+
+    // 2) BroadcastChannel entre abas
     try {
       const ch = new BroadcastChannel('rf-returns');
-      ch.addEventListener('message', (ev) => { if (ev?.data === 'reload') this.queueRefresh(100); });
+      ch.addEventListener('message', (ev) => {
+        if (ev?.data === 'reload') this.queueRefresh(100);
+      });
+      // expõe atalho pra outros scripts publicarem
       window.rfReturnsBroadcast = () => ch.postMessage('reload');
     } catch {}
+
+    // 3) storage (quando algum script mexe em uma flag conhecida)
     window.addEventListener('storage', (e) => {
       if (!e) return;
       if (String(e.key || '').startsWith('rf:returnCache:')) this.queueRefresh(150);
@@ -126,8 +135,8 @@ class DevolucoesFeed {
     this.purgeOldSeen();
     this.renderizar();
 
-    // primeira tentativa de sincronização
-    await this.syncClaimsWithFallback(/*verifyFresh=*/true);
+    // → puxa devoluções abertas do ML logo no boot
+    await this.syncClaimsWithFallback();
     await this.carregar();
     this.renderizar();
 
@@ -152,7 +161,7 @@ class DevolucoesFeed {
     if (/^\/api\/ml\//.test(url) || /^\/api\/meli\//.test(url)) {
       if (this.sellerId)     h['x-seller-id']     = this.sellerId;
       if (this.sellerNick)   h['x-seller-nick']   = this.sellerNick;
-      if (this.sellerToken)  h['x-seller-token']  = this.sellerToken;
+      if (this.sellerToken)  h['x-seller-token']  = this.sellerToken; // dev override opcional
     }
     return h;
   }
@@ -165,14 +174,46 @@ class DevolucoesFeed {
       if (ct.includes("application/json")) { try{ body = await r.json(); }catch{} }
       else { try{ body = await r.text(); }catch{} }
 
-      // trata payloads {ok:false} como erro lógico
+      // Trata payloads { ok:false } como erro lógico, mesmo em HTTP 200
       if (r.ok && body && typeof body === "object" && body.ok === false) {
-        return { ok:false, status:r.status, detail:(body.error||body.message||"").toString(), data:body, appError:true };
+        const detail = (body.error || body.message || "").toString();
+        console.info("[sync]", url, "→ 200 (app-error)", detail.slice(0,160));
+        return { ok:false, status:r.status, detail, data:body };
       }
 
       if(!r.ok){
         const detail = body && (body.error||body.message) ? (body.error||body.message) : (typeof body==="string" ? body : "");
-        if (r.status !== 404) console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
+        console.info("[sync]", url, "→", r.status, (detail||"").toString().slice(0,160));
+
+        // 401 sem token do ML (qualquer endpoint ML)
+        if (r.status === 401 && (detail||"").toLowerCase().includes('missing_access_token')) {
+          if (!this._lastSyncErrShown){ this._lastSyncErrShown = true; this.toast("Conectar Mercado Livre", "Faça login para sincronizar as devoluções.", "erro"); }
+          return { ok:false, status:r.status, detail, data:body };
+        }
+
+        // Guardas específicos de shipping
+        if (url.includes('/api/ml/shipping')) {
+          if (r.status===401) {
+            this.blockMlShip(30*60*1000);
+            if (!this._lastSyncErrShown){
+              this._lastSyncErrShown = true;
+              this.toast("Erro", this.GENERIC_ERR, "erro");
+            }
+          } else if (r.status===403) {
+            this._ml403BurstCount++;
+            if (!this._ml403BurstTimer) {
+              this._ml403BurstTimer = setTimeout(()=>{
+                this._ml403BurstCount = 0; this._ml403BurstTimer=null;
+              }, 60*1000);
+            }
+            if (this._ml403BurstCount >= 3) {
+              this.blockMlShip();
+              this._ml403BurstCount = 0;
+              clearTimeout(this._ml403BurstTimer); this._ml403BurstTimer=null;
+              this.toast("Erro", this.GENERIC_ERR, "erro");
+            }
+          }
+        }
         return { ok:false, status:r.status, detail, data:body };
       }
       return { ok:true, status:r.status, data:body };
@@ -223,9 +264,11 @@ class DevolucoesFeed {
   }
 
   // ===== carregar =====
+  getMockData(){ return []; }
   async carregar(){
     this.toggleSkeleton(true);
     try{
+      // 1) banco
       const urls=[
         `/api/returns?limit=200&range_days=${this.RANGE_DIAS}`,
         `/api/returns?page=1&pageSize=200&orderBy=created_at&orderDir=desc`,
@@ -240,17 +283,13 @@ class DevolucoesFeed {
         }catch(e){ last=e; }
       }
       this.items = Array.isArray(list) ? list : [];
+
+      // 2) (opcional) mesclar open returns do ML aqui — DESLIGADO
       if(!list && !this.items.length && last) throw last;
     }catch(e){
       console.warn("[index] Falha ao carregar", e?.message);
       this.toast("Erro", this.GENERIC_ERR, "erro");
     }finally{ this.toggleSkeleton(false); }
-  }
-
-  // ===== checa se veio coisa recente =====
-  hasFreshItems(maxHours = 72){
-    const lim = Date.now() - maxHours*60*60*1000;
-    return (this.items||[]).some(d => this.getDateMs(d) >= lim);
   }
 
   // ===== Circuit breaker claims/import =====
@@ -288,9 +327,23 @@ class DevolucoesFeed {
     try{ localStorage.setItem(this.RETURN_CACHE_PREFIX+claimId, JSON.stringify({ ts: Date.now(), status, flow })); }catch{}
   }
 
+  // tenta deduzir o nick da loja a partir do registro
+  deriveNick(d){
+    const fromDb = d?.ml_seller_nick && String(d.ml_seller_nick).trim();
+    if (fromDb) return fromDb;
+    const loja = String(d?.loja_nome || '');
+    if (loja.includes('·')) {
+      const nick = (loja.split('·')[1] || '').trim();
+      if (nick) return nick;
+    }
+    return this.sellerNick || '';
+  }
+
   // tenta descobrir o claim_id se não veio no card
   async ensureClaimIdOnItem(item){
     if (item.ml_claim_id) return item.ml_claim_id;
+
+    // 1) tenta buscar o registro completo no back
     try{
       const r = await this.fetchQuiet(`/api/returns/${encodeURIComponent(item.id)}`);
       if (r.ok && r.data){
@@ -301,55 +354,50 @@ class DevolucoesFeed {
         }
       }
     }catch{}
+
+    // 2) (mantém desligado se o back não tiver endpoints de claims)
     if (!this.HAS_CLAIMS_SEARCH) return null;
     return null;
   }
 
-  // ===== Syncs =====
-  async _tryReturnsSync(days, statusCsv){
-    for (const base of this.RETURNS_SYNC_ENDPOINTS) {
-      const qs = new URLSearchParams({ silent:"1", days:String(days), status:statusCsv });
-      if (this.sellerId)   qs.set('seller_id', this.sellerId);
-      if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
-      const url = `${base}?${qs.toString()}`;
-      const r = await this.fetchQuiet(url);
-      if (r.ok) return { ok:true, where:base };
-      if (r.appError || r.status === 404) continue; // tenta próximo endpoint
-      break; // outro erro → interrompe essa janela
-    }
-    return { ok:false };
-  }
-
-  async syncClaimsWithFallback(verifyFresh=false){
+  // ===== Syncs curtos =====
+  async syncClaimsWithFallback(){
     const STAT_RETURNS = ['label_generated','pending','shipped','pending_delivered','delivered','not_delivered','return_to_buyer','scheduled','expired','failed','cancelled','canceled'];
     const STAT_CLAIMS  = ['opened','in_progress','shipped','pending_delivered','delivered'];
     const STAT_ALL = Array.from(new Set([...STAT_RETURNS, ...STAT_CLAIMS])).join(',');
 
-    // 1) returns/sync (1,3,7,30d) com reload + verificação de frescor
-    for (const d of [1,3,7,30]){
-      const r = await this._tryReturnsSync(d, STAT_ALL);
-      if (!r.ok) continue;
-      await this.carregar();
-      if (!verifyFresh || this.hasFreshItems(72)) {
+    // 1) returns/sync (preferível)
+    for (const d of [3,7,30]){
+      const qs = new URLSearchParams({ silent:"1", days:String(d), status:STAT_ALL });
+      if (this.sellerId)   qs.set('seller_id', this.sellerId);
+      if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
+      console.info("[sync] returns/sync:", `${d}d via /api/ml/returns/sync`);
+      const r = await this.fetchQuiet(`/api/ml/returns/sync?${qs.toString()}`);
+      if (r.ok) {
         try { localStorage.removeItem(this.CLAIMS_BLOCK_KEY); } catch {}
         return true;
       }
-      // se não trouxe nada recente, tenta próxima janela
     }
 
-    // 2) fallback: claims/import (evita spam se bloqueado)
+    // 2) fallback: claims/import
     if (!this.claimsImportAllowed()) return false;
-    for (const d of [1,3,7,30]){
+    for (const d of [3,7,30]){
       const qs = new URLSearchParams({ silent:"1", all:"1", days:String(d), statuses:"opened,in_progress" });
       if (this.sellerId)   qs.set('seller_id', this.sellerId);
       if (this.sellerNick) qs.set('seller_nick', this.sellerNick);
+
+      console.info("[sync] claims/import:", `${d}d opened,in_progress`);
       const r = await this.fetchQuiet(`/api/ml/claims/import?${qs.toString()}`);
-      if (r.ok) {
-        await this.carregar();
-        if (!verifyFresh || this.hasFreshItems(72)) return true;
-      } else if (r.status===400 || String(r.detail||"").toLowerCase().includes("invalid_claim_id")) {
+      if (r.ok) return true;
+
+      const detail = (r.detail||"").toString().toLowerCase();
+      const bad = (r.status===400) || detail.includes("invalid_claim_id");
+      if (bad){
         try{ localStorage.setItem(this.CLAIMS_BLOCK_KEY, String(Date.now()+30*60*1000)); }catch{}
-        if (!this._lastSyncErrShown){ this._lastSyncErrShown=true; this.toast("Erro", this.GENERIC_ERR, "erro"); }
+        if (!this._lastSyncErrShown){
+          this._lastSyncErrShown=true;
+          this.toast("Erro", this.GENERIC_ERR, "erro");
+        }
         return false;
       }
     }
@@ -361,7 +409,7 @@ class DevolucoesFeed {
     this._syncInFlight = true;
     try{
       const before=new Set(this.items.map(d=>String(d.id)));
-      await this.syncClaimsWithFallback(true);
+      await this.syncClaimsWithFallback();
       await this.carregar();
       const novos=this.items.filter(d=>!before.has(String(d.id))).length;
       if(novos>0) this.toast("Atualizado", `${novos} novas devoluções sincronizadas.`, "sucesso");
@@ -371,52 +419,58 @@ class DevolucoesFeed {
     }
   }
 
-  // ===== Shipping flow =====
-  async fetchShippingFlow(orderId){
+  // ===== Shipping flow (backend retorna .flow/.suggested_log_status) =====
+  async fetchShippingFlow(orderId, sellerNick=null){
     if (!orderId) return "";
     if (!this.mlShipAllowed()) return "";
-    const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&silent=1`);
+    const qs = new URLSearchParams({ order_id:String(orderId), silent:'1' });
+    if (sellerNick) qs.set('seller_nick', sellerNick);
+    const r = await this.fetchQuiet(`/api/ml/shipping/status?${qs.toString()}`);
     if (!r.ok) { if (r.status===403) this.setNoAccess(orderId); return ""; }
     const s = r.data || {};
     return String(s.flow || s.suggested_log_status || s.ml_substatus || s.ml_status || "").toLowerCase();
   }
 
-  // ===== Returns state (fallback) =====
-  async fetchReturnsState({ claimId, orderId }) {
-    if (!claimId) return { ok:false };
-    const qs = new URLSearchParams({ claim_id:String(claimId), silent:"1" });
-    if (orderId) qs.set('order_id', String(orderId));
-    for (const base of this.RETURNS_STATE_ENDPOINTS) {
-      const r = await this.fetchQuiet(`${base}?${qs.toString()}`);
-      if (r.ok) return r;
-      if (r.appError || r.status === 404) continue;
-      break;
-    }
-    return { ok:false };
-  }
-
   // ===== Quick enrich por card =====
   async quickEnrich(id, orderId, claimId){
     if (!id) return;
+
+    // tenta descobrir claim_id se não veio
     const it = this.items.find(x => String(x.id) === String(id));
     if (it && !claimId) claimId = await this.ensureClaimIdOnItem(it);
+    const sellerNick = it ? this.deriveNick(it) : (this.sellerNick || '');
 
+    // 1) Returns state (sempre pelo /api/ml/returns/state)
     if (claimId){
-      const r = await this.fetchReturnsState({ claimId, orderId });
+      const qs = new URLSearchParams({ claim_id:String(claimId), silent:'1' });
+      if (orderId) qs.set('order_id', String(orderId));
+      if (sellerNick) qs.set('seller_nick', sellerNick);
+      const r = await this.fetchQuiet(`/api/ml/returns/state?${qs.toString()}`);
       if (r.ok) {
         const flow = String(r.data?.flow || "").toLowerCase();
         const raw  = String(r.data?.raw_status || "").toLowerCase();
-        if (it){ if (flow) it.log_status = flow; if (raw) it.ml_return_status = raw; }
+        if (it){
+          if (flow) it.log_status = flow;
+          if (raw)  it.ml_return_status = raw;
+        }
         this.setCachedReturn(claimId, raw || "", flow || "");
       }
     }
 
+    // 2) Shipping state (usa update=1 para persistir)
     if (orderId && this.mlShipAllowed()) {
-      const r = await this.fetchQuiet(`/api/ml/shipping/status?order_id=${encodeURIComponent(orderId)}&update=1&silent=1`);
+      const qs = new URLSearchParams({ order_id:String(orderId), update:'1', silent:'1' });
+      if (sellerNick) qs.set('seller_nick', sellerNick);
+      const r = await this.fetchQuiet(`/api/ml/shipping/status?${qs.toString()}`);
       if (r.ok) {
         const flow = String(r.data?.suggested_log_status || r.data?.ml_substatus || r.data?.ml_status || r.data?.flow || "").toLowerCase();
-        if (flow) { if (it) it.log_status = this.normalizeFlow(flow); this.setCachedFlow(orderId, flow); }
-      } else if (r.status===403) this.setNoAccess(orderId);
+        if (flow) {
+          if (it) it.log_status = this.normalizeFlow(flow);
+          this.setCachedFlow(orderId, flow);
+        }
+      } else if (r.status===403) {
+        this.setNoAccess(orderId);
+      }
     }
 
     this.queueRefresh(250);
@@ -424,12 +478,27 @@ class DevolucoesFeed {
   }
 
   // ===== Fluxo =====
+  extractFlowString(d){
+    const pick=(o,ks)=>{ for(const k of ks){ if(o&&o[k]!=null) return String(o[k]); } return ""; };
+    let s = pick(d,[
+      "log_status","status_log","flow","flow_status","ml_flow",
+      "shipping_status","ship_status","ml_shipping_status","return_shipping_status","current_shipping_status","tracking_status",
+      "claim_status","claim_stage","ml_return_status"
+    ]) || "";
+    if (!s && d.shipping) s = pick(d.shipping,["status","substatus"]);
+    if (!s && d.return)   s = pick(d.return,["status"]);
+    if (!s && d.claim)    s = pick(d.claim, ["stage","status"]);
+    return String(s||"").toLowerCase().trim();
+  }
   computeFlow(d){
     const lower = v => String(v||"").toLowerCase();
+
+    // claim stage
     const cStage = lower(d.claim?.stage || d.claim_stage || d.claim?.status || d.claim_status || d.claim_state);
     if (/(mediat|media[cç]ao)/.test(cStage)) return "mediacao";
     if (/(open|opened|pending|dispute|reclama|claim)/.test(cStage)) return "disputa";
 
+    // shipping (NÃO promove delivered para recebido_cd)
     const sStat = lower(
       d.ml_shipping_status || d.shipping_status || d.return_shipping_status ||
       d.current_shipping_status || d.tracking_status ||
@@ -439,9 +508,10 @@ class DevolucoesFeed {
     const ship = [sStat, sSub].join("_");
     if (/ready_to_ship|handling|aguardando_postagem|label|etiq|prepar/.test(ship)) return "em_preparacao";
     if (/(in_transit|on_the_way|transit|a_caminho|posted|shipped|out_for_delivery|returning_to_sender|em_transito)/.test(ship)) return "em_transporte";
-    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente";
+    if (/delivered|entreg|arrived|recebid/.test(ship)) return "pendente"; // não marcamos recebido via shipping
     if (/not_delivered|cancel/.test(ship)) return "pendente";
 
+    // returns status (v2) — AQUI sim “delivered” vira Recebido no CD
     const rStat = lower(d.ml_return_status || d.return?.status || d.return_status || d.status_devolucao || d.status_log);
     if (/^label_generated$|ready_to_ship|etiqueta/.test(rStat)) return "pronto_envio";
     if (/^pending(_.*)?$|pending_cancel|pending_failure|pending_expiration/.test(rStat)) return "pendente";
@@ -454,6 +524,7 @@ class DevolucoesFeed {
     if (/^failed$/.test(rStat)) return "pendente";
     if (/^cancelled$|canceled$/.test(rStat)) return "cancelado";
 
+    // interno
     const log = lower(d.log_status || d.flow || d.flow_status || d.ml_flow);
     return this.normalizeFlow(log);
   }
@@ -473,11 +544,11 @@ class DevolucoesFeed {
     if (/(prepar|prep|ready_to_ship)/.test(s)) return "em_preparacao";
     if (/(pronto|label|etiq|ready)/.test(s)) return "pronto_envio";
     if (/(transit|transito|transporte|shipped|out_for_delivery|returning_to_sender)/.test(s)) return "em_transporte";
-    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente";
+    if (/(delivered|entreg|arrived|recebid)/.test(s)) return "pendente"; // não promovemos aqui
     return "pendente";
   }
 
-  // ===== Resolve/patch por card =====
+  // ===== Resolve de fluxo/returns por card =====
   async resolveAndPatchFlow(d){
     const id = d?.id;
     const orderId = d?.id_venda || d?.order_id;
@@ -487,9 +558,14 @@ class DevolucoesFeed {
     if (!this.shouldTryFlow(orderId)) return;
     this._flowResolvesThisTick++;
 
+    const sellerNick = this.deriveNick(d);
+
+    // 1) ensure claim_id e tenta returns/state primeiro (sempre /api/ml/returns/state)
     if (!claimId) claimId = await this.ensureClaimIdOnItem(d);
     if (claimId){
-      const r = await this.fetchReturnsState({ claimId, orderId });
+      const qs = new URLSearchParams({ claim_id:String(claimId), order_id:String(orderId), silent:'1' });
+      if (sellerNick) qs.set('seller_nick', sellerNick);
+      const r = await this.fetchQuiet(`/api/ml/returns/state?${qs.toString()}`);
       if (r.ok){
         const flow = String(r.data?.flow || "").toLowerCase();
         const raw  = String(r.data?.raw_status || "").toLowerCase();
@@ -499,6 +575,7 @@ class DevolucoesFeed {
       }
     }
 
+    // 2) shipping para complementar
     const cachedFlow = this.getCachedFlow(orderId);
     if (cachedFlow && cachedFlow !== "__NO_ACCESS__"){
       const canon = this.normalizeFlow(cachedFlow);
@@ -510,7 +587,7 @@ class DevolucoesFeed {
     }
     if (!this.mlShipAllowed()) return;
 
-    const found = await this.fetchShippingFlow(orderId);
+    const found = await this.fetchShippingFlow(orderId, sellerNick);
     if (!found) return;
 
     this.setCachedFlow(orderId, found);
@@ -548,6 +625,7 @@ class DevolucoesFeed {
     document.getElementById("filtro-status")?.addEventListener("change", e=>{ this.filtros.status=(e.target.value||"todos").toLowerCase(); this.page=1; this.renderizar(); });
     document.getElementById("botao-exportar")?.addEventListener("click",()=>this.exportar());
 
+    // grid
     document.getElementById("container-devolucoes")?.addEventListener("click",(e)=>{
       const card = e.target.closest?.("[data-return-id]"); if(!card) return;
       const id   = card.getAttribute("data-return-id");
@@ -557,6 +635,7 @@ class DevolucoesFeed {
         const claimId = card.getAttribute("data-claim-id") || "";
         return this.quickEnrich(id, orderId, claimId);
       }
+      // obs.: o botão "Receber no CD" é tratado pelo inline do index.html via [data-open-receive]
     });
 
     document.getElementById("paginacao")?.addEventListener("click",(e)=>{
@@ -565,6 +644,7 @@ class DevolucoesFeed {
       this.page=p; this.renderizar();
     });
 
+    // auto-refresh invisível
     const btn=document.createElement("button");
     btn.id="auto-refresh-hidden"; btn.type="button"; btn.style.display="none"; btn.setAttribute("aria-hidden","true");
     btn.addEventListener("click",()=>this.atualizarDados());
@@ -578,6 +658,7 @@ class DevolucoesFeed {
     window.addEventListener("online",()=>setTimeout(fire,500));
   }
 
+  // ===== helpers de status interno =====
   grupoStatus(st){
     const s=String(st||"").toLowerCase();
     for (const [g,set] of Object.entries(this.STATUS_GRUPOS)) if (set.has(s)) return g;
@@ -654,6 +735,7 @@ class DevolucoesFeed {
     nav.innerHTML=html;
   }
 
+  // ===== badges =====
   badgeNova(d){ return this.isNova(d) ? '<div class="badge badge-new" title="Criada recentemente">Nova devolução</div>' : ""; }
   badgeStatus(d){
     const grp=this.grupoStatus(d.status);
@@ -724,6 +806,7 @@ class DevolucoesFeed {
     return "badge";
   }
 
+  // ===== Card =====
   card(d, index=0){
     const el=document.createElement("div");
     el.className="card-devolucao slide-up";
@@ -734,6 +817,7 @@ class DevolucoesFeed {
 
     const data = this.dataBr(d.created_at || d.data_compra || d.order_date);
     const valorProduto = Number(d.valor_produto||0);
+
     const canReceive = this.computeFlow(d)==='recebido_cd' && this.grupoStatus(d.status)!=='finalizado';
 
     el.innerHTML = `
@@ -771,7 +855,7 @@ class DevolucoesFeed {
           <span class="campo-valor valor-destaque">${this.formatBRL(valorProduto)}</span>
         </div>
         <div class="campo-info">
-          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0  1 12 3.5V5h1.02a1.5 1.5 0  0  1 1.17.563l1.481 1.85a1.5 1.5 0  0  1 .329.938V10.5a1.5 1.5 0  0  1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0  1 0 10.5v-7z"/></svg>
+          <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M0 3.5A1.5 1.5 0  0 1 1.5 2h9A1.5 1.5 0  0 1 12 3.5V5h1.02a1.5 1.5 0  0 1 1.17.563l1.481 1.85a1.5 1.5 0  0 1 .329.938V10.5a1.5 1.5 0  0 1-1.5 1.5H14a2 2 0  1 1-4 0H5a2 2 0  1 1-3.998-.085A1.5 1.5 0  0  1 0 10.5v-7z"/></svg>
           <span class="campo-label">Frete</span>
           <span class="campo-valor valor-destaque">${this.formatBRL(Number(d.valor_frete||0))}</span>
         </div>
@@ -785,7 +869,7 @@ class DevolucoesFeed {
             </button>` : ``}
           <a href="../devolucao-editar.html?id=${encodeURIComponent(d.id)}" class="link-sem-estilo" rel="noopener">
             <button class="botao botao-outline botao-detalhes" data-action="open">
-              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0  1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0  0 0-5z"/></svg>
+              <svg class="icone" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0  0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5c2.12 0  3.879 1.168 5.168 2.457A13.133 13.133 0  0  1 14.828 8c-.58.87-3.828 5-6.828 5S2.58 8.87 1.173 8z"/><path d="M8 5.5a2.5 2.5 0  1 0 0 5 2.5 2.5 0  0 0 0-5z"/></svg>
               Ver Detalhes
             </button>
           </a>
@@ -795,6 +879,7 @@ class DevolucoesFeed {
     return el;
   }
 
+  // ações
   abrirDetalhes(id){
     const modal=document.getElementById("modal-detalhe");
     if (modal && modal.showModal) modal.showModal();
@@ -815,9 +900,11 @@ class DevolucoesFeed {
   }
 }
 
+// boot e exposição global p/ o index.html conseguir chamar rfReloadReturnsList()
 (function start(){
   const boot = () => {
     const inst = new DevolucoesFeed();
+    // guarda (debug/uso avançado)
     window.DevolucoesFeedInstance = inst;
   };
   if (document.readyState==="loading") document.addEventListener("DOMContentLoaded", boot);
