@@ -52,23 +52,31 @@ function normalizeFlow(mlStatus, mlSub) {
   return 'pendente';
 }
 
-// -------- Token resolver --------
-async function getActiveMlToken(req) {
+// -------- Token resolver (agora também lê query e expõe x-ml-token-source) --------
+async function getActiveMlToken(req, res) {
   // 1) sessão
-  if (req?.session?.user?.ml?.access_token) return req.session.user.ml.access_token;
-  if (req?.user?.ml?.access_token)         return req.user.ml.access_token;
+  if (req?.session?.user?.ml?.access_token) {
+    res?.set('x-ml-token-source', 'session');
+    return req.session.user.ml.access_token;
+  }
+  if (req?.user?.ml?.access_token) {
+    res?.set('x-ml-token-source', 'req.user');
+    return req.user.ml.access_token;
+  }
 
   // 2) Authorization: Bearer
   const hAuth = req.get('authorization') || '';
   const m = hAuth.match(/Bearer\s+(.+)/i);
-  if (m) return m[1];
+  if (m) { res?.set('x-ml-token-source', 'authorization'); return m[1]; }
 
-  // 3) headers da loja
-  const sellerIdRaw = req.get('x-seller-id') || null;
-  const sellerNick  = req.get('x-seller-nick') || null;
-  const sellerId    = sellerIdRaw && /^\d+$/.test(sellerIdRaw) ? sellerIdRaw : null;
+  // 3) filtros por header OU query
+  const sellerIdRaw =
+    req.get('x-seller-id') || req.query.seller_id || req.query.sellerId || null;
+  const sellerNick =
+    req.get('x-seller-nick') || req.query.seller_nick || req.query.sellerNick || null;
+  const sellerId = sellerIdRaw && /^\d+$/.test(sellerIdRaw) ? sellerIdRaw : null;
 
-  // 4) ml_tokens
+  // 4) ml_tokens (com filtros se vieram)
   try {
     const cols = await tableHasColumns('ml_tokens', ['is_active','user_id','nickname','access_token','updated_at']);
     const where = [];
@@ -76,8 +84,8 @@ async function getActiveMlToken(req) {
     let p = 1;
 
     if (cols.is_active) where.push(`is_active IS TRUE`);
-    if (sellerId)       { where.push(`user_id = $${p++}::bigint`); params.push(sellerId); }
-    if (sellerNick)     { where.push(`lower(nickname) = lower($${p++})`); params.push(sellerNick); }
+    if (sellerId)   { where.push(`user_id = $${p++}::bigint`); params.push(sellerId); }
+    if (sellerNick) { where.push(`lower(nickname) = lower($${p++})`); params.push(sellerNick); }
 
     const sql = `
       SELECT access_token
@@ -86,11 +94,15 @@ async function getActiveMlToken(req) {
        ORDER BY updated_at DESC NULLS LAST
        LIMIT 1`;
     const { rows } = await query(sql, params);
-    if (rows[0]?.access_token) return rows[0].access_token;
+    if (rows[0]?.access_token) {
+      res?.set('x-ml-token-source', sellerId || sellerNick ? 'ml_tokens(filtered)' : 'ml_tokens');
+      return rows[0].access_token;
+    }
   } catch (_) {}
 
   // 5) Fallback global
-  if (process.env.ML_ACCESS_TOKEN) return process.env.ML_ACCESS_TOKEN;
+  if (process.env.ML_ACCESS_TOKEN) { res?.set('x-ml-token-source', 'env'); return process.env.ML_ACCESS_TOKEN; }
+  res?.set('x-ml-token-source', 'none');
   return null;
 }
 
@@ -189,11 +201,12 @@ async function getShippingStatusFromOrder(orderId, token) {
       };
     }
   } catch (e) {
-    if (e?.status) throw e; // 401/403/404 → propaga
-    throw new Error(`orders fetch failed: ${e?.message || e}`);
+    // 401/403: realmente sem acesso → propaga
+    if (e?.status === 401 || e?.status === 403) throw e;
+    // 404/500/etc: segue para fallback shipments/search
   }
 
-  // 2) tentar localizar shipment via search (variações)
+  // 2) localizar por shipments/search (order / order_id / pack)
   const searchPaths = [
     `/shipments/search?order=${encodeURIComponent(orderId)}`,
     `/shipments/search?order_id=${encodeURIComponent(orderId)}`,
@@ -217,7 +230,7 @@ async function getShippingStatusFromOrder(orderId, token) {
       }
     } catch (e) {
       if (e?.status === 401 || e?.status === 403) throw e; // sem acesso
-      // 404 aqui = "não achei" — tenta a próxima variação
+      // demais erros: tenta a próxima variação
     }
   }
 
@@ -271,11 +284,12 @@ router.get('/shipping/status', async (req, res) => {
       return res.status(400).json({ error: 'missing_param', detail: 'Informe order_id ou shipment_id' });
     }
 
-    const token = await getActiveMlToken(req);
+    const token = await getActiveMlToken(req, res);
     if (!token) {
+      // 401 correto; devolve também fallback do banco quando possível
       if (orderId) {
         const fb = await fallbackFromDb(orderId);
-        return res.json({ ok: true, ...fb });
+        return res.status(401).json({ ok: false, warning: 'missing_access_token', ...fb });
       }
       return res.status(401).json({ error: 'missing_access_token' });
     }
@@ -317,9 +331,7 @@ router.get('/shipping/status', async (req, res) => {
       try {
         const fb = await fallbackFromDb(orderId);
         return res.status(code).json({ ok: false, from_meli: true, ...fb, error: String(e?.message || e) });
-      } catch {
-        // se até fallback falhar, cai no retorno padrão
-      }
+      } catch { /* se até fallback falhar, cai no retorno padrão */ }
     }
 
     return res.status(code).json({ error: String(e?.message || e), from_meli: true });
@@ -335,9 +347,9 @@ router.get('/shipping/sync', async (req, res) => {
     const days    = parseInt(req.query.days || req.query.recent_days || '0', 10) || 0;
     const silent  = /^1|true$/i.test(String(req.query.silent || '0'));
 
-    const token = await getActiveMlToken(req);
+    const token = await getActiveMlToken(req, res);
     if (!token) {
-      return res.status(200).json({ ok: false, warning: 'missing_access_token', updated: 0, total: 0 });
+      return res.status(401).json({ ok: false, warning: 'missing_access_token', updated: 0, total: 0 });
     }
 
     const touched = [];
