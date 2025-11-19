@@ -1,10 +1,9 @@
-// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente
+// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente (+ fluxo Recebido no CD)
 (function () {
   /* =============== Helpers =============== */
   var $  = function (id) { return document.getElementById(id); };
   var qs = new URLSearchParams(location.search);
 
-  // --- util para evitar submit implícito de botões dentro de <form> ---
   function neutralizeSubmit(id) {
     var el = $(id);
     if (!el) return;
@@ -67,7 +66,6 @@
     var el = getFirst(selectors); if (!el) return null;
     var v = ('value' in el) ? el.value : el.textContent;
     v = (v == null ? '' : String(v).trim());
-    // trata placeholder "—" como vazio
     if (v === '—') v = '';
     return toNumFlag ? toNum(v) : v;
   }
@@ -115,7 +113,7 @@
 
   function getLogPillEl() { return $('pill-log') || $('log_status_pill'); }
 
-  // ==== LOCK do "Status da Logística" (evita piscar/voltar para 'disputa') ====
+  // ==== LOCK do "Status da Logística" ====
   var LOG_LOCKED = false;
   function setLogPill(text, opts) {
     opts = opts || {};
@@ -200,7 +198,6 @@
     var dataCompra = firstNonEmpty(j.data_compra, j.order_date, j.date_created, j.paid_at, j.created_at);
     var motivo     = firstNonEmpty(j.tipo_reclamacao, j.reclamacao, j.reason_name, j.reason, j.reason_id, j.motivo, j.motivo_cliente);
 
-    // ---- log_status seguro: não herda 'status' genérico (ex.: 'disputa')
     function pickLogStatus(_j){
       var direct = firstNonEmpty(_j.log_status, _j.log, _j.current_log, _j.log_atual, _j.status_log);
       if (direct) return direct;
@@ -448,7 +445,6 @@
       if (!wasSet) lockMotivo(false);
     }
 
-    // não sobrescreve o pill se já estiver travado por ML
     if (!LOG_LOCKED) setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
 
@@ -630,10 +626,9 @@
         if (j && j.flow) {
           var ls = String(current.log_status || '').toLowerCase();
           if (ls !== 'aprovado_cd' && ls !== 'reprovado_cd') {
-            setLogPill(j.flow, { lock: true }); // trava o pill vindo do ML
+            setLogPill(j.flow, { lock: true });
             current.log_status = j.flow;
 
-            // (opcional) persiste o flow no banco para manter consistência
             if ((current.id || returnId) && j.flow) {
               fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
                 method:'PATCH',
@@ -655,27 +650,24 @@
       var label = humanizeReturnStatusML(ret.status);
       var el = $('ml-status-desc'); if (el) el.textContent = label;
       showReturnShipmentsFromRet(ret);
-      // sugere log se não tiver inspeção já fechada
       var suggested = suggestLogFromMLReturn(ret.status);
       var ls = String(current.log_status || '').toLowerCase();
       if (ls !== 'aprovado_cd' && ls !== 'reprovado_cd' && suggested) {
-        setLogPill(suggested, { lock: true }); // trava ao aplicar do ML
+        setLogPill(suggested, { lock: true });
         current.log_status = suggested;
       }
     }
     if (summary && summary.claim_reason) {
-      // ajusta motivo (e trava) + exibe label amigável
       var c = canonFromText(summary.claim_reason.label || summary.claim_reason.raw);
       if (c) setMotivoCanon(c, true);
       var cr = $('claim-reason'); if (cr) cr.textContent = summary.claim_reason.label || summary.claim_reason.raw || cr.textContent;
     }
-    // persiste estado canônico de flow/raw no servidor
     var cid = j.claim_id || readFirst(CLAIM_ID_SELECTORS);
     var oid = readFirst(ORDER_ID_SELECTORS) || (Array.isArray(j.orders) && j.orders[0] && j.orders[0].order_id) || null;
     if (cid) syncReturnState(cid, oid);
   }
 
-  /* =============== Nome do comprador: fallbacks =============== */
+  /* =============== Nome do comprador (fallback) =============== */
   function guessBuyerNameFromOrder(ord){
     try {
       var direct =
@@ -815,7 +807,6 @@
         toast('Dados do pedido aplicados do ML.', 'success');
       }
 
-      // persist — agora compara e atualiza se mudou
       var patchMeta = {};
       if (buyerName && buyerName !== current.cliente_nome) patchMeta.cliente_nome = buyerName;
       if (nick && !current.loja_nome) patchMeta.loja_nome = 'Mercado Livre · ' + nick;
@@ -1004,7 +995,6 @@
   ].forEach(function(sel){ var el=pickEl(sel); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc); });
   (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', recalc); } })();
 
-  // Neutraliza submits implícitos e liga handlers seguros
   ['btn-insp-aprova','btn-insp-reprova','rq-aprovar','rq-reprovar','rq-receber','btn-cd','btn-salvar','btn-mark','btn-enrich']
     .forEach(neutralizeSubmit);
 
@@ -1082,11 +1072,39 @@
     .catch(function(e){ toast(e.message || 'Erro ao marcar recebido', 'error'); })
     .then(function(){ disableHead(false); });
   }
+
+  // Abre a claim do ML (se existir) para iniciar disputa
+  function suggestOpenDispute(){
+    var cid = readFirst(CLAIM_ID_SELECTORS) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
+    if (!cid) {
+      toast('Sugestão: abra uma disputa no ML (sem Claim ID vinculado nesta devolução).', 'warning');
+      return;
+    }
+    var ok = window.confirm('Deseja abrir a reclamação no Mercado Livre para seguir com a disputa?');
+    if (ok) {
+      var url = 'https://www.mercadolivre.com.br/claims/' + String(cid).replace(/\D+/g,'');
+      try { window.open(url, '_blank', 'noopener'); } catch(_) {}
+    }
+  }
+
+  // Patch auxiliar para finalizar/disputar após o recebimento
+  function patchStatusAndMaybeLog(statusValue, logValue, metaTag){
+    var id = current.id || returnId; if (!id) return Promise.resolve();
+    var body = { updated_by: metaTag || 'frontend-receive-flow' };
+    if (statusValue) body.status = statusValue;
+    if (logValue)    body.log_status = logValue;
+    return fetch('/api/returns/' + encodeURIComponent(id), {
+      method:'PATCH', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body)
+    }).then(function(r){ if(!r.ok) throw new Error('Falha ao atualizar status'); });
+  }
+
   function openReceiveDialog(){
     var dlg     = $('dlg-recebido') || $('dlg-receber');
     if (dlg && (dlg.showModal || dlg.removeAttribute)) {
       var inputNome   = $('rcd-resp') || $('rcv-name');
       var inputQuando = $('rcd-when') || $('rcv-when');
+      var selectOk    = $('rcd-ok');
+      var help        = $('rcd-help');
       var btnNo       = $('rcd-cancel') || $('rcv-cancel');
       var form        = $('rcd-form')   || $('rcv-form');
 
@@ -1095,13 +1113,51 @@
         var tzFix = new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
         inputQuando.value = tzFix;
       }
+      if (help) help.textContent = '';
+      if (selectOk) {
+        selectOk.value = '';
+        selectOk.onchange = function(){
+          var v = (selectOk.value || '').toLowerCase();
+          if (v === 'sim')      help.textContent = 'Tudo certo: vou finalizar a devolução (status: concluída) e considerar apenas o frete, se houver.';
+          else if (v === 'nao') help.textContent = 'Problemas identificados: vou marcar a devolução como "disputa" e sugerir abrir reclamação no ML.';
+          else help.textContent = '';
+        };
+      }
+
       function submit(ev){
         ev && ev.preventDefault();
         var nome = (inputNome && inputNome.value || '').trim();
         var whenLocal = inputQuando && inputQuando.value;
+        var okVal = (selectOk && selectOk.value) || '';
         if (dlg.close) dlg.close(); else dlg.setAttribute('hidden','');
-        runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null);
-        cleanup();
+
+        // 1) Marca recebido
+        runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null)
+          .then(function(){
+            // 2) Caminho de decisão
+            if ((okVal || '').toLowerCase() === 'sim') {
+              // Finaliza + fixa log em recebido_cd para regra do frete
+              return patchStatusAndMaybeLog('concluida', 'recebido_cd', 'frontend-receive-finalize')
+                .then(function(){
+                  setLogPill('recebido_cd', { lock:true });
+                  current.log_status = 'recebido_cd';
+                  toast('Devolução finalizada.', 'success');
+                })
+                .then(function(){ return Promise.all([reloadCurrent(), refreshTimeline(current.id || returnId)]); })
+                .then(recalc);
+            } else if ((okVal || '').toLowerCase() === 'nao') {
+              // Disputa sugerida
+              return patchStatusAndMaybeLog('disputa', null, 'frontend-receive-dispute')
+                .then(function(){
+                  toast('Status atualizado para disputa.', 'warning');
+                  suggestOpenDispute();
+                })
+                .then(function(){ return Promise.all([reloadCurrent(), refreshTimeline(current.id || returnId)]); })
+                .then(recalc);
+            }
+          })
+          .catch(function(){ /* erros já toasteados no runReceive/patch */ })
+          .finally(function(){ cleanup(); });
       }
       function cancel(){ if (dlg.close) dlg.close(); cleanup(); }
       function cleanup(){
@@ -1114,8 +1170,24 @@
       setTimeout(function(){ inputNome && inputNome.focus(); }, 0);
       return;
     }
+    // Fallback sem <dialog>
     var nome = prompt('Quem recebeu no CD? (nome/assinatura)');
-    if (nome !== null) runReceive(String(nome).trim());
+    if (nome !== null) {
+      runReceive(String(nome).trim()).then(function(){
+        var ok = confirm('Chegou de tudo certo? Ok = SIM, Cancelar = NÃO');
+        if (ok) {
+          patchStatusAndMaybeLog('concluida','recebido_cd','frontend-receive-finalize').then(function(){
+            setLogPill('recebido_cd',{lock:true}); current.log_status='recebido_cd';
+            toast('Devolução finalizada.', 'success'); return reloadCurrent().then(function(){ recalc(); refreshTimeline(current.id || returnId); });
+          });
+        } else {
+          patchStatusAndMaybeLog('disputa',null,'frontend-receive-dispute').then(function(){
+            toast('Status atualizado para disputa.', 'warning'); suggestOpenDispute();
+            return reloadCurrent().then(function(){ recalc(); refreshTimeline(current.id || returnId); });
+          });
+        }
+      });
+    }
   }
 
   /* =============== Inspeção =============== */
@@ -1254,10 +1326,9 @@
       if (!cId) return Promise.reject(Object.assign(new Error('no_claim'), {status:400}));
       var nk = sellerNick();
       var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
-      return fetch(url, { headers: { 'Accept':'application/json' } })
+      return fetch(url, { headers: { 'Accept': 'application/json' } })
         .then(function(r){
           if ((r.status === 403 || r.status === 429) && nk) {
-            // 403/429 → tenta sem nick (outra conta/limite)
             return fetch('/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true', { headers: { 'Accept':'application/json' } });
           }
           return r;
@@ -1283,7 +1354,6 @@
       .then(function(res){
         var j = res.payload || {};
 
-        // >>> aplicar status/flow/motivo/shipments do enriched (com lock)
         applyEnrichedReturnPayload(j);
 
         try {
@@ -1334,7 +1404,6 @@
       })
       .then(function(){ if (hasLocalRow) return reloadCurrent(); })
       .catch(function (e) {
-        // 429/403/404 → fallback via pedido
         if (e && (e.status === 429 || e.status === 403)) toast('Limite do ML (429/403). Usando fallback do pedido…', 'warning');
         var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id') || (current.raw && (current.raw.order_id || current.raw.resource_id));
         if (orderId) {
@@ -1353,7 +1422,6 @@
         else if (e) toast(e.message || 'Falha no ML', 'error');
       })
       .then(function(){
-        // garante nome mesmo após enrich
         return ensureBuyerName({ persist:true });
       })
       .then(function(){ setAutoHint(''); disableHead(false); });
@@ -1379,7 +1447,7 @@
         normalizeAndSet(data);
       })
       .catch(function (e) {
-        if (e && e.status === 404) return; // segue com enrich
+        if (e && e.status === 404) return;
         throw e;
       });
   }

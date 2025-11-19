@@ -700,3 +700,79 @@ textarea::placeholder {
     gap: 0.5rem;
   }
 }
+
+/* ===== Tokens (fallbacks, pode remover se já tiver no projeto) ===== */
+:root{
+  --fg:#0f172a; --card:#fff; --muted:#f8fafc; --border:#e5e7eb;
+  --ok:#10b981; --warn:#f59e0b; --danger:#ef4444; --info:#3b82f6;
+}
+
+/* ===== Util ===== */
+[hidden]{display:none!important;}
+small,hint,.muted{opacity:.8}
+
+/* ===== Cards básicos (fallback pro aviso de 404) ===== */
+.page-wrap{max-width:1100px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 2px 6px rgba(0,0,0,.04)}
+
+/* ===== Pills de status ===== */
+/* O JS aplica class="pill -neutro| -pendente| -aprovado| -rejeitado" */
+.pill{
+  display:inline-block;font-weight:600;font-size:.775rem;line-height:1;
+  padding:.35rem .6rem;border-radius:999px;border:1px solid transparent;
+  background:var(--muted);color:var(--fg)
+}
+.pill.-neutro{background:#eef2f7;color:#0f172a;border-color:#e5e7eb}
+.pill.-pendente{background:rgba(245,158,11,.12);color:#8a5a00;border-color:rgba(245,158,11,.35)}
+.pill.-aprovado{background:rgba(16,185,129,.12);color:#065f46;border-color:rgba(16,185,129,.35)}
+.pill.-rejeitado{background:rgba(239,68,68,.12);color:#7f1d1d;border-color:rgba(239,68,68,.35)}
+
+/* ===== Toast ===== */
+/* O JS usa #toast .toast.show */
+.toast{
+  position:fixed;right:16px;bottom:16px;z-index:9999;
+  background:#111827;color:#fff;padding:.75rem 1rem;border-radius:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,.25);
+  transform:translateY(8px);opacity:0;transition:.25s ease
+}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.info{background:#111827}
+.toast.success{background:var(--ok)}
+.toast.warning{background:var(--warn)}
+.toast.error{background:var(--danger)}
+
+/* ===== Hint automático (opcional) ===== */
+#auto-hint{font-size:.8rem;color:#475569;margin-top:4px}
+
+/* ===== Resumo ML (valores) ===== */
+.js-ml-produto,.js-ml-frete{font-variant-numeric:tabular-nums}
+
+/* ===== Timeline de eventos ===== */
+/* HTML esperado: #events-list, #events-loading, #events-empty  */
+#events-list{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.tl-item{
+  position:relative;background:var(--card);border:1px solid var(--border);
+  border-left:3px solid var(--info); /* cor padrão */
+  border-radius:12px;padding:12px 12px 12px 16px
+}
+.tl-item.-note{border-left-color:var(--info)}
+.tl-item.-status{border-left-color:#64748b}
+.tl-item.-warn{border-left-color:var(--warn)}
+.tl-item.-error{border-left-color:var(--danger)}
+.tl-dot{
+  position:absolute;left:-7px;top:14px;width:10px;height:10px;border-radius:50%;
+  background:var(--card);border:2px solid currentColor
+}
+.tl-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px}
+.tl-title{font-weight:700}
+.tl-time{font-size:.8rem;opacity:.7}
+.tl-msg{color:#334155;margin:.25rem 0}
+.tl-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.tl-badge{
+  display:inline-block;font-size:.74rem;padding:.2rem .45rem;border-radius:999px;
+  background:var(--muted);border:1px solid var(--border);color:#334155
+}
+
+/* ===== Links úteis ===== */
+#claim-open-link{color:var(--info);text-decoration:none;border-bottom:1px dashed rgba(59,130,246,.4)}
+#claim-open-link:hover{border-bottom-color:rgba(59,130,246,.8)}

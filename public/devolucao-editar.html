@@ -70,32 +70,43 @@
       </header>
 
       <!-- Dialogs -->
+      <!-- Modal Recebimento no CD (atualizado) -->
       <dialog id="dlg-recebido" class="dialog" aria-labelledby="rcd-title">
-        <form method="dialog" id="rcd-form">
-          <h3 id="rcd-title">Recebido no CD</h3>
-          <p class="dialog-desc">Registre quando o produto foi recebido no centro de distribuição.</p>
+        <form method="dialog" id="rcd-form" class="dialog-body">
+          <h3 id="rcd-title">Recebimento no CD</h3>
+          <p class="dialog-desc">Registre quem recebeu, o horário e se o item chegou completo.</p>
 
-          <div class="dialog-grid">
+          <div class="dialog-grid" style="grid-template-columns:1fr 1fr; gap:12px;">
             <div>
-              <label for="rcd-resp">Responsável</label>
-              <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" autocomplete="off" />
+              <label for="rcd-resp">Quem recebeu?</label>
+              <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" autocomplete="off" required />
             </div>
 
             <div>
-              <label for="rcd-when">Data/Hora</label>
-              <input id="rcd-when" type="datetime-local" />
+              <label for="rcd-when">Horário</label>
+              <input id="rcd-when" type="datetime-local" required />
+            </div>
+
+            <div style="grid-column:1 / -1;">
+              <label for="rcd-ok">Chegou de tudo certo?</label>
+              <select id="rcd-ok" required>
+                <option value="" disabled selected>Selecione…</option>
+                <option value="sim">Sim</option>
+                <option value="nao">Não</option>
+              </select>
+              <small id="rcd-help" style="display:block;opacity:.8;margin-top:6px;"></small>
             </div>
           </div>
 
           <div class="dialog-actions">
             <div class="dialog-actions-right">
               <button type="button" class="btn btn--ghost" id="rcd-cancel">Cancelar</button>
-              <button id="rcd-save" type="submit" class="btn btn--primary">Salvar</button>
+              <button id="rcd-confirm" type="submit" class="btn btn--primary">Confirmar e salvar</button>
             </div>
           </div>
 
           <p class="dialog-hint">
-            Dica: se deixar o responsável vazio, será usado <b>cd</b>. Se não escolher uma data, uso a data/hora atual.
+            Se deixar o responsável vazio, será usado <b>cd</b>. Se não escolher uma data, usamos a atual.
           </p>
         </form>
       </dialog>
@@ -181,7 +192,6 @@
             <label for="valor_total">Valor Total a Reembolsar</label>
             <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="input-readonly" readonly />
           </div>
-
 
           <!-- Status Box -->
           <div class="status-box">
