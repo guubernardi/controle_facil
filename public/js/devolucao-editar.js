@@ -114,17 +114,27 @@
   }
 
   function getLogPillEl() { return $('pill-log') || $('log_status_pill'); }
-  function setLogPill(text) {
+
+  // ==== LOCK do "Status da Logística" (evita piscar/voltar para 'disputa') ====
+  var LOG_LOCKED = false;
+  function setLogPill(text, opts) {
+    opts = opts || {};
+    if (LOG_LOCKED && !opts.force) return;
+
     var el = getLogPillEl(); if (!el) return;
     var s = String(text || '').toLowerCase();
     var cls = 'pill -neutro';
     if (!text) cls = 'pill -neutro';
-    else if (s.includes('pend') || s.includes('caminho')) cls = 'pill -pendente';
-    else if (s.includes('aprov') || s.includes('recebido')) cls = 'pill -aprovado';
-    else if (s.includes('rej') || s.includes('neg') || s.includes('reprov')) cls = 'pill -rejeitado';
+    else if (s === 'em_transporte' || s === 'pronto_envio' || s.includes('pend') || s.includes('caminho')) cls = 'pill -pendente';
+    else if (s === 'recebido_cd' || s.includes('aprov') || s.includes('recebido')) cls = 'pill -aprovado';
+    else if (s === 'reprovado_cd' || s.includes('rej') || s.includes('neg') || s.includes('reprov')) cls = 'pill -rejeitado';
+
     el.className = cls;
     el.textContent = text || '—';
+
+    if (opts.lock) LOG_LOCKED = true;
   }
+
   function setCdInfo(opts){
     opts = opts || {};
     var receivedAt = opts.receivedAt || null;
@@ -189,7 +199,16 @@
 
     var dataCompra = firstNonEmpty(j.data_compra, j.order_date, j.date_created, j.paid_at, j.created_at);
     var motivo     = firstNonEmpty(j.tipo_reclamacao, j.reclamacao, j.reason_name, j.reason, j.reason_id, j.motivo, j.motivo_cliente);
-    var logAtual   = firstNonEmpty(j.log_status, j.log, j.current_log, j.log_atual, j.status_log, j.status);
+
+    // ---- log_status seguro: não herda 'status' genérico (ex.: 'disputa')
+    function pickLogStatus(_j){
+      var direct = firstNonEmpty(_j.log_status, _j.log, _j.current_log, _j.log_atual, _j.status_log);
+      if (direct) return direct;
+      var st = String(_j.status || '').toLowerCase();
+      var ok = /^(pendente|em_transporte|pronto_envio|retorno_comprador|cancelado|expirado|falha|agendado|recebido_cd|aprovado_cd|reprovado_cd)$/.test(st);
+      return ok ? st : null;
+    }
+    var logAtual   = pickLogStatus(j);
 
     var lojaNome   = firstNonEmpty(
       j.loja_nome, j.loja, sellerName, j.store_nickname, j.store_nick, j.seller_nickname, j.nickname,
@@ -252,7 +271,8 @@
   function updateSummary(d){
     var rs=$('resumo-status'), rl=$('resumo-log'), rc=$('resumo-cd'), rp=$('resumo-prod'), rf=$('resumo-frete'), rt=$('resumo-total');
     if (rs) rs.textContent = (d.status || '—').toLowerCase();
-    if (rl) rl.textContent = (d.log_status || '—').toLowerCase();
+    var logTxt = LOG_LOCKED ? (current.log_status || d.log_status) : d.log_status;
+    if (rl) rl.textContent = (logTxt || '—').toLowerCase();
     if (rc) rc.textContent = d.cd_recebido_em ? 'recebido' : 'não recebido';
     if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
     if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
@@ -428,7 +448,8 @@
       if (!wasSet) lockMotivo(false);
     }
 
-    setLogPill(d.log_status || '—');
+    // não sobrescreve o pill se já estiver travado por ML
+    if (!LOG_LOCKED) setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
 
     fillMlSummaryFromCurrent();
@@ -575,7 +596,7 @@
       'expired':           'Devolução expirada',
       'delivered':         'Recebida pelo vendedor'
     };
-    return map[k] || (s ? String(s).replace(/_/g,' ') : '—');
+    return map[k] || (s ? String(s).replace(/_/g, ' ') : '—');
   }
   function suggestLogFromMLReturn(s){
     var k = String(s || '').toLowerCase();
@@ -609,8 +630,17 @@
         if (j && j.flow) {
           var ls = String(current.log_status || '').toLowerCase();
           if (ls !== 'aprovado_cd' && ls !== 'reprovado_cd') {
-            setLogPill(j.flow);
+            setLogPill(j.flow, { lock: true }); // trava o pill vindo do ML
             current.log_status = j.flow;
+
+            // (opcional) persiste o flow no banco para manter consistência
+            if ((current.id || returnId) && j.flow) {
+              fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+                method:'PATCH',
+                headers:{ 'Content-Type':'application/json' },
+                body: JSON.stringify({ log_status: j.flow, updated_by: 'frontend-flow-sync' })
+              }).catch(function(){});
+            }
           }
         }
       })
@@ -629,7 +659,7 @@
       var suggested = suggestLogFromMLReturn(ret.status);
       var ls = String(current.log_status || '').toLowerCase();
       if (ls !== 'aprovado_cd' && ls !== 'reprovado_cd' && suggested) {
-        setLogPill(suggested);
+        setLogPill(suggested, { lock: true }); // trava ao aplicar do ML
         current.log_status = suggested;
       }
     }
@@ -1253,7 +1283,7 @@
       .then(function(res){
         var j = res.payload || {};
 
-        // >>> [NOVO] aplicar status/flow/motivo/shipments do enriched
+        // >>> aplicar status/flow/motivo/shipments do enriched (com lock)
         applyEnrichedReturnPayload(j);
 
         try {
