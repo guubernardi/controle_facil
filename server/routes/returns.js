@@ -1,25 +1,32 @@
+// server/routes/returns.js
+'use strict';
+
 const express = require('express');
 const router = express.Router();
-const { query } = require('../db'); // Ajuste se necessário para ../db ou ./db dependendo da pasta
+const { query } = require('../db');
+const MlPool = require('../services/mlPool'); // Certifique-se que criou esse arquivo
 
-// GET /api/returns - Listagem principal (Alimenta o Kanban e a Lista)
+// ==========================================
+// 1. LISTAGEM (Kanban / Scanner / Lista)
+// ==========================================
 router.get('/', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit || '50');
     const offset = parseInt(req.query.offset || '0');
     const search = (req.query.search || '').trim();
-    const status = (req.query.status || '').trim(); // ex: 'em_transporte'
+    const status = (req.query.status || '').trim(); 
+    const rangeDays = parseInt(req.query.range_days || '0');
     
     const params = [];
     let whereClauses = [];
     
-    // Filtro por Tenant (Multi-cliente)
+    // Filtro por Tenant
     if (req.session?.user?.tenant_id) {
       whereClauses.push(`tenant_id = $${params.length + 1}`);
       params.push(req.session.user.tenant_id);
     }
 
-    // 1. Busca (Scanner/Texto)
+    // Busca (Texto)
     if (search) {
       whereClauses.push(`(
         id_venda ILIKE $${params.length + 1} OR 
@@ -31,20 +38,23 @@ router.get('/', async (req, res) => {
       params.push(`%${search}%`);
     }
 
-    // 2. Filtro por Status (Mapeamento Inteligente)
+    // Filtro por Data
+    if (rangeDays > 0) {
+      whereClauses.push(`created_at >= NOW() - INTERVAL '${rangeDays} days'`);
+    }
+
+    // Filtro por Status (Mapeamento Kanban)
     if (status) {
-      // Mapeia status do frontend para status do banco (ML + Interno)
       if (status === 'em_transporte') {
-        whereClauses.push(`(status = 'em_transporte' OR ml_return_status IN ('shipped', 'pending_delivered'))`);
+        whereClauses.push(`(status = 'em_transporte' OR ml_return_status IN ('shipped', 'pending_delivered', 'on_transit'))`);
       } 
       else if (status === 'disputa') {
-        whereClauses.push(`(status IN ('disputa', 'mediacao') OR ml_return_status IN ('dispute', 'mediation'))`);
+        whereClauses.push(`(status IN ('disputa', 'mediacao') OR ml_return_status IN ('dispute', 'mediation', 'pending', 'open'))`);
       }
       else if (status === 'concluida') {
-        whereClauses.push(`(status IN ('concluida', 'finalizado') OR log_status = 'recebido_cd')`);
+        whereClauses.push(`(status IN ('concluida', 'finalizado', 'aprovado', 'rejeitado') OR log_status = 'recebido_cd' OR ml_return_status = 'delivered')`);
       }
-      else {
-        // Fallback: busca exata
+      else if (status !== 'todos') {
         whereClauses.push(`(status = $${params.length + 1} OR log_status = $${params.length + 1})`);
         params.push(status);
       }
@@ -52,11 +62,10 @@ router.get('/', async (req, res) => {
 
     const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
     
-    // Query Principal
     const sql = `
       SELECT id, id_venda, cliente_nome, loja_nome, sku, 
-             status, log_status, ml_return_status, 
-             updated_at, created_at, valor_produto
+             status, log_status, ml_return_status, ml_claim_id,
+             updated_at, created_at, valor_produto, valor_frete
       FROM devolucoes
       ${whereSql}
       ORDER BY updated_at DESC
@@ -76,33 +85,48 @@ router.get('/', async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[API] Erro listar returns:', e);
+    console.error('[API] Erro listar:', e);
     res.status(500).json({ error: 'Erro interno ao listar' });
   }
 });
 
-// PATCH /api/returns/:id - Atualização genérica (Status)
+// ==========================================
+// 2. DETALHES E EDIÇÃO
+// ==========================================
+router.get('/:id', async (req, res) => {
+  try {
+    const { rows } = await query('SELECT * FROM devolucoes WHERE id = $1 OR id_venda = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.patch('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, log_status, updated_by } = req.body;
-    
-    // Constrói update dinâmico
+    const body = req.body;
     const sets = ['updated_at = NOW()'];
     const vals = [id];
     let idx = 2;
 
-    if (status) { sets.push(`status = $${idx++}`); vals.push(status); }
-    if (log_status) { sets.push(`log_status = $${idx++}`); vals.push(log_status); }
-    if (updated_by) { sets.push(`updated_by = $${idx++}`); vals.push(updated_by); }
+    // Campos permitidos para update
+    const allowed = ['status', 'log_status', 'updated_by', 'valor_produto', 'valor_frete', 'reclamacao'];
+    
+    for (const field of allowed) {
+      if (body[field] !== undefined) {
+        sets.push(`${field} = $${idx++}`);
+        vals.push(body[field]);
+      }
+    }
+
+    if (sets.length === 1) return res.json({ ok: true });
 
     const sql = `UPDATE devolucoes SET ${sets.join(', ')} WHERE id = $1 RETURNING *`;
     const { rows } = await query(sql, vals);
 
     if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
-    
-    // (Opcional) Se finalizou, dispara worker do ML aqui
-    
     res.json(rows[0]);
   } catch (e) {
     console.error('[API] Erro update:', e);
@@ -110,13 +134,14 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// PATCH /api/returns/:id/cd/receive - Ação Específica do Scanner
+// ==========================================
+// 3. AÇÕES ESPECÍFICAS (Scanner/Logística)
+// ==========================================
 router.patch('/:id/cd/receive', async (req, res) => {
   try {
     const { id } = req.params;
     const { responsavel, when, updated_by } = req.body;
 
-    // 1. Atualiza a devolução
     await query(`
       UPDATE devolucoes 
       SET cd_recebido_em = $1, 
@@ -126,17 +151,29 @@ router.patch('/:id/cd/receive', async (req, res) => {
       WHERE id = $3
     `, [when || new Date(), responsavel || 'cd', id]);
 
-    // 2. Insere evento no histórico (Timeline)
-    await query(`
-      INSERT INTO return_events (return_id, type, title, message, created_by)
-      VALUES ($1, 'logistica', 'Recebido no CD', $2, $3)
-    `, [id, `Pacote conferido por ${responsavel}`, updated_by || 'scanner']);
+    // Loga na timeline (se a tabela existir)
+    try {
+      await query(`
+        INSERT INTO return_events (return_id, type, title, message, created_by)
+        VALUES ($1, 'logistica', 'Recebido no CD', $2, $3)
+      `, [id, `Pacote conferido por ${responsavel}`, updated_by || 'scanner']);
+    } catch (err) { console.warn('Sem tabela de eventos:', err.message); }
 
     res.json({ ok: true });
   } catch (e) {
     console.error('[API] Erro receive:', e);
     res.status(500).json({ error: 'Erro ao registrar recebimento' });
   }
+});
+
+// ==========================================
+// 4. SYNC MANUAL (O tal botão "Sincronizar Agora")
+// ==========================================
+// Esta rota chama o Worker "na marra"
+router.get('/sync', async (req, res) => {
+    // Redireciona internamente para a rota de importação do ML
+    // Isso evita ter que duplicar a lógica do ml-sync.js
+    res.redirect('/api/ml/returns/sync?' + new URLSearchParams(req.query).toString());
 });
 
 module.exports = router;
