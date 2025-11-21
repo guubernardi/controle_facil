@@ -716,7 +716,6 @@ small,hint,.muted{opacity:.8}
 .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 2px 6px rgba(0,0,0,.04)}
 
 /* ===== Pills de status ===== */
-/* O JS aplica class="pill -neutro| -pendente| -aprovado| -rejeitado" */
 .pill{
   display:inline-block;font-weight:600;font-size:.775rem;line-height:1;
   padding:.35rem .6rem;border-radius:999px;border:1px solid transparent;
@@ -728,7 +727,6 @@ small,hint,.muted{opacity:.8}
 .pill.-rejeitado{background:rgba(239,68,68,.12);color:#7f1d1d;border-color:rgba(239,68,68,.35)}
 
 /* ===== Toast ===== */
-/* O JS usa #toast .toast.show */
 .toast{
   position:fixed;right:16px;bottom:16px;z-index:9999;
   background:#111827;color:#fff;padding:.75rem 1rem;border-radius:12px;
@@ -748,7 +746,6 @@ small,hint,.muted{opacity:.8}
 .js-ml-produto,.js-ml-frete{font-variant-numeric:tabular-nums}
 
 /* ===== Timeline de eventos ===== */
-/* HTML esperado: #events-list, #events-loading, #events-empty  */
 #events-list{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .tl-item{
   position:relative;background:var(--card);border:1px solid var(--border);
@@ -776,3 +773,142 @@ small,hint,.muted{opacity:.8}
 /* ===== Links úteis ===== */
 #claim-open-link{color:var(--info);text-decoration:none;border-bottom:1px dashed rgba(59,130,246,.4)}
 #claim-open-link:hover{border-bottom-color:rgba(59,130,246,.8)}
+
+
+/* ================================================= */
+/* ===== NOVOS ESTILOS (LAYOUT MELHORADO V2) ===== */
+/* ================================================= */
+
+/* 1. Novo Grid: Sidebar + Main */
+.grid-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+@media (min-width: 1024px) {
+  .grid-layout {
+    display: grid;
+    /* Sidebar fixa de 320px, resto fluido */
+    grid-template-columns: 320px 1fr;
+    align-items: start;
+  }
+  .area-sidebar {
+    position: sticky;
+    /* Ajuste para não bater no topo se tiver header fixo */
+    top: 90px;
+  }
+}
+
+/* 2. Régua de Status (Stepper) */
+.stepper-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: relative;
+  margin-top: 1rem;
+  width: 100%;
+  max-width: 350px;
+}
+
+/* Linha atrás dos passos */
+.stepper-wrap::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  background-color: var(--border);
+  z-index: 0;
+  transform: translateY(-50%);
+}
+
+/* Bolhas dos passos */
+.step {
+  position: relative;
+  z-index: 1;
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition: all 0.2s ease;
+}
+
+/* Passo ativo */
+.step.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  font-weight: 600;
+  background-color: #f0f9ff; /* azul bem claro */
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px hsla(214, 100%, 50%, 0.15);
+}
+
+/* 3. Inputs Estáticos (Sidebar) */
+/* O card da sidebar fica cinza para diferenciar */
+.card-static {
+  background-color: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+/* Transforma input em texto puro visualmente */
+.input-static {
+  background-color: transparent !important;
+  border: none !important;
+  padding-left: 0 !important;
+  box-shadow: none !important;
+  font-weight: 600;
+  color: var(--foreground);
+  cursor: default;
+}
+.input-static:focus {
+  outline: none !important;
+}
+
+/* 4. Badges e Labels do ML (Novo card) */
+.ml-badge-group {
+  background-color: #f0f9ff;
+  border: 1px dashed #bae6fd;
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.ml-label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #0284c7;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+/* 5. CTA Box (Caixa de Ação Logística) */
+.cta-box {
+  margin-top: 1.5rem;
+  background-color: #f0fdf4; /* Fundo verde claro */
+  border: 1px solid #bbf7d0; /* Borda verde */
+  border-radius: var(--radius);
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .cta-box {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .cta-box button {
+    width: 100%;
+  }
+}

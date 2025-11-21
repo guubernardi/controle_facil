@@ -3,298 +3,258 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Sistema de gerenciamento de devoluções - Edição e controle de processos de devolução do Mercado Livre">
+  <meta name="description" content="Sistema de gerenciamento de devoluções">
   <link rel="shortcut icon" href="assets/img/favicon.png" type="image/x-icon">
   <title>Controle Fácil - Devolução</title>
   <link rel="stylesheet" href="css/devolucao.css">
+  
+  <style>
+    /* Régua de Status */
+    .stepper-wrap { display: flex; justify-content: space-between; margin: 0 0 2rem 0; padding: 0 1rem; position: relative; }
+    .stepper-wrap::before { content:''; position: absolute; top: 50%; left: 20px; right: 20px; height: 2px; background: #e2e8f0; z-index: 0; transform: translateY(-50%); }
+    .step { position: relative; z-index: 1; background: #fff; padding: 0.5rem 1rem; border: 1px solid #e2e8f0; border-radius: 20px; font-size: 0.875rem; font-weight: 500; color: #64748b; }
+    .step.active { border-color: var(--primary); color: var(--primary); font-weight: 700; box-shadow: 0 0 0 2px #bfdbfe; }
+    
+    /* Grid Layout Sidebar + Main */
+    @media (min-width: 1024px) {
+      .grid-layout { display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem; align-items: start; }
+      .area-sidebar { position: sticky; top: 80px; }
+    }
+    
+    /* Estilo de Input "Static" (Parece texto) */
+    .input-static { background-color: transparent !important; border: none !important; padding-left: 0 !important; font-weight: 600; color: #334155; cursor: default; }
+    .card-static { background-color: #f8fafc; border: 1px solid #e2e8f0; }
+    
+    /* Badges ML */
+    .ml-badge-group { background: #f0f9ff; padding: 10px; border-radius: 8px; border: 1px dashed #bae6fd; margin-top: 8px; }
+    .ml-label { font-size: 0.75rem; color: #0284c7; font-weight: 600; display: block; margin-bottom: 4px; }
+    
+    /* CTA Box */
+    .cta-box { background: #f0fdf4; border: 1px solid #bbf7d0; padding: 1.25rem; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; }
+  </style>
 </head>
 <body>
   <div class="devolucao-page">
-    <!-- Topbar -->
     <div class="topbar-mini">
-      <a href="index.html" class="topbar-back" aria-label="Voltar para Devoluções">
+      <a href="index.html" class="topbar-back" aria-label="Voltar">
         <button type="button" class="voltar" onclick="history.back()">
-          <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-          </svg>
+          <svg class="ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           <span>Voltar</span>
         </button>
       </a>
     </div>
 
     <main class="page-wrap" role="main">
-      <!-- Header -->
+      
       <header class="page-head">
-        <div>
-          <h1 class="title">
-            Devolução 
-            <span id="dv-id" class="kbd" aria-live="polite"></span>
-          </h1>
-          <p class="hint">
-            <strong>Regras:</strong> Rejeitado = R$ 0,00 · Motivo do cliente = R$ 0,00 · Recebido no CD/Inspeção = só frete
-            <span id="auto-hint"></span>
-          </p>
-        </div>
+        <div style="display:flex; justify-content:space-between; align-items:start; flex-wrap:wrap; gap:1rem;">
+          <div>
+            <h1 class="title">
+              Devolução <span id="dv-id" class="kbd" aria-live="polite"></span>
+            </h1>
+            <div class="stepper-wrap" style="width: 300px; margin: 1rem 0 0 0;">
+               <div class="step">Criada</div>
+               <div class="step active">Em Processo</div>
+               <div class="step">Finalizada</div>
+            </div>
+          </div>
 
-        <div class="actions" role="group" aria-label="Ações da devolução">
-          <button id="btn-enrich" class="btn btn--ghost btn--lg" type="button" title="Atualizar dados a partir do ML">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-            </svg>
-            <span>Atualizar dados (ML)</span>
-          </button>
-
-          <span class="actions-split" aria-hidden="true"></span>
-
-          <!-- Marcação operacional -->
-          <div class="mark-wrap">
-            <label for="mark-op" class="sr-only">Marcar devolução como</label>
-            <select id="mark-op" class="select-lg" title="Marcar devolução como">
-              <option value="concluida">Concluída</option>
-              <option value="em_espera" selected>Em espera</option>
-              <option value="defeituosa">Defeituosa</option>
-              <option value="troca">Troca</option>
-              <option value="reembolso_parcial">Reembolso parcial</option>
-            </select>
-            
-            <input id="mark-obs" type="text" class="input-lg" placeholder="Observação (opcional)" />
-            
-            <button id="btn-mark" class="btn btn--success btn--lg" type="button" title="Aplicar marcação">
-              <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              <span>Aplicar</span>
-            </button>
+          <div class="actions">
+             <button id="btn-enrich" class="btn btn--ghost" type="button">
+                <svg class="btn__icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                <span>Atualizar (ML)</span>
+             </button>
+             
+             <div class="mark-wrap">
+                <select id="mark-op" class="select-lg" title="Marcar como">
+                  <option value="em_espera" selected>Em espera</option>
+                  <option value="concluida">Concluída</option>
+                  <option value="defeituosa">Defeituosa</option>
+                </select>
+                <input id="mark-obs" type="text" class="input-lg" placeholder="Obs. rápida..." style="max-width:150px;" />
+                <button id="btn-mark" class="btn btn--success" type="button">Aplicar</button>
+             </div>
           </div>
         </div>
       </header>
 
-      <!-- Dialogs -->
-      <!-- Modal Recebimento no CD (atualizado) -->
-      <dialog id="dlg-recebido" class="dialog" aria-labelledby="rcd-title">
-        <form method="dialog" id="rcd-form" class="dialog-body">
-          <h3 id="rcd-title">Recebimento no CD</h3>
-          <p class="dialog-desc">Registre quem recebeu, o horário e se o item chegou completo.</p>
-
-          <div class="dialog-grid" style="grid-template-columns:1fr 1fr; gap:12px;">
-            <div>
-              <label for="rcd-resp">Quem recebeu?</label>
-              <input id="rcd-resp" type="text" placeholder="Ex.: João (CD)" autocomplete="off" required />
-            </div>
-
-            <div>
-              <label for="rcd-when">Horário</label>
-              <input id="rcd-when" type="datetime-local" required />
-            </div>
-
-            <div style="grid-column:1 / -1;">
-              <label for="rcd-ok">Chegou de tudo certo?</label>
-              <select id="rcd-ok" required>
-                <option value="" disabled selected>Selecione…</option>
-                <option value="sim">Sim</option>
-                <option value="nao">Não</option>
-              </select>
-              <small id="rcd-help" style="display:block;opacity:.8;margin-top:6px;"></small>
-            </div>
-          </div>
-
-          <div class="dialog-actions">
-            <div class="dialog-actions-right">
-              <button type="button" class="btn btn--ghost" id="rcd-cancel">Cancelar</button>
-              <button id="rcd-confirm" type="submit" class="btn btn--primary">Confirmar e salvar</button>
-            </div>
-          </div>
-
-          <p class="dialog-hint">
-            Se deixar o responsável vazio, será usado <b>cd</b>. Se não escolher uma data, usamos a atual.
-          </p>
-        </form>
-      </dialog>
-
-      <!-- Grid de Cards -->
-      <div class="grid">
-
-        <!-- Dados da Devolução -->
-        <section class="card" aria-labelledby="sec-dados">
-          <h2 id="sec-dados">Dados da Devolução</h2>
-
-          <div class="row">
-            <label for="id_venda">Número do Pedido</label>
-            <input id="id_venda" name="id_venda" type="text" placeholder="Ex.: 12345 / TESTE-001" autocomplete="off" />
-          </div>
-
-          <div class="row">
-            <label for="cliente_nome">Cliente</label>
-            <input id="cliente_nome" name="cliente_nome" type="text" placeholder="Nome do cliente" autocomplete="name" />
-          </div>
-
-          <div class="row-group">
+      <div class="grid-layout">
+        
+        <aside class="area-sidebar">
+          <section class="card card-static" aria-labelledby="sec-resumo">
+            <h2 id="sec-resumo" style="font-size:1rem; color:#64748b; text-transform:uppercase; letter-spacing:0.5px;">Resumo do Pedido</h2>
+            
             <div class="row">
-              <label for="loja_nome">Loja (apelido no canal)</label>
-              <input id="loja_nome" name="loja_nome" type="text" placeholder="Ex.: Minha Loja Oficial" autocomplete="organization" />
+              <label style="font-size:0.75rem;">Cliente</label>
+              <input id="cliente_nome" name="cliente_nome" type="text" class="input-static" readonly placeholder="Carregando..." />
             </div>
+
             <div class="row">
-              <label for="data_compra">Data da compra</label>
-              <input id="data_compra" name="data_compra" type="date" inputmode="numeric" />
+              <label style="font-size:0.75rem;">Número do Pedido / ID</label>
+              <input id="id_venda" name="id_venda" type="text" class="input-static" readonly placeholder="—" />
+              <input id="order_id" name="order_id" type="hidden" /> <input id="ml_claim_id" name="ml_claim_id" type="hidden" />
             </div>
-          </div>
 
-          <div class="row-group">
-            <!-- Status interno + Status Real (ML) -->
             <div class="row">
-              <label for="status">Status (interno)</label>
-              <select id="status" name="status">
-                <option value="">—</option>
-                <option value="pendente">Pendente</option>
-                <option value="em_analise">Em análise</option>
-                <option value="aprovado">Aprovado</option>
-                <option value="rejeitado">Rejeitado</option>
-                <option value="cancelado">Cancelado</option>
-              </select>
+              <label style="font-size:0.75rem;">Loja</label>
+              <input id="loja_nome" name="loja_nome" type="text" class="input-static" readonly placeholder="—" />
+            </div>
 
-              <div style="margin-top: 8px;">
-                <label for="ml_status_real"
-                       style="font-size: 0.75rem; color: #64748b; display:block; margin-bottom: 2px;">
-                  Status Real (ML)
-                </label>
-                <input
-                  id="ml_status_real"
-                  type="text"
-                  class="input-readonly"
-                  readonly
-                  placeholder="Ex.: shipped / delivered / opened"
-                  style="background-color:#f1f5f9;"
-                />
+            <div class="row">
+              <label style="font-size:0.75rem;">SKU</label>
+              <input id="sku" name="sku" type="text" class="input-static font-mono" readonly placeholder="—" />
+            </div>
+
+            <div class="total-line">
+              <label style="font-size:0.75rem;">Data Compra</label>
+              <input id="data_compra" name="data_compra" type="date" class="input-static" readonly />
+            </div>
+            
+            <div class="row" style="margin-top:1rem; border-top:1px solid #e2e8f0; padding-top:1rem;">
+               <label for="nfe_chave" style="font-size:0.75rem;">Nota Fiscal (Chave)</label>
+               <input id="nfe_chave" name="nfe_chave" type="text" placeholder="Insira a chave..." style="font-size:0.8rem;" />
+               <input id="nfe_numero" name="nfe_numero" type="hidden" />
+            </div>
+          </section>
+        </aside>
+
+        <div class="area-main" style="display:flex; flex-direction:column; gap:1.5rem;">
+          
+          <section class="card">
+            <h2>Status & Classificação</h2>
+            
+            <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+              <div class="row">
+                <label for="status">Status Interno</label>
+                <select id="status" name="status" class="input-lg" style="border-color:var(--primary);">
+                  <option value="">— Selecione —</option>
+                  <option value="pendente">Pendente</option>
+                  <option value="em_analise">Em análise</option>
+                  <option value="aprovado">Aprovado</option>
+                  <option value="rejeitado">Rejeitado</option>
+                  <option value="cancelado">Cancelado</option>
+                </select>
+                
+                <div class="ml-badge-group">
+                   <span class="ml-label">Status no Mercado Livre:</span>
+                   <input id="ml_status_real" type="text" class="input-static" readonly placeholder="—" style="color:#0369a1; font-size:0.9rem;" />
+                </div>
+              </div>
+
+              <div class="row">
+                <label for="tipo_reclamacao">Motivo da Reclamação</label>
+                <select id="tipo_reclamacao" name="tipo_reclamacao">
+                  <option value="">—</option>
+                  <option value="produto_defeituoso">Produto defeituoso</option>
+                  <option value="produto_danificado">Produto danificado</option>
+                  <option value="nao_corresponde">Não corresponde à descrição</option>
+                  <option value="arrependimento_cliente">Arrependimento</option>
+                  <option value="entrega_atrasada">Entrega atrasada</option>
+                </select>
+
+                <div class="ml-badge-group" style="background:#fff7ed; border-color:#ffedd5;">
+                   <span class="ml-label" style="color:#c2410c;">Cliente alegou (ML):</span>
+                   <input id="ml_motivo_real" type="text" class="input-static" readonly placeholder="—" style="color:#9a3412; font-size:0.9rem;" />
+                </div>
               </div>
             </div>
+          </section>
 
-            <!-- Motivo interno + Motivo Real (ML) -->
-            <div class="row">
-              <label for="tipo_reclamacao">Motivo da reclamação</label>
-              <select id="tipo_reclamacao" name="tipo_reclamacao">
-                <option value="">—</option>
-                <option value="produto_defeituoso">Produto defeituoso</option>
-                <option value="produto_danificado">Produto danificado</option>
-                <option value="nao_corresponde">Não corresponde à descrição</option>
-                <option value="arrependimento_cliente">Arrependimento do cliente</option>
-                <option value="entrega_atrasada">Entrega atrasada</option>
-              </select>
-
-              <div style="margin-top: 8px;">
-                <label for="ml_motivo_real"
-                       style="font-size: 0.75rem; color: #64748b; display:block; margin-bottom: 2px;">
-                  Motivo Real / Comentário (ML)
-                </label>
-                <input
-                  id="ml_motivo_real"
-                  type="text"
-                  class="input-readonly"
-                  readonly
-                  placeholder="Ex.: Produto chegou amassado e molhado"
-                  style="background-color:#f1f5f9;"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div class="row">
-            <label for="sku">SKU / Item ID</label>
-            <input id="sku" name="sku" type="text" placeholder="Ex.: SKU-12345" autocomplete="off" class="font-mono" />
-          </div>
-
-          <input id="order_id" name="order_id" type="hidden" />
-          <input id="ml_claim_id" name="ml_claim_id" type="hidden" />
-        </section>
-
-        <!-- Valores -->
-        <section class="card" aria-labelledby="sec-valores">
-          <h2 id="sec-valores">Valores</h2>
-
-          <div class="row">
-            <label for="valor_produto">Valor do Produto</label>
-            <input id="valor_produto" name="valor_produto" type="text" placeholder="0,00" inputmode="decimal" autocomplete="off" />
-          </div>
-
-          <div class="row">
-            <label for="valor_frete">Valor do Frete</label>
-            <input id="valor_frete" name="valor_frete" type="text" placeholder="0,00" inputmode="decimal" autocomplete="off" />
-          </div>
-
-          <div class="row">
-            <label for="valor_total">Valor Total a Reembolsar</label>
-            <input id="valor_total" name="valor_total" type="text" placeholder="0,00" inputmode="decimal" class="input-readonly" readonly />
-          </div>
-
-          <!-- Status Box -->
-          <div class="status-box">
-            <div class="status-item">
-              <span class="status-label">Status da Logística</span>
-              <span id="pill-log" class="pill -neutro">Pendente</span>
+          <section class="card">
+            <div style="display:flex; justify-content:space-between;">
+              <h2>Conferência & Logística</h2>
+              <span id="pill-log" class="pill -neutro">Logística Pendente</span>
             </div>
 
-            <div class="status-item">
-              <span class="status-label">Recebimento no CD</span>
-              <button type="button" class="btn btn--sm btn--outline" id="btn-cd">Gerenciar</button>
+            <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap:1rem;">
+               <div class="row">
+                 <label for="valor_produto">Produto (R$)</label>
+                 <input id="valor_produto" name="valor_produto" type="text" placeholder="0,00" />
+               </div>
+               <div class="row">
+                 <label for="valor_frete">Frete (R$)</label>
+                 <input id="valor_frete" name="valor_frete" type="text" placeholder="0,00" />
+               </div>
+               <div class="row">
+                 <label>Total Reembolso</label>
+                 <input id="valor_total" name="valor_total" type="text" class="input-readonly" readonly />
+               </div>
             </div>
 
-            <div class="cd-details" id="cd-info">
-              <span id="pill-cd" class="pill -neutro">Não recebido</span>
-              <span id="cd-sep" class="cd-sep" hidden>·</span>
-              <span id="cd-resp" class="cd-text" hidden></span>
-              <span id="cd-when" class="cd-text" hidden></span>
+            <div class="cta-box">
+               <div>
+                 <strong>Chegou no CD?</strong>
+                 <p style="font-size:0.85rem; color:#15803d; margin-top:2px;" id="cd-info-text">
+                   <span id="pill-cd">Não registrado</span> 
+                   <span id="cd-resp" hidden></span> <span id="cd-when" hidden></span>
+                 </p>
+               </div>
+               <button type="button" class="btn btn--success btn--lg" id="btn-cd">
+                 <svg class="btn__icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                 <span>Registrar Chegada</span>
+               </button>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- Nota Fiscal -->
-        <section class="card" aria-labelledby="sec-nfe">
-          <h2 id="sec-nfe">Nota Fiscal</h2>
-          <div class="row">
-            <label for="nfe_numero">Número da NF-e</label>
-            <input id="nfe_numero" name="nfe_numero" type="text" placeholder="Ex.: 12345" autocomplete="off" />
-          </div>
-          <div class="row">
-            <label for="nfe_chave">Chave de acesso (44 dígitos)</label>
-            <input id="nfe_chave" name="nfe_chave" type="text" placeholder="35240112345678901234567890123456789012345678" maxlength="44" class="font-mono" autocomplete="off" />
-          </div>
-        </section>
+          <section class="card">
+            <h2>Observações</h2>
+            <textarea id="reclamacao" name="reclamacao" rows="3" placeholder="Anotações internas..."></textarea>
+          </section>
+          
+          <section class="card">
+             <h2 style="font-size:1rem;">Histórico de Eventos</h2>
+             <div id="events-loading">Carregando…</div>
+             <div id="events-empty" hidden>Nenhum evento ainda</div>
+             <div id="events-list" class="timeline"></div>
+          </section>
 
-        <!-- Observações -->
-        <section class="card card-span" aria-labelledby="sec-obs">
-          <h2 id="sec-obs">Observações</h2>
-          <textarea id="reclamacao" name="reclamacao" rows="4" placeholder="Adicione observações sobre esta devolução..."></textarea>
-        </section>
-
-        <!-- Histórico (Timeline) -->
-        <section class="card" aria-labelledby="sec-hist">
-          <h2 id="sec-hist">Histórico</h2>
-          <div id="events-loading">Carregando…</div>
-          <div id="events-empty" hidden>Nenhum evento ainda</div>
-          <div id="events-list" class="timeline"></div>
-        </section>
-      </div>
-
-      <!-- Footer com ações -->
-      <footer class="page-footer">
+        </div> </div> <footer class="page-footer">
         <div class="footer-actions">
-          <button type="button" class="btn btn--ghost btn--lg" onclick="history.back()">
-            <span>Cancelar</span>
-          </button>
-          <button id="btn-salvar" class="btn btn--primary btn--lg" type="button" title="Salvar alterações (Ctrl/Cmd+S)">
-            <svg class="btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-              <polyline points="17 21 17 13 7 13 7 21"/>
-              <polyline points="7 3 7 8 15 8"/>
-            </svg>
-            <span>Salvar</span>
+           <span style="margin-right:auto; font-size:0.8rem; color:#64748b;">
+             Use <strong>Ctrl+S</strong> para salvar rápido
+           </span>
+          <button type="button" class="btn btn--ghost btn--lg" onclick="history.back()">Cancelar</button>
+          <button id="btn-salvar" class="btn btn--primary btn--lg" type="button">
+            <svg class="btn__icon" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            <span>Salvar Alterações</span>
           </button>
         </div>
       </footer>
 
     </main>
 
-    <!-- Toast -->
     <div id="toast" class="toast" aria-live="polite"></div>
+    
+    <dialog id="dlg-recebido" class="dialog" aria-labelledby="rcd-title">
+        <form method="dialog" id="rcd-form" class="dialog-body">
+          <h3 id="rcd-title">Recebimento no CD</h3>
+          <p class="dialog-desc">Registre a chegada do pacote.</p>
+          <div class="dialog-grid" style="grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label for="rcd-resp">Quem recebeu?</label>
+              <input id="rcd-resp" type="text" placeholder="Ex.: João" required />
+            </div>
+            <div>
+              <label for="rcd-when">Horário</label>
+              <input id="rcd-when" type="datetime-local" required />
+            </div>
+            <div style="grid-column:1 / -1;">
+              <label for="rcd-ok">Conferência física:</label>
+              <select id="rcd-ok" required>
+                <option value="" disabled selected>Selecione o resultado...</option>
+                <option value="sim">✅ Tudo certo (Item correto e íntegro)</option>
+                <option value="nao">❌ Problema (Item errado, quebrado ou vazio)</option>
+              </select>
+              <small id="rcd-help" style="display:block;opacity:.8;margin-top:6px; color:#eab308;"></small>
+            </div>
+          </div>
+          <div class="dialog-actions">
+            <button type="button" class="btn btn--ghost" id="rcd-cancel">Cancelar</button>
+            <button id="rcd-confirm" type="submit" class="btn btn--primary">Confirmar</button>
+          </div>
+        </form>
+    </dialog>
+
   </div>
 
   <script src="js/devolucao-editar.js"></script>

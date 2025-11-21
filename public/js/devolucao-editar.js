@@ -138,10 +138,16 @@
     var receivedAt = opts.receivedAt || null;
     var responsavel = opts.responsavel || null;
     var pill=$('pill-cd'), resp=$('cd-resp'), when=$('cd-when'), sep=$('cd-sep');
+    
+    // Atualiza texto do CTA se existir
+    var infoText = $('cd-info-text'); 
+
     if (!pill) return;
     if (!receivedAt){
       pill.className = 'pill -neutro'; pill.textContent = 'Não recebido';
-      if (resp) resp.hidden = true; if (when) when.hidden = true; if (sep) sep.hidden = true; return;
+      if (resp) resp.hidden = true; if (when) when.hidden = true; if (sep) sep.hidden = true; 
+      if (infoText) infoText.style.color = '#64748b'; // cinza
+      return;
     }
     pill.className = 'pill -aprovado'; pill.textContent = 'Recebido no CD';
     if (resp) { resp.textContent = 'Resp.: ' + (responsavel || 'cd'); resp.hidden = false; }
@@ -150,6 +156,7 @@
       when.textContent = 'Quando: ' + (isNaN(dt) ? receivedAt : dt.toLocaleString('pt-BR')); when.hidden = false;
     }
     if (sep) sep.hidden = false;
+    if (infoText) infoText.style.color = '#15803d'; // verde
   }
 
   /* =============== Regras =============== */
@@ -265,6 +272,29 @@
     return ln || null;
   }
 
+  /* =============== NOVO: Stepper Visual =============== */
+  function updateStepper(status) {
+    var steps = document.querySelectorAll('.step');
+    if (!steps || steps.length < 3) return;
+    
+    // Limpa classes ativas
+    steps.forEach(function(s){ s.className = 'step'; });
+    
+    var s = String(status || '').toLowerCase();
+
+    // Passo 1: Sempre ativo se o registro existe
+    steps[0].classList.add('active'); 
+    
+    // Passo 3 (Final): Se estiver em status terminal
+    if (['aprovado', 'rejeitado', 'cancelado', 'concluida', 'finalizado'].indexOf(s) >= 0) {
+       steps[2].classList.add('active');
+    } 
+    // Passo 2 (Processo): Se não for final, e não for vazio, assume processo
+    else if (['pendente', 'em_espera', 'em_analise', 'em_transporte', 'recebido_cd', 'disputa', 'defeituosa', 'troca', 'reembolso_parcial'].indexOf(s) >= 0) {
+       steps[1].classList.add('active');
+    }
+  }
+
   function updateSummary(d){
     var rs=$('resumo-status'), rl=$('resumo-log'), rc=$('resumo-cd'), rp=$('resumo-prod'), rf=$('resumo-frete'), rt=$('resumo-total');
     if (rs) rs.textContent = (d.status || '—').toLowerCase();
@@ -274,6 +304,9 @@
     if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
     if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
     if (rt) rt.textContent = moneyBRL(calcTotalByRules(d));
+
+    // Atualiza a régua visual
+    updateStepper(d.status);
   }
 
   function capture(){
