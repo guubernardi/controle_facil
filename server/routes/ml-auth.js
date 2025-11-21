@@ -110,4 +110,18 @@ router.get('/ml/status', async (req, res) => {
   }
 });
 
+// 4. Rota para Desconectar (Apaga o token do banco)
+router.post('/ml/disconnect', async (req, res) => {
+  try {
+    // Em um sistema multi-tenant real, você usaria o ID do usuário da sessão
+    // Aqui vamos limpar tudo para simplificar o teste, ou apagar o mais recente
+    await query('DELETE FROM ml_tokens'); 
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+module.exports = router;
+
 module.exports = router;
