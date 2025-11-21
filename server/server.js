@@ -115,6 +115,11 @@ app.use('/api', (req, _res, next) => {
 /* ================== Rotas Públicas e Auth ================== */
 app.get('/api/health', (_req, res) => res.json({ ok: true, status: 'online', time: new Date() }));
 
+// Status do ML (Para o frontend não dar 404)
+app.get('/api/ml/status', (req, res) => {
+  res.json({ ok: true, status: 'connected', timestamp: new Date() });
+});
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -136,7 +141,7 @@ app.get('/api/auth/me', (req, res) => {
 /* ================== Guard (Proteção /api) ================== */
 app.use('/api', (req, res, next) => {
   const path = req.path.toLowerCase();
-  if (path === '/health' || path.startsWith('/auth/')) return next();
+  if (path === '/health' || path.startsWith('/auth/') || path === '/ml/status') return next();
 
   const jobHeader = req.get('x-job-token');
   const envToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
