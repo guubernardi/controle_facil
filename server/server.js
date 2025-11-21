@@ -28,7 +28,7 @@ const ConnectPg  = require('connect-pg-simple')(session);
 // [IMPORTANTE] Import do DB na mesma pasta (./)
 const { query }  = require('./db'); 
 
-// [IMPORTANTE] Import do Worker (deve estar em server/services/mlWorker.js)
+// [IMPORTANTE] Import do Worker
 const MlWorker   = require('./services/mlWorker');
 
 const app = express();
@@ -115,7 +115,7 @@ app.use('/api', (req, _res, next) => {
 /* ================== Rotas Públicas e Auth ================== */
 app.get('/api/health', (_req, res) => res.json({ ok: true, status: 'online', time: new Date() }));
 
-// Status do ML (Para o frontend não dar 404)
+// Status do ML (Rota fantasma antiga para compatibilidade se necessário)
 app.get('/api/ml/status', (req, res) => {
   res.json({ ok: true, status: 'connected', timestamp: new Date() });
 });
@@ -129,7 +129,17 @@ const loginLimiter = rateLimit({
 });
 app.use('/api/auth/login', loginLimiter);
 
+// --- ROTAS DE AUTENTICAÇÃO ---
 app.use('/api/auth', require('./routes/auth'));
+
+// [CORREÇÃO] Adicionando a rota de Auth do ML que estava faltando!
+try {
+  app.use('/api/auth', require('./routes/ml-auth')); 
+  console.log('✅ [BOOT] Rotas ML Auth carregadas (/api/auth/ml/...)');
+} catch (e) {
+  console.error('❌ [BOOT] Falha ao carregar ml-auth:', e.message);
+}
+
 try { require('./routes/auth-register')(app); } catch {}
 
 app.get('/api/auth/me', (req, res) => {
@@ -141,12 +151,12 @@ app.get('/api/auth/me', (req, res) => {
 /* ================== Guard (Proteção /api) ================== */
 app.use('/api', (req, res, next) => {
   const path = req.path.toLowerCase();
+  // Permite /health, /auth/* (incluindo /auth/ml/login) e /ml/status
   if (path === '/health' || path.startsWith('/auth/') || path === '/ml/status') return next();
 
   const jobHeader = req.get('x-job-token');
   const envToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   
-  // Permite acesso se for o Worker local com token correto
   if (jobHeader && envToken && jobHeader === envToken) return next();
 
   if (req.session?.user) return next();
@@ -192,7 +202,6 @@ const host = '0.0.0.0';
 const server = app.listen(port, host, () => {
   console.log(`🚀 [BOOT] Servidor rodando em http://${host}:${port}`);
   
-  // Inicia o Worker de Background
   try {
     MlWorker.start(port);
   } catch (e) {
