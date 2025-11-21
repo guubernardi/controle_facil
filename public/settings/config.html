@@ -27,243 +27,121 @@
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast-success { background: #22c55e; } 
     .toast-error { background: #ef4444; }
+
+    /* Estilo da Lista de Contas (Igual sua foto) */
+    .ml-accounts-list {
+      list-style: none;
+      padding: 0;
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-top: 1px solid #f1f5f9;
+      padding-top: 12px;
+    }
+    .ml-account-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    .ml-account-item:hover {
+      border-color: #cbd5e1;
+      background: #fff;
+    }
+    .ml-acc-info { display: flex; align-items: center; gap: 10px; }
+    .ml-acc-avatar { 
+      width: 28px; height: 28px; background: #ffe600; color: #2d3277; 
+      border-radius: 50%; display: flex; align-items: center; justify-content: center; 
+      font-weight: bold; font-size: 12px;
+    }
+    .ml-acc-actions button {
+      background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;
+      padding: 4px 8px; border-radius: 4px;
+    }
+    .ml-acc-actions button:hover { background: #fee2e2; }
   </style>
 </head>
 <body class="settings-page" data-page="settings">
 
-  <aside id="sidebar" class="sidebar" aria-label="Menu lateral">
+  <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
-      <a href="../home.html" class="sidebar-logo" aria-label="Controle Fácil">
-        <span class="sidebar-logo-text">Controle Fácil</span>
-      </a>
-      <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Alternar menu">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-      </button>
+      <a href="../home.html" class="sidebar-logo"><span class="sidebar-logo-text">Controle Fácil</span></a>
     </div>
-
     <nav class="sidebar-nav">
-      <a class="sidebar-nav-item" data-page="home" href="../home.html">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 10v10h14V10"/></svg>
-        <span class="sidebar-nav-text">Home</span>
-      </a>
-      <a class="sidebar-nav-item" data-page="central" href="../central.html">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
-        <span class="sidebar-nav-text">Central</span>
-      </a>
-      <a class="sidebar-nav-item" data-page="devolucoes" href="../index.html">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>
-        <span class="sidebar-nav-text">Devoluções</span>
-      </a>
-      <a class="sidebar-nav-item" data-page="dashboard" href="../dashboard.html">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        <span class="sidebar-nav-text">Dashboards</span>
-      </a>
-      <a class="sidebar-nav-item" data-page="logs" href="../logs.html">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        <span class="sidebar-nav-text">Log de Custos</span>
-      </a>
-      <a class="sidebar-nav-item" data-page="chat" href="../chat.html">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>
-        <span class="sidebar-nav-text">Chat</span>
-      </a>
-      <a class="sidebar-nav-item" data-page="settings" href="./config.html" aria-current="page">
-        <svg class="sidebar-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/></svg>
-        <span class="sidebar-nav-text">Configurações</span>
-      </a>
+      <a class="sidebar-nav-item" href="../home.html"><span class="sidebar-nav-text">Home</span></a>
+      <a class="sidebar-nav-item" href="../central.html"><span class="sidebar-nav-text">Central</span></a>
+      <a class="sidebar-nav-item" href="../index.html"><span class="sidebar-nav-text">Devoluções</span></a>
+      <a class="sidebar-nav-item active" href="./config.html"><span class="sidebar-nav-text">Configurações</span></a>
     </nav>
-
-    <div class="sidebar-footer">
-      <div class="sidebar-user">
-        <div class="sidebar-user-info">
-          <div class="sidebar-user-name" id="sidebarUserName">—</div>
-          <div class="sidebar-user-email" id="sidebarUserEmail">—</div>
-        </div>
-      </div>
-      <button class="sidebar-logout" id="btnLogout" title="Sair" aria-label="Sair">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
-      </button>
-    </div>
   </aside>
-
-  <div id="sidebar-overlay" class="sidebar-overlay" aria-hidden="true"></div>
 
   <main class="conteudo-principal">
     <header class="cabecalho">
       <div class="container">
-        <nav class="breadcrumb" aria-label="Você está em">
-          <a href="../home.html" class="breadcrumb-link">Home</a>
-          <span class="breadcrumb-separador" aria-hidden="true">›</span>
-          <span class="breadcrumb-atual" aria-current="page">Configurações</span>
-        </nav>
+        <h1 class="titulo-principal">Configurações</h1>
       </div>
     </header>
 
-    <section class="banner">
-      <div class="container">
-        <h1 class="banner-titulo">Central de Configurações</h1>
-      </div>
-    </section>
-
     <div class="container">
-      <div class="nav-voltar">
-        <a href="../home.html" class="link-voltar">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M12.5 15l-5-5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Preferências / Empresa
-        </a>
-      </div>
-
       <div class="grade-conteudo">
+        
         <aside class="barra-lateral">
           <nav class="menu">
-            <a href="#empresa" class="item-menu ativo" data-target="empresa">
-              <span class="icone-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
-              <span class="rotulo-menu">Empresa</span>
-            </a>
-            <a href="#usuarios" class="item-menu" data-target="usuarios">
-              <span class="icone-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
-              <span class="rotulo-menu">Usuários</span>
-            </a>
-            <a href="#regras" class="item-menu" data-target="regras">
-              <span class="icone-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1-.2 1.6l-1.6.9a1 1 0 0 1-1.2-.1l-.1-.1a7.9 7.9 0 0 1-1 .6 1 1 0 0 0-.6.9l-.1 1.8a1 1 0 0 1-1 .9h-1.8a1 1 0 0 1-1-.9l-.1-1.8a1 1 0 0 0-.6-.9 7.9 7.9 0 0 1-1-.6 1 1 0 0 1-1.3.2l-1.6-.9a1 1 0 0 1-.3-1.6l.1-.1A1 1 0 0 0 4.6 15l-1.6-.9a1 1 0 0 1-.5-1.3l.7-1.7a1 1 0 0 1 1-.6h.2c.3-.2.6-.4.9-.6a1 1 0 0 0 .4-1l-.2-1.8A1 1 0 0 1 6.5 4H8.3a1 1 0 0 1 1 .9l.1 1.8a1 1 0 0 1 1-.9h1.8a1 1 0 0 1 1 .9l-.2 1.8a1 1 0 0 0 .4 1c.3.2.6.4.9.6h.2a1 1 0 0 1 1 .6l.7 1.7a1 1 0 0 1-.5 1.3Z"/></svg></span>
-              <span class="rotulo-menu">Regras</span>
-            </a>
-            <a href="#integracoes" class="item-menu" data-target="integracoes">
-              <span class="icone-menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2m0 0L3 5m3-3 3 3M6 20a8 8 0 1 0 8-8"/><circle cx="15" cy="15" r="5"/><path d="M12 15h7"/></svg></span>
-              <span class="rotulo-menu">Integrações</span>
-            </a>
+            <a href="#integracoes" class="item-menu ativo" data-target="integracoes">Integrações</a>
+            <a href="#empresa" class="item-menu" data-target="empresa">Empresa</a>
           </nav>
         </aside>
 
         <section class="area-conteudo">
-          
-          <section id="empresa" class="config-pane active" aria-labelledby="tab-empresa">
-            <h2 class="titulo-secao-main">Configurações da empresa</h2>
-            <form id="form-empresa" class="form-grid" autocomplete="off">
-              <div class="form-row">
-                <label>Razão social</label>
-                <input name="razao_social" type="text" placeholder="Minha Empresa Ltda">
-              </div>
-              <div class="form-row">
-                <label>Nome fantasia</label>
-                <input name="nome_fantasia" type="text" placeholder="Controle Fácil">
-              </div>
-              <div class="form-row">
-                <label>CNPJ</label>
-                <input name="cnpj" type="text" inputmode="numeric" placeholder="00.000.000/0000-00">
-              </div>
-              <div class="form-row">
-                <label>E-mail</label>
-                <input name="email" type="email" placeholder="contato@empresa.com.br">
-              </div>
-              <div class="form-row">
-                <label>Telefone</label>
-                <input name="telefone" type="text" placeholder="(11) 99999-0000">
-              </div>
-              <div class="form-row" style="grid-column:1/-1">
-                <label>Endereço</label>
-                <input name="endereco" type="text" placeholder="Rua, número, bairro, cidade/UF, CEP">
-              </div>
-              <div class="actions-line">
-                <button class="btn btn--primary" type="submit">Salvar alterações</button>
-                <button class="btn btn--ghost" type="button" id="empresa-recarregar">Recarregar</button>
-              </div>
-            </form>
-          </section>
-
-          <section id="usuarios" class="config-pane" aria-labelledby="tab-usuarios">
-            <h2 class="titulo-secao-main">Usuários & Permissões</h2>
-            <div class="card-bloco">
-              <form id="form-add-user" class="inline-form" autocomplete="off">
-                <input name="nome"  placeholder="Nome" required aria-label="Nome">
-                <input name="email" type="email" placeholder="email@exemplo.com" required aria-label="E-mail">
-                <select name="papel" aria-label="Papel do usuário">
-                  <option value="admin">Admin</option>
-                  <option value="gestor">Gestor</option>
-                  <option value="operador">Operador</option>
-                </select>
-                <button class="btn btn--primary" id="add" type="submit">Adicionar</button>
-              </form>
-              <table class="tabela" aria-label="Lista de usuários">
-                <thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Ações</th></tr></thead>
-                <tbody id="usuarios-list"></tbody>
-              </table>
-              <div class="actions-line">
-                <button class="btn btn--primary" id="usuarios-salvar">Salvar alterações</button>
-              </div>
-            </div>
-          </section>
-
-          <section id="regras" class="config-pane" aria-labelledby="tab-regras">
-            <h2 class="titulo-secao-main">Regras de Custos</h2>
-            <form id="form-regras" class="form-grid">
-              <h3 class="sub" style="grid-column:1/-1; font-size: 16px; font-weight: 600; margin-bottom: 12px;">Cálculo do custo</h3>
-              <label class="switch" style="grid-column:1/-1">
-                <input type="checkbox" name="rule_rejeitado_zero" checked>
-                <span>Quando <b>Status = Rejeitada</b> ➜ custo = <b>R$ 0,00</b></span>
-              </label>
-              <label class="switch" style="grid-column:1/-1">
-                <input type="checkbox" name="rule_motivo_cliente_zero" checked>
-                <span>Quando <b>Motivo do cliente</b> ➜ custo = <b>R$ 0,00</b></span>
-              </label>
-              <label class="switch" style="grid-column:1/-1">
-                <input type="checkbox" name="rule_cd_somente_frete" checked>
-                <span>Quando <b>Recebido no CD / Em inspeção</b> ➜ custo = <b>somente frete</b></span>
-              </label>
-              <p class="help" style="grid-column:1/-1">Regra padrão: <b>Produto + Frete</b>.</p>
-              <div class="actions-line" style="grid-column:1/-1">
-                <button class="btn btn--primary" type="submit">Salvar alterações</button>
-              </div>
-            </form>
-          </section>
-
-          <section id="integracoes" class="config-pane" aria-labelledby="tab-integracoes">
-            <h2 class="titulo-secao-main">Integrações</h2>
-            <div class="integrations-section">
-              <h3 class="integrations-title">E-commerces</h3>
-              <div class="integrations-grid">
-                
-                <article class="integration-card" id="ml-card">
-                  <header class="integration-head">
-                    <div class="integration-logo">
-                      <img src="../assets/img/logo_mercadolivre.png" alt="Logo Mercado Livre" onerror="this.src='https://http2.mlstatic.com/frontend-assets/ui-navigation/5.18.9/mercadolibre/logo__large_plus.png'"/>
-                    </div>
-                    <div>
-                      <h3>Mercado Livre</h3>
-                      <small class="integration-status">
-                        <span class="ml-pill" id="ml-status">Verificando...</span>
-                      </small>
-                    </div>
-                    <span class="badge badge--ecom">Ativo</span>
-                  </header>
-
-                  <div class="integration-actions">
-                    <a class="btn btn--primary btn--sm" href="/api/auth/ml/login" id="btn-connect-ml">Conectar</a>
-                    <button class="btn btn--ghost btn--sm" type="button" id="btn-sync-ml" hidden>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 0 1 9-9"/></svg>
-                      Sincronizar Agora
-                    </button>
-                    <button class="btn btn--ghost btn--sm" type="button" id="btn-show-stores" hidden>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                      Minhas Lojas
-                    </button>
+          <section id="integracoes" class="config-pane active">
+            <h2 class="titulo-secao-main">Marketplaces</h2>
+            
+            <div class="integrations-grid">
+              <article class="integration-card" id="ml-card">
+                <header class="integration-head">
+                  <div class="integration-logo">
+                    <img src="../assets/img/logo_mercadolivre.png" alt="ML" width="40">
                   </div>
+                  <div>
+                    <h3>Mercado Livre</h3>
+                    <small class="integration-status">
+                      <span class="ml-pill" id="ml-status">Carregando...</span>
+                    </small>
+                  </div>
+                  <span class="badge badge--ecom">Ativo</span>
+                </header>
+
+                <div class="integration-actions">
+                  <button class="btn btn--primary btn--sm" id="btn-add-account">
+                    + Adicionar Conta
+                  </button>
                   
-                  <div class="integration-extra">
-                    <small style="color:#64748b;">Sincroniza devoluções e reclamações a cada 10min.</small>
+                  <button class="btn btn--ghost btn--sm" id="btn-sync-ml" hidden>
+                    Sincronizar Tudo
+                  </button>
+                </div>
+                
+                <div class="integration-extra">
+                  <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                    <strong style="font-size:0.85rem; color:#64748b;">Contas Salvas:</strong>
                   </div>
-                </article>
-
-                <article class="integration-card is-disabled" aria-disabled="true">
-                  <header class="integration-head">
-                    <div class="integration-logo"><img src="../assets/img/logo_shopee.png" alt="Logo Shopee"></div>
-                    <div><h3>Shopee</h3><small>Em breve</small></div>
-                  </header>
-                  <div class="integration-actions">
-                    <button class="btn" disabled>Aguarde</button>
-                  </div>
-                </article>
-              </div>
+                  <ul id="ml-accounts-list" class="ml-accounts-list">
+                    <li style="color:#94a3b8; font-style:italic; font-size:0.9rem; padding:10px;">Nenhuma conta conectada.</li>
+                  </ul>
+                </div>
+              </article>
             </div>
+          </section>
+          
+          <section id="empresa" class="config-pane" hidden>
+             <h2>Dados da Empresa</h2>
+             <p>Formulário de empresa aqui...</p>
           </section>
 
         </section>
@@ -271,42 +149,13 @@
     </div>
   </main>
 
-  <dialog id="dlg-stores" class="modal-detalhe" style="max-width: 500px;">
-    <div class="modal-card">
-      <header class="modal-header">
-        <h3>Lojas Conectadas</h3>
-        <button type="button" class="modal-close" id="close-stores">✕</button>
-      </header>
-      
-      <section class="modal-body">
-        <div id="stores-list-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
-          <div style="text-align:center; padding: 2rem; color: #94a3b8;">
-            Carregando lojas...
-          </div>
-        </div>
-        
-        <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; text-align: center;">
-          <a href="/api/auth/ml/login" class="btn btn--primary btn--full" style="width: 100%; justify-content: center;">
-            + Adicionar Nova Loja
-          </a>
-        </div>
-      </section>
-    </div>
-  </dialog>
-
-  <div id="toast" class="toast" role="status" aria-live="polite">
+  <div id="toast" class="toast">
     <div class="toast-content">
-      <strong id="toast-titulo"></strong>
-      <div id="toast-descricao"></div>
+      <strong id="toast-titulo"></strong><div id="toast-descricao"></div>
     </div>
   </div>
 
-  <button id="sidebar-toggle-mobile" class="sidebar-fab" aria-label="Abrir menu">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-  </button>
-
-  <script src="/js/auth-guard.js"></script>
-  <script src="../js/navigation.js" defer></script>
-  <script src="../js/config.js" defer></script>
+  <script src="../js/navigation.js"></script>
+  <script src="../js/config.js"></script>
 </body>
 </html>
