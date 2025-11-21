@@ -44,67 +44,81 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ============ 2. INTEGRAÇÃO MERCADO LIVRE ============
+  // ============ INTEGRAÇÃO MERCADO LIVRE (MULTI-CONTA) ============
   const initML = () => {
     const statusEl = document.getElementById('ml-status');
     const btnConnect = document.getElementById('btn-connect-ml');
-    const btnSync = document.getElementById('btn-sync-ml');
+    const listContainer = document.getElementById('ml-accounts-list');
 
-    if (!statusEl) return; // Se não estiver na tela, ignora
+    if (!statusEl) return;
 
-    // A. Verifica retorno do Login (Query Params)
+    // Função para renderizar a lista
+    const renderAccounts = (accounts) => {
+      if (!accounts || accounts.length === 0) {
+        statusEl.textContent = "Desconectado";
+        statusEl.className = "ml-pill off";
+        listContainer.innerHTML = '<li style="font-size:0.9rem;color:#94a3b8;font-style:italic;">Nenhuma conta conectada.</li>';
+        btnConnect.textContent = "Conectar Conta";
+        return;
+      }
+
+      // Status Geral
+      statusEl.textContent = `${accounts.length} conta(s) ativa(s)`;
+      statusEl.className = "ml-pill ok";
+      btnConnect.textContent = "Adicionar Outra Conta";
+
+      // Renderiza lista
+      listContainer.innerHTML = accounts.map(acc => `
+        <li style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; padding:0.5rem 1rem; border-radius:6px; border:1px solid #e2e8f0;">
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <div style="width:8px; height:8px; background:#22c55e; border-radius:50%;"></div>
+            <span style="font-weight:600; color:#334155;">${acc.nickname}</span>
+            <span style="font-size:0.75rem; color:#94a3b8;">(ID: ${acc.user_id})</span>
+          </div>
+          <button class="btn-remove-account" data-id="${acc.user_id}" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem; font-weight:600; padding:4px 8px;">
+            Desconectar
+          </button>
+        </li>
+      `).join('');
+
+      // Bind dos botões de remover
+      document.querySelectorAll('.btn-remove-account').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.target.dataset.id;
+          if(!confirm("Remover esta conta? O sistema vai parar de baixar as vendas dela.")) return;
+          
+          try {
+            const r = await fetch(`/api/auth/ml/disconnect/${id}`, { method: 'POST' });
+            if (r.ok) {
+              showToast("Conta removida.", "success");
+              loadAccounts(); // Recarrega a lista
+            } else {
+              throw new Error('Erro ao remover');
+            }
+          } catch (err) {
+            showToast("Erro ao desconectar", "error");
+          }
+        });
+      });
+    };
+
+    // Carregar Contas
+    const loadAccounts = () => {
+      fetch('/api/auth/ml/list')
+        .then(r => r.json())
+        .then(data => renderAccounts(data.accounts))
+        .catch(err => console.error(err));
+    };
+
+    // Verifica retorno do login
     const params = new URLSearchParams(window.location.search);
     if (params.get('status') === 'connected') {
-      showToast('Conectado!', 'Integração realizada com sucesso.', 'success');
-      window.history.replaceState({}, document.title, window.location.pathname); // Limpa URL
-    }
-    if (params.get('error')) {
-      showToast('Erro', 'Falha na conexão: ' + params.get('error'), 'error');
+      showToast('Conta adicionada com sucesso!', 'success');
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    // B. Verifica Status na API
-    fetch('/api/auth/ml/status')
-      .then(r => r.json())
-      .then(data => {
-        if (data.connected) {
-          statusEl.textContent = `🟢 Conectado: ${data.nickname}`;
-          statusEl.style.color = 'var(--secondary)'; // Verde do seu tema
-          
-          // Transforma botão de conectar em "Trocar Conta"
-          btnConnect.textContent = 'Trocar Conta';
-          btnConnect.classList.remove('btn--primary');
-          btnConnect.classList.add('btn--ghost');
-          
-          btnSync.hidden = false;
-        } else {
-          statusEl.textContent = '🔴 Desconectado';
-          statusEl.style.color = 'var(--destructive)'; // Vermelho
-          btnSync.hidden = true;
-        }
-      })
-      .catch(err => {
-        console.error(err);
-        statusEl.textContent = 'Erro ao verificar';
-      });
-
-    // C. Botão Sincronizar
-    if (btnSync) {
-      btnSync.addEventListener('click', () => {
-        btnSync.textContent = 'Sincronizando...';
-        btnSync.disabled = true;
-        
-        fetch('/api/ml/returns/sync?days=30')
-          .then(r => r.json())
-          .then(res => {
-            if(res.ok) showToast('Sucesso', `Sincronização iniciada!`, 'success');
-            else throw new Error(res.error || 'Erro desconhecido');
-          })
-          .catch(err => showToast('Erro', err.message, 'error'))
-          .finally(() => {
-            btnSync.textContent = 'Sincronizar Agora';
-            btnSync.disabled = false;
-          });
-      });
-    }
+    // Inicializa
+    loadAccounts();
   };
 
   initML();
