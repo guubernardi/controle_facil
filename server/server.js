@@ -7,7 +7,7 @@
  * -------------------------------------------------------------
  */
 
-// [MELHORIA] Verificação de variáveis de ambiente em dev
+// [BOOT] Verificação de variáveis de ambiente em dev
 try {
   if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config({ override: true });
@@ -25,16 +25,16 @@ const rateLimit  = require('express-rate-limit');
 const session    = require('express-session');
 const ConnectPg  = require('connect-pg-simple')(session);
 
-// [CORREÇÃO] Import do DB na mesma pasta (./)
+// [IMPORTANTE] Import do DB na mesma pasta (./)
 const { query }  = require('./db'); 
 
-// [NOVO] Import do Worker de Background (certifique-se que o arquivo existe em services/)
+// [IMPORTANTE] Import do Worker (deve estar em server/services/mlWorker.js)
 const MlWorker   = require('./services/mlWorker');
 
 const app = express();
 app.disable('x-powered-by');
 
-// [MELHORIA] Validação de variáveis críticas
+// Validação de variáveis críticas
 const REQUIRED_ENVS = ['DATABASE_URL', 'ML_CLIENT_ID', 'ML_CLIENT_SECRET'];
 const missingEnvs = REQUIRED_ENVS.filter(k => !process.env[k]);
 if (missingEnvs.length > 0) {
@@ -187,7 +187,7 @@ const host = '0.0.0.0';
 const server = app.listen(port, host, () => {
   console.log(`🚀 [BOOT] Servidor rodando em http://${host}:${port}`);
   
-  // [CORREÇÃO] Inicia o Worker separado passando a porta
+  // Inicia o Worker de Background
   try {
     MlWorker.start(port);
   } catch (e) {
