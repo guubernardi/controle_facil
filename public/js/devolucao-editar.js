@@ -1078,7 +1078,8 @@
   ].forEach(function(sel){ var el=pickEl(sel); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc); });
   (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', recalc); } })();
 
-  ['btn-insp-aprova','btn-insp-reprova','rq-aprovar','rq-reprovar','rq-receber','btn-cd','btn-salvar','btn-mark','btn-enrich']
+  // Removido 'btn-mark' da lista para limpeza
+  ['btn-insp-aprova','btn-insp-reprova','rq-aprovar','rq-reprovar','rq-receber','btn-cd','btn-salvar','btn-enrich']
     .forEach(neutralizeSubmit);
 
   var btnIA=$('btn-insp-aprova'), btnIR=$('btn-insp-reprova');
@@ -1094,29 +1095,13 @@
 
   var btnSalvar=$('btn-salvar'); if (btnSalvar) safeOnClick(btnSalvar, save);
 
-  var btnMark=$('btn-mark');
-  if (btnMark) {
-    safeOnClick(btnMark, function(){
-      var id = current.id || returnId;
-      if (!id) return toast('ID inválido.', 'error');
-      var sel = $('mark-op'); var obs = $('mark-obs');
-      var body = { updated_by: 'frontend-mark' };
-      if (sel && sel.value) body.status = sel.value;
-      if (obs && obs.value) body.mark_obs = obs.value;
-      fetch('/api/returns/' + encodeURIComponent(id), {
-        method: 'PATCH',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify(body)
-      })
-      .then(function(r){ if(!r.ok) throw new Error('Falha ao aplicar'); })
-      .then(function(){ toast('Aplicado.', 'success'); return Promise.all([reloadCurrent(), refreshTimeline(id)]); })
-      .catch(function(e){ toast(e.message || 'Erro ao aplicar', 'error'); });
-    });
-  }
+  /* === REMOVIDO LÓGICA DO BOTÃO 'APLICAR' (BTN-MARK) === */
 
   var btnEnrich=$('btn-enrich'); if (btnEnrich) safeOnClick(btnEnrich, function(){ enrichFromML('manual'); });
+  
   function disableHead(disabled){
-    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd','btn-mark']
+    // Removido 'btn-mark' da lista
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd']
       .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
   }
 
