@@ -1,242 +1,248 @@
-// central.js
+// public/js/central.js
+'use strict';
 
-const $ = (s) => document.querySelector(s);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const TOAST_BOX = $("#toastContainer");
-const POLL_MS = 50000;       // 50s
-const LOADER_MIN_MS = 6000;  // tempo mínimo do overlay fullscreen (6s)
-const IMPORT_WINDOW_DAYS = 90;
-
-// IDs já vistos para não repetir toast
-const seen = new Set();
-let firstRun = true;
-
-// Pausa o polling quando a aba não está visível
-let pollingOn = true;
-document.addEventListener("visibilitychange", () => {
-  pollingOn = document.visibilityState === "visible";
-});
-
-// Helpers de URL
-const openUrlForId = (id) => `index.html?return_id=${encodeURIComponent(id)}`;
-const logsUrlForId  = (id) => `index.html?view=logs&return_id=${encodeURIComponent(id)}`;
-
-// Ícones inline
-function iconSvg(name) {
-  if (name === "Mercado Livre") {
-    return `<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#ffea00"/><path d="M7 11c2-2 8-2 10 0" stroke="#0f172a" stroke-width="1.6" fill="none"/></svg>`;
+class LogisticsPanel {
+  constructor() {
+    // Estado local
+    this.todayItems = [];
+    this.delayedItems = [];
+    this.receivedToday = [];
+    
+    this.refreshInterval = 60 * 1000; // 1 min
+    this.scannerInput = document.getElementById('scanner-input');
+    
+    this.init();
   }
-  if (name === "Shopee") {
-    return `<svg width="24" height="24" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="2" fill="#ef4444"/><path d="M12 4c-1.5 0-2.5 1-2.8 2H7v2h10V6h-2.2C14.5 5 13.5 4 12 4Z" fill="#fff"/></svg>`;
+
+  init() {
+    this.bindEvents();
+    this.loadKanbanData();
+    
+    // Refresh automático silencioso
+    setInterval(() => this.loadKanbanData(), this.refreshInterval);
+    
+    // Foco automático no scanner ao carregar
+    if (this.scannerInput) this.scannerInput.focus();
   }
-  if (name === "Magalu") {
-    return `<svg width="24" height="24" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" fill="#0ea5e9"/><rect x="5" y="8" width="14" height="2" fill="#22c55e"/><rect x="5" y="12" width="10" height="2" fill="#f59e0b"/></svg>`;
-  }
-  if (name === "info") {
-    return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
-  }
-  return `<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#e5e7eb"/></svg>`;
-}
 
-// Toast
-function showToast({ title, desc, href }) {
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.innerHTML = `
-    <div class="dot">${iconSvg("info")}</div>
-    <div class="text">
-      <div class="title">${title}</div>
-      <div class="desc">${href ? `<a href="${href}">${desc}</a>` : desc}</div>
-    </div>
-    <button class="close" aria-label="Fechar">&times;</button>
-  `;
-  el.querySelector(".close").onclick = () => el.remove();
-  TOAST_BOX.appendChild(el);
-  setTimeout(() => el.remove(), 5500);
-}
-
-// Normaliza nome da loja → marketplace
-function lojaToMarketplace(lojaNome = "") {
-  const s = lojaNome.toLowerCase();
-  if (s.includes("shopee")) return "Shopee";
-  if (s.includes("magalu") || s.includes("magazineluiza")) return "Magalu";
-  if (s.includes("mercado") || s.includes("ml") || s.includes("meli")) return "Mercado Livre";
-  return "Outros";
-}
-
-// Fetch com tratamento simples
-async function api(url, opts) {
-  const r = await fetch(url, opts);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-  return j;
-}
-
-/* =========================
- *  Import ML (com fallback)
- * ========================= */
-
-async function tryImport(source) {
-  // <<<<<< multi-contas: all=1 >>>>>>
-  const url = `/api/ml/claims/import?source=${encodeURIComponent(source)}&days=${IMPORT_WINDOW_DAYS}&silent=1&all=1`;
-  try {
-    const res = await api(url);
-    const ok = !!res?.ok;
-    console.log(`[central] Import ${source} ->`, res);
-    return ok;
-  } catch (e) {
-    console.warn(`[central] Import ${source} falhou:`, e?.message || e);
-    return false;
-  }
-}
-
-async function kickstartImport() {
-  console.log("[central] Import de returns disparado (kickstart).");
-  let done = await tryImport("returns");
-  if (!done) {
-    console.log("[central] Caindo para import por claims…");
-    done = await tryImport("claims");
-  }
-  if (!done) {
-    console.log("[central] Tentando import 'both'…");
-    done = await tryImport("both");
-  }
-  return done;
-}
-
-/* =========================
- *  Dados + Renderização
- * ========================= */
-
-// Reclamações pendentes (dados)
-async function fetchReclamacoesAbertas() {
-  const res  = await api("/api/returns?status=pendente&page=1&pageSize=500");
-  const rows = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : []);
-  const agg = {};
-  for (const r of rows) {
-    const mk = lojaToMarketplace(r.loja_nome || "");
-    agg[mk] = (agg[mk] || 0) + 1;
-  }
-  return { rows, agg };
-}
-
-// Reclamações pendentes (render)
-function renderReclamacoesAbertas(agg) {
-  const cont  = $("#mk-cards");
-  const ordem = ["Shopee", "Mercado Livre", "Magalu", "Outros"];
-  cont.innerHTML = "";
-  ordem.forEach((mk) => {
-    const card = document.createElement("div");
-    card.className = "mk";
-    card.innerHTML = `
-      <div class="logo">${iconSvg(mk)}</div>
-      <div class="name">${mk}</div>
-      <div class="badge">${agg[mk] || 0}</div>
-    `;
-    cont.appendChild(card);
-  });
-}
-
-// Toasts para novas reclamações
-function handleNewReclamacoes(rows) {
-  rows.forEach((r) => {
-    const id = String(r.id);
-    if (firstRun) {
-      seen.add(id); // semear no 1º load
-      return;
-    }
-    if (!seen.has(id)) {
-      seen.add(id);
-      showToast({
-        title: "Nova reclamação aberta",
-        desc: r.loja_nome ? `${r.loja_nome} — clique para abrir` : "Clique para abrir",
-        href: openUrlForId(id)
+  bindEvents() {
+    // 1. Scanner (Input Principal)
+    if (this.scannerInput) {
+      this.scannerInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const term = this.scannerInput.value.trim();
+          if (term) this.handleScan(term);
+          this.scannerInput.value = ''; // Limpa para o próximo
+        }
       });
     }
-  });
-}
 
-// “Devoluções a caminho” (dados) — prioriza 'a_caminho'
-async function fetchACaminho() {
-  const tries = ["a_caminho", "recebido_cd", "em_inspecao", "pendente"];
-  for (const st of tries) {
-    const res = await api(`/api/returns?status=${encodeURIComponent(st)}&page=1&pageSize=20`).catch(() => null);
-    const rows = Array.isArray(res?.items) ? res.items : [];
-    if (rows.length) return rows.slice(0, 6);
-  }
-  return [];
-}
+    // 2. Botão Buscar Manual
+    document.getElementById('btn-buscar-manual')?.addEventListener('click', () => {
+      const term = this.scannerInput.value.trim();
+      if (term) this.handleScan(term);
+      this.scannerInput.value = '';
+    });
 
-// “Devoluções a caminho” (render) — inclui loja_nome
-function renderACaminho(rows) {
-  const ul = $("#a-caminho");
-  ul.innerHTML = "";
-  if (!rows.length) return;
-
-  rows.forEach((r) => {
-    const li     = document.createElement("li");
-    const pedido = r.id_venda || r.id || "—";
-    const quando = r.updated_at || r.created_at || null;
-    const dt     = quando ? new Date(quando).toLocaleDateString("pt-BR") : "—";
-    const loja   = r.loja_nome || "";
-
-    li.className = "item";
-    li.innerHTML = `
-      <span class="pill">${String(r.status || "").replaceAll("_", " ")}</span>
-      <span class="id">pacote ${pedido}</span>
-      <span class="muted">• ${dt}</span>
-      ${loja ? `<span class="muted">• ${loja}</span>` : ""}
-      <a href="devolucao-editar.html?id=${encodeURIComponent(r.id)}">abrir</a>
-    `;
-    ul.appendChild(li);
-  });
-}
-
-/* =========================
- *  Boot + Polling
- * ========================= */
-
-async function boot() {
-  const hasLoader = !!window.PageLoader;
-  if (hasLoader) window.PageLoader.hold(LOADER_MIN_MS);
-
-  try {
-    await kickstartImport();
-
-    const results = await Promise.all([
-      fetchReclamacoesAbertas(),
-      fetchACaminho(),
-      hasLoader ? Promise.resolve() : sleep(LOADER_MIN_MS)
-    ]);
-
-    const abertas = results[0];
-    const caminho = results[1];
-
-    renderReclamacoesAbertas(abertas.agg);
-    handleNewReclamacoes(abertas.rows);
-    renderACaminho(caminho);
-  } catch (e) {
-    console.warn("initial load fail:", e?.message || e);
-  } finally {
-    if (hasLoader) window.PageLoader.done();
+    // 3. Modal Scanner (Ações)
+    document.getElementById('scan-btn-ok')?.addEventListener('click', () => this.processReception(true));
+    document.getElementById('scan-btn-fail')?.addEventListener('click', () => this.processReception(false));
+    
+    // Fechar modal
+    const dlg = document.getElementById('dlg-scan-result');
+    dlg?.addEventListener('close', () => {
+      if(this.scannerInput) this.scannerInput.focus(); // Volta o foco pro scanner
+    });
+    document.getElementById('scan-close')?.addEventListener('click', () => dlg.close());
   }
 
-  firstRun = false;
+  // ===== CARGA DE DADOS =====
 
-  // Polling leve
-  while (true) {
-    await sleep(POLL_MS);
-    if (!pollingOn) continue;
+  async loadKanbanData() {
     try {
-      const [ab, cam] = await Promise.all([fetchReclamacoesAbertas(), fetchACaminho()]);
-      renderReclamacoesAbertas(ab.agg);
-      handleNewReclamacoes(ab.rows);
-      renderACaminho(cam);
+      // Busca paralela para popular as colunas
+      // Nota: Ajuste as queries conforme sua API real
+      const [todayRes, delayedRes, doneRes] = await Promise.all([
+        // Coluna 1: Chegando Hoje (shipped + previsão hoje ou sem data futura)
+        fetch('/api/returns?status=em_transporte&limit=50').then(r => r.json()),
+        
+        // Coluna 2: Atrasados (shipped + data passada) ou Problema (disputa)
+        fetch('/api/returns?status=disputa&limit=20').then(r => r.json()), // Simplificado
+        
+        // Coluna 3: Recebidos Hoje
+        fetch('/api/returns?status=concluida&limit=20').then(r => r.json())
+      ]);
+
+      this.todayItems = todayRes.items || [];
+      this.delayedItems = delayedRes.items || [];
+      this.receivedToday = doneRes.items || [];
+
+      this.renderKanban();
+      this.updateStats();
+
     } catch (e) {
-      console.warn("poll fail", e.message);
+      console.error('Erro ao carregar Kanban:', e);
     }
   }
+
+  renderKanban() {
+    this.renderColumn('list-today', this.todayItems, 'tag-blue');
+    this.renderColumn('list-delayed', this.delayedItems, 'tag-red');
+    this.renderColumn('list-done', this.receivedToday, 'tag-green');
+  }
+
+  renderColumn(containerId, items, tagClass) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (items.length === 0) {
+      container.innerHTML = `<div class="empty-state-mini">Vazio</div>`;
+      return;
+    }
+
+    container.innerHTML = items.map(item => `
+      <div class="card-mini ${tagClass}" onclick="window.LogisticsApp.openItem('${item.id}')">
+        <div class="mini-header">
+          <span class="mini-id">#${item.id_venda || item.id}</span>
+          <span class="mini-time">${this.formatTime(item.updated_at)}</span>
+        </div>
+        <div class="mini-title" title="${item.sku}">
+          ${item.sku || 'Produto sem SKU'}
+        </div>
+        <div class="mini-sub">
+          ${item.cliente_nome ? item.cliente_nome.split(' ')[0] : 'Cliente'} • ${item.loja_nome || 'ML'}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ===== LÓGICA DO SCANNER =====
+
+  async handleScan(term) {
+    // Abre modal de loading
+    const dlg = document.getElementById('dlg-scan-result');
+    const body = document.getElementById('scan-body');
+    const footer = document.getElementById('scan-footer');
+    
+    if(dlg.showModal) dlg.showModal(); else dlg.removeAttribute('hidden');
+    
+    body.innerHTML = '<div class="scan-loading">Buscando pacote...</div>';
+    footer.hidden = true;
+
+    try {
+      // Busca inteligente (tenta ID interno, ID Venda ou Rastreio)
+      // Sua API precisa suportar busca por q=termo
+      const res = await fetch(`/api/returns?search=${encodeURIComponent(term)}&limit=1`);
+      const json = await res.json();
+      const item = json.items && json.items[0];
+
+      if (!item) {
+        body.innerHTML = `
+          <div style="text-align:center; color:var(--log-red); padding:1rem;">
+            <h3>❌ Não encontrado</h3>
+            <p>O código <strong>${term}</strong> não retornou nenhuma devolução.</p>
+            <p style="font-size:0.9rem; margin-top:1rem">Tente sincronizar o ML ou verifique o código.</p>
+          </div>
+        `;
+        return;
+      }
+
+      // Salva item atual no contexto para ação
+      this.currentItem = item;
+
+      // Renderiza resultado do scan
+      body.innerHTML = `
+        <div class="scan-result-ok">
+           <h4>Pacote Identificado!</h4>
+           <span class="scan-sku">${item.sku || 'SEM SKU'}</span>
+           <p>${item.cliente_nome || 'Cliente Desconhecido'}</p>
+           <div style="background:#f1f5f9; padding:0.5rem; border-radius:0.5rem; margin-top:1rem; font-size:0.9rem;">
+             <strong>Motivo:</strong> ${item.ml_return_status || item.status}
+           </div>
+        </div>
+      `;
+      footer.hidden = false;
+      
+      // Foca no botão de confirmar
+      setTimeout(() => document.getElementById('scan-btn-ok').focus(), 100);
+
+    } catch (e) {
+      body.innerHTML = `<div style="color:red; text-align:center">Erro de conexão: ${e.message}</div>`;
+    }
+  }
+
+  async processReception(isOk) {
+    if (!this.currentItem) return;
+    
+    const dlg = document.getElementById('dlg-scan-result');
+    const item = this.currentItem;
+    
+    // Fecha modal visualmente (otimismo)
+    dlg.close();
+
+    try {
+      // 1. Registra recebimento
+      const now = new Date().toISOString();
+      await fetch(`/api/returns/${item.id}/cd/receive`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          responsavel: 'Scanner', 
+          when: now, 
+          updated_by: 'scanner-app' 
+        })
+      });
+
+      // 2. Atualiza status (Conclui ou Disputa)
+      const patch = isOk 
+        ? { status: 'concluida', log_status: 'aprovado_cd' }
+        : { status: 'disputa', log_status: 'reprovado_cd' };
+
+      await fetch(`/api/returns/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+
+      this.showToast('Sucesso', `Pacote ${item.id_venda} processado!`, 'success');
+      
+      // Recarrega listas
+      this.loadKanbanData();
+
+    } catch (e) {
+      this.showToast('Erro', 'Falha ao salvar recebimento', 'error');
+      console.error(e);
+    }
+  }
+
+  // ===== UTILS =====
+  
+  updateStats() {
+    document.getElementById('count-today').textContent = this.todayItems.length;
+    document.getElementById('count-delayed').textContent = this.delayedItems.length;
+  }
+
+  formatTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  showToast(title, msg, type) {
+    const t = document.getElementById('toast');
+    if(!t) return;
+    t.innerHTML = `<div class="toast-content"><strong>${title}</strong><div>${msg}</div></div>`;
+    t.className = `toast show toast-${type}`; // Exige CSS toast-success/error
+    setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  // Helper global para onclick no HTML
+  openItem(id) {
+    window.location.href = `devolucao-editar.html?id=${id}`;
+  }
 }
 
-boot();
+// Inicialização
+window.addEventListener('DOMContentLoaded', () => {
+  window.LogisticsApp = new LogisticsPanel();
+});
