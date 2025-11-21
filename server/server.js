@@ -28,7 +28,7 @@ const ConnectPg  = require('connect-pg-simple')(session);
 // [IMPORTANTE] Import do DB na mesma pasta (./)
 const { query }  = require('./db'); 
 
-// [IMPORTANTE] Import do Worker
+// [IMPORTANTE] Import do Worker (deve estar em server/services/mlWorker.js)
 const MlWorker   = require('./services/mlWorker');
 
 const app = express();
@@ -115,7 +115,7 @@ app.use('/api', (req, _res, next) => {
 /* ================== Rotas Públicas e Auth ================== */
 app.get('/api/health', (_req, res) => res.json({ ok: true, status: 'online', time: new Date() }));
 
-// Status do ML (Rota fantasma antiga para compatibilidade se necessário)
+// Status do ML (Rota fantasma para compatibilidade)
 app.get('/api/ml/status', (req, res) => {
   res.json({ ok: true, status: 'connected', timestamp: new Date() });
 });
@@ -132,7 +132,8 @@ app.use('/api/auth/login', loginLimiter);
 // --- ROTAS DE AUTENTICAÇÃO ---
 app.use('/api/auth', require('./routes/auth'));
 
-// [CORREÇÃO] Adicionando a rota de Auth do ML que estava faltando!
+// [CORREÇÃO CRÍTICA] Carregar as rotas de Auth do Mercado Livre
+// Sem isso, o botão de conectar dá 404
 try {
   app.use('/api/auth', require('./routes/ml-auth')); 
   console.log('✅ [BOOT] Rotas ML Auth carregadas (/api/auth/ml/...)');
@@ -157,6 +158,7 @@ app.use('/api', (req, res, next) => {
   const jobHeader = req.get('x-job-token');
   const envToken  = process.env.JOB_TOKEN || process.env.ML_JOB_TOKEN;
   
+  // Permite acesso se for o Worker local com token correto
   if (jobHeader && envToken && jobHeader === envToken) return next();
 
   if (req.session?.user) return next();
