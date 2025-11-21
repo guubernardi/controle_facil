@@ -98,8 +98,8 @@
                 </header>
 
                 <div class="integration-actions">
-                  <button class="btn btn--primary btn--sm" id="btn-add-account">
-                    + Adicionar Conta
+                  <button class="btn btn--primary btn--sm" id="btn-ml-action">
+                    Conectar Conta
                   </button>
                   <button class="btn btn--ghost btn--sm" id="btn-sync-ml" hidden>
                     Sincronizar
@@ -108,7 +108,7 @@
                 
                 <div class="integration-extra">
                   <div style="margin-top:10px;">
-                    <strong style="font-size:0.85rem; color:#64748b;">Contas Salvas:</strong>
+                    <strong style="font-size:0.85rem; color:#64748b;">Contas Conectadas:</strong>
                   </div>
                   <ul id="ml-accounts-list" class="ml-accounts-list">
                     <li style="color:#94a3b8; font-style:italic; padding:10px;">Carregando...</li>
@@ -131,6 +131,26 @@
   <div id="toast" class="toast">
     <div class="toast-content"><strong id="toast-titulo"></strong><div id="toast-descricao"></div></div>
   </div>
+
+  <dialog id="dlg-ml-help" class="modal-detalhe" style="max-width: 400px; border:1px solid #e2e8f0; border-radius:12px; padding:0;">
+    <div class="modal-card" style="padding:1.5rem;">
+      <header style="display:flex;justify-content:space-between;margin-bottom:1rem;">
+        <h3 style="margin:0;font-size:1.1rem;">Nova Conta</h3>
+        <button id="close-help" style="background:none;border:none;font-size:1.2rem;cursor:pointer;">✕</button>
+      </header>
+      <p style="font-size:0.9rem; color:#475569; line-height:1.5; margin-bottom:1.5rem;">
+        O Mercado Livre memoriza seu login. Para adicionar uma conta diferente:
+      </p>
+      <div style="display:flex; flex-direction:column; gap:0.75rem;">
+        <a href="https://www.mercadolivre.com.br" target="_blank" class="btn btn--ghost btn--sm" style="text-align:center; justify-content:center;">
+          1. Abrir ML e Sair (Logout) ↗
+        </a>
+        <a href="/api/auth/ml/login" class="btn btn--primary btn--sm" style="text-align:center; justify-content:center;">
+          2. Conectar Nova Conta
+        </a>
+      </div>
+    </div>
+  </dialog>
 
   <script src="/js/navigation.js" defer></script>
   <script src="/js/config.js" defer></script>
