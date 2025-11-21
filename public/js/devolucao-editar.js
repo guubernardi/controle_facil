@@ -282,6 +282,7 @@
       id_venda:        readFirst(ORDER_ID_SELECTORS),
       cliente_nome:    readFirst(CLIENTE_SELECTORS),
       loja_nome:       readFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
+
       data_compra:     readFirst(['#data_compra','input[name="data_compra"]','.js-data']),
       status:          readFirst(['#status','select[name="status"]']),
       sku:             (readFirst(['#sku','input[name="sku"]','.js-sku']) || '').toUpperCase(),
@@ -447,6 +448,55 @@
 
     if (!LOG_LOCKED) setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
+
+    // ====== NOVO: preencher Status/Motivo reais do ML ======
+    try {
+      var realStatus = null;
+      if (d.raw) {
+        if (d.raw.claim && d.raw.claim.status) {
+          realStatus = d.raw.claim.status;
+        } else if (d.raw.return && d.raw.return.status) {
+          realStatus = d.raw.return.status;
+        } else if (d.raw.shipping && d.raw.shipping.status) {
+          realStatus = d.raw.shipping.status;
+        }
+      }
+      // Fallback: campos já achatados, se o backend mandar
+      if (!realStatus) {
+        realStatus = firstNonEmpty(
+          d.ml_return_status,
+          d.ml_shipping_status,
+          d.status // pelo menos mostra algo
+        );
+      }
+
+      var elStatusReal = $('ml_status_real');
+      if (elStatusReal) {
+        elStatusReal.value = realStatus
+          ? String(realStatus).replace(/_/g, ' ')
+          : '—';
+      }
+
+      var realReason = null;
+      if (d.raw && d.raw.claim) {
+        realReason = firstNonEmpty(
+          d.raw.claim.reason_detail,
+          d.raw.claim.title,
+          d.raw.claim.reason_name,
+          d.raw.claim.reason && (d.raw.claim.reason.description || d.raw.claim.reason.name)
+        );
+      }
+      if (!realReason) {
+        realReason = firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
+      }
+
+      var elReasonReal = $('ml_motivo_real');
+      if (elReasonReal) {
+        elReasonReal.value = realReason || '—';
+        elReasonReal.title = realReason || '';
+      }
+    } catch(_){}
+    // ====== FIM NOVO BLOCO ======
 
     fillMlSummaryFromCurrent();
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);

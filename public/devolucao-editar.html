@@ -140,6 +140,7 @@
           </div>
 
           <div class="row-group">
+            <!-- Status interno + Status Real (ML) -->
             <div class="row">
               <label for="status">Status (interno)</label>
               <select id="status" name="status">
@@ -150,8 +151,24 @@
                 <option value="rejeitado">Rejeitado</option>
                 <option value="cancelado">Cancelado</option>
               </select>
+
+              <div style="margin-top: 8px;">
+                <label for="ml_status_real"
+                       style="font-size: 0.75rem; color: #64748b; display:block; margin-bottom: 2px;">
+                  Status Real (ML)
+                </label>
+                <input
+                  id="ml_status_real"
+                  type="text"
+                  class="input-readonly"
+                  readonly
+                  placeholder="Ex.: shipped / delivered / opened"
+                  style="background-color:#f1f5f9;"
+                />
+              </div>
             </div>
 
+            <!-- Motivo interno + Motivo Real (ML) -->
             <div class="row">
               <label for="tipo_reclamacao">Motivo da reclamação</label>
               <select id="tipo_reclamacao" name="tipo_reclamacao">
@@ -162,6 +179,21 @@
                 <option value="arrependimento_cliente">Arrependimento do cliente</option>
                 <option value="entrega_atrasada">Entrega atrasada</option>
               </select>
+
+              <div style="margin-top: 8px;">
+                <label for="ml_motivo_real"
+                       style="font-size: 0.75rem; color: #64748b; display:block; margin-bottom: 2px;">
+                  Motivo Real / Comentário (ML)
+                </label>
+                <input
+                  id="ml_motivo_real"
+                  type="text"
+                  class="input-readonly"
+                  readonly
+                  placeholder="Ex.: Produto chegou amassado e molhado"
+                  style="background-color:#f1f5f9;"
+                />
+              </div>
             </div>
           </div>
 
