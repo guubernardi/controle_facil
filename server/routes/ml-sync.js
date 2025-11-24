@@ -11,6 +11,24 @@ const qOf = (req) => (req?.q || query);
 // formato aceito pelo ML nos filtros de range: 2025-10-22T12:34:56.789-0300
 const fmtML = (d) => dayjs(d).format('YYYY-MM-DDTHH:mm:ss.SSSZZ');
 
+/** Helper genérico para testar colunas de uma tabela */
+async function tableHasColumns(table, cols) {
+  const { rows } = await query(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name   = $1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {};
+  for (const c of cols) out[c] = set.has(c);
+  return out;
+}
+
+// cache simples para saber se devolucoes tem tenant_id
+let HAS_TENANT_COL = null;
+
 module.exports = function registerMlSync(app, opts = {}) {
   const router = express.Router();
   const externalAddReturnEvent = opts.addReturnEvent;
@@ -101,19 +119,88 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   }
 
-  async function ensureReturnByOrder(req, { order_id, sku = null, loja_nome = null, created_by = 'ml-sync' }) {
+  /**
+   * Garante que exista uma devolução para o order_id.
+   * Se a tabela tiver tenant_id, procura primeiro pelo tenant atual; se não achar,
+   * "adota" registros órfãos (tenant_id IS NULL) para o tenant atual; por fim, cria.
+   */
+  async function ensureReturnByOrder(req, {
+    order_id,
+    sku = null,
+    loja_nome = null,
+    created_by = 'ml-sync'
+  }) {
     const q = qOf(req);
-    const { rows } = await q(
-      `SELECT id FROM devolucoes WHERE id_venda::text = $1 LIMIT 1`,
-      [String(order_id)]
-    );
-    if (rows[0]?.id) return rows[0].id;
+    const orderIdStr = String(order_id);
 
-    const ins = await q(`
-      INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id
-    `, [String(order_id), sku || null, loja_nome || 'Mercado Livre', created_by]);
+    // descobre tenant atual (se existir)
+    const tenantId = req.session?.user?.tenant_id || req.tenant?.id || null;
+
+    // descobre se existe coluna tenant_id (cacheada)
+    if (HAS_TENANT_COL === null) {
+      const cols = await tableHasColumns('devolucoes', ['tenant_id']);
+      HAS_TENANT_COL = !!cols.tenant_id;
+    }
+
+    // 1) Se temos coluna e tenant, tenta achar do tenant
+    if (HAS_TENANT_COL && tenantId) {
+      const r1 = await q(
+        `SELECT id, tenant_id
+           FROM devolucoes
+          WHERE id_venda::text = $1
+            AND tenant_id = $2
+          LIMIT 1`,
+        [orderIdStr, tenantId]
+      );
+      if (r1.rows[0]?.id) return r1.rows[0].id;
+
+      // 2) Não tem pro tenant? tenta achar órfão e "adota"
+      const rOrf = await q(
+        `SELECT id, tenant_id
+           FROM devolucoes
+          WHERE id_venda::text = $1
+            AND tenant_id IS NULL
+          LIMIT 1`,
+        [orderIdStr]
+      );
+      if (rOrf.rows[0]?.id) {
+        try {
+          await q(
+            `UPDATE devolucoes
+                SET tenant_id = $1, updated_at = now()
+              WHERE id = $2`,
+            [tenantId, rOrf.rows[0].id]
+          );
+        } catch (_) { /* se houver constraint/erro, seguimos */ }
+        return rOrf.rows[0].id;
+      }
+    } else {
+      // Compat antigo: sem coluna tenant_id
+      const rAny = await q(
+        `SELECT id
+           FROM devolucoes
+          WHERE id_venda::text = $1
+          LIMIT 1`,
+        [orderIdStr]
+      );
+      if (rAny.rows[0]?.id) return rAny.rows[0].id;
+    }
+
+    // 3) Não achou: cria (com tenant quando possível)
+    let ins;
+    if (HAS_TENANT_COL && tenantId) {
+      ins = await q(`
+        INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by, tenant_id)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+      `, [orderIdStr, sku || null, loja_nome || 'Mercado Livre', created_by, tenantId]);
+    } else {
+      ins = await q(`
+        INSERT INTO devolucoes (id_venda, sku, loja_nome, created_by)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+      `, [orderIdStr, sku || null, loja_nome || 'Mercado Livre', created_by]);
+    }
 
     const id = ins.rows[0].id;
 
@@ -121,9 +208,9 @@ module.exports = function registerMlSync(app, opts = {}) {
       returnId: id,
       type: 'ml-sync',
       title: 'Criação por ML Sync',
-      message: `Stub criado a partir da API do Mercado Livre (order ${order_id})`,
-      meta: { order_id, loja_nome: loja_nome || 'Mercado Livre' },
-      idemp_key: `ml-sync:create:${order_id}`
+      message: `Stub criado a partir da API do Mercado Livre (order ${orderIdStr})`,
+      meta: { order_id: orderIdStr, loja_nome: loja_nome || 'Mercado Livre' },
+      idemp_key: `ml-sync:create:${orderIdStr}`
     });
 
     return id;
@@ -442,7 +529,8 @@ module.exports = function registerMlSync(app, opts = {}) {
       const accounts = wantAll ? await resolveMlAccounts(req) : [await getAuthedAxios(req)];
 
       // checar se coluna tipo_reclamacao existe uma vez por execução
-      const hasTipoCol = await tableHasColumns('devolucoes', ['tipo_reclamacao']);
+      const colInfo = await tableHasColumns('devolucoes', ['tipo_reclamacao']);
+      const hasTipoCol = !!colInfo.tipo_reclamacao;
 
       let processed = 0, created = 0, updated = 0, events = 0, errors = 0, skipped = 0;
       const paramsUsed = [];
@@ -553,7 +641,7 @@ module.exports = function registerMlSync(app, opts = {}) {
               continue;
             }
 
-            // ----- NOVO: mapeia fluxo compatível + status interno coerente
+            // ----- mapeia fluxo compatível + status interno coerente
             const flow = mapFlowFromReturn(ret?.status);
             const internal = mapInternalStatusFromFlow(flow);
             const sku = normalizeSku(it, claimDet);
@@ -592,14 +680,21 @@ module.exports = function registerMlSync(app, opts = {}) {
                   WHERE id = $6`,
                 [flow, String(ret?.status || ''), internal, sku, lojaNome, returnId]
               );
-                updated++;
+              updated++;
             }
-                // persiste tipo_reclamacao separadamente (idempotente)
-                if (!dry && hasTipoCol.tipo_reclamacao && tipoSug) {
-                  try {
-                    await qOf(req)(`UPDATE devolucoes SET tipo_reclamacao = $1 WHERE id = $2 AND (COALESCE(tipo_reclamacao,'') = '')`, [tipoSug, returnId]);
-                  } catch (e) { /* ignore persistence errors */ }
-                }
+
+            // persiste tipo_reclamacao separadamente (idempotente)
+            if (!dry && hasTipoCol && tipoSug) {
+              try {
+                await qOf(req)(
+                  `UPDATE devolucoes
+                      SET tipo_reclamacao = $1
+                    WHERE id = $2
+                      AND (COALESCE(tipo_reclamacao,'') = '')`,
+                  [tipoSug, returnId]
+                );
+              } catch (e) { /* ignore persistence errors */ }
+            }
 
             const idemp = `ml-claim:${account.user_id}:${claimId}:${order_id}`;
             if (!dry) {
