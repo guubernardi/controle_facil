@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Configurações - Controle Fácil</title>
 
+  <!-- Fontes -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
+  <!-- CSS principal -->
   <link rel="stylesheet" href="/css/navigation.css" />
   <link rel="stylesheet" href="/css/config.css" />
   <link rel="shortcut icon" href="/assets/img/favicon.png" type="image/png">
@@ -16,78 +18,141 @@
   <style>
     /* Toast */
     .toast {
-      position: fixed; bottom: 2rem; right: 2rem;
-      background: #1e293b; color: #fff;
-      padding: 0.75rem 1.25rem; border-radius: 0.5rem;
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: #1e293b;
+      color: #fff;
+      padding: 0.75rem 1.25rem;
+      border-radius: 0.5rem;
       box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-      transform: translateY(100px); opacity: 0;
-      transition: all 0.3s; z-index: 9999;
-      display: flex; align-items: center; gap: 1rem;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.875rem;
     }
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast-success { background: #22c55e; } 
     .toast-error { background: #ef4444; }
 
-    /* Lista de Contas */
+    /* Lista de Contas ML */
     .ml-accounts-list {
-      list-style: none; padding: 0; margin-top: 12px;
-      display: flex; flex-direction: column; gap: 8px;
-      border-top: 1px solid #f1f5f9; padding-top: 12px;
+      list-style: none;
+      padding: 0;
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-top: 1px solid #f1f5f9;
+      padding-top: 12px;
     }
     .ml-account-item {
-      display: flex; justify-content: space-between; align-items: center;
-      background: #f8fafc; border: 1px solid #e2e8f0;
-      padding: 10px 14px; border-radius: 8px; font-size: 0.9rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.9rem;
     }
-    .ml-acc-info { display: flex; align-items: center; gap: 10px; }
+    .ml-acc-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
     .ml-acc-avatar { 
-      width: 28px; height: 28px; background: #ffe600; color: #2d3277; 
-      border-radius: 50%; display: flex; align-items: center; justify-content: center; 
-      font-weight: bold; font-size: 12px;
+      width: 28px;
+      height: 28px;
+      background: #ffe600;
+      color: #2d3277;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center; 
+      font-weight: bold;
+      font-size: 12px;
     }
     .ml-acc-actions button {
-      background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.8rem;
-      padding: 4px 8px; border-radius: 4px;
+      background: none;
+      border: none;
+      color: #ef4444;
+      cursor: pointer;
+      font-size: 0.8rem;
+      padding: 4px 8px;
+      border-radius: 4px;
     }
     .ml-acc-actions button:hover { background: #fee2e2; }
   </style>
 </head>
 <body class="settings-page" data-page="settings">
 
+  <!-- Sidebar -->
   <aside id="sidebar" class="sidebar">
     <div class="sidebar-header">
-      <a href="/home.html" class="sidebar-logo"><span class="sidebar-logo-text">Controle Fácil</span></a>
-      <button id="sidebar-toggle" class="sidebar-toggle">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      <a href="/home.html" class="sidebar-logo">
+        <span class="sidebar-logo-text">Controle Fácil</span>
+      </a>
+      <button id="sidebar-toggle" class="sidebar-toggle" type="button">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2">
+          <path d="M3 6h18M3 12h18M3 18h18"/>
+        </svg>
       </button>
     </div>
     <nav class="sidebar-nav">
-      <a class="sidebar-nav-item" href="/home.html"><span class="sidebar-nav-text">Home</span></a>
-      <a class="sidebar-nav-item" href="/central.html"><span class="sidebar-nav-text">Central</span></a>
-      <a class="sidebar-nav-item" href="/index.html"><span class="sidebar-nav-text">Devoluções</span></a>
-      <a class="sidebar-nav-item active" href="/settings/config.html"><span class="sidebar-nav-text">Configurações</span></a>
+      <a class="sidebar-nav-item" href="/home.html">
+        <span class="sidebar-nav-text">Home</span>
+      </a>
+      <a class="sidebar-nav-item" href="/central.html">
+        <span class="sidebar-nav-text">Central</span>
+      </a>
+      <a class="sidebar-nav-item" href="/index.html">
+        <span class="sidebar-nav-text">Devoluções</span>
+      </a>
+      <a class="sidebar-nav-item active" href="/settings/config.html">
+        <span class="sidebar-nav-text">Configurações</span>
+      </a>
     </nav>
   </aside>
 
+  <!-- Conteúdo principal -->
   <main class="conteudo-principal">
     <div class="container">
       <div class="grade-conteudo">
+        
+        <!-- Menu lateral de abas -->
         <aside class="barra-lateral">
           <nav class="menu">
-            <a href="#integracoes" class="item-menu ativo" data-target="integracoes">Integrações</a>
-            <a href="#empresa" class="item-menu" data-target="empresa">Empresa</a>
+            <a href="#integracoes" class="item-menu ativo" data-target="integracoes">
+              Integrações
+            </a>
+            <a href="#empresa" class="item-menu" data-target="empresa">
+              Empresa
+            </a>
           </nav>
         </aside>
 
+        <!-- Área de conteúdo -->
         <section class="area-conteudo">
+          
+          <!-- Aba Integrações -->
           <section id="integracoes" class="config-pane active">
             <h2 class="titulo-secao-main">Marketplaces</h2>
             <div class="integrations-grid">
               
+              <!-- Card Mercado Livre -->
               <article class="integration-card" id="ml-card">
                 <header class="integration-head">
                   <div class="integration-logo">
-                    <img src="/assets/img/logo_mercadolivre.png" alt="ML" width="40" onerror="this.style.display='none'">
+                    <img src="/assets/img/logo_mercadolivre.png"
+                         alt="Mercado Livre"
+                         width="40"
+                         onerror="this.style.display='none'">
                   </div>
                   <div>
                     <h3>Mercado Livre</h3>
@@ -98,20 +163,24 @@
                 </header>
 
                 <div class="integration-actions">
-                  <button class="btn btn--primary btn--sm" id="btn-ml-action">
+                  <button class="btn btn--primary btn--sm" id="btn-ml-action" type="button">
                     Conectar Conta
                   </button>
-                  <button class="btn btn--ghost btn--sm" id="btn-sync-ml" hidden>
+                  <button class="btn btn--ghost btn--sm" id="btn-sync-ml" type="button" hidden>
                     Sincronizar
                   </button>
                 </div>
                 
                 <div class="integration-extra">
                   <div style="margin-top:10px;">
-                    <strong style="font-size:0.85rem; color:#64748b;">Contas Conectadas:</strong>
+                    <strong style="font-size:0.85rem; color:#64748b;">
+                      Contas Conectadas:
+                    </strong>
                   </div>
                   <ul id="ml-accounts-list" class="ml-accounts-list">
-                    <li style="color:#94a3b8; font-style:italic; padding:10px;">Carregando...</li>
+                    <li style="color:#94a3b8; font-style:italic; padding:10px;">
+                      Carregando...
+                    </li>
                   </ul>
                 </div>
               </article>
@@ -119,33 +188,50 @@
             </div>
           </section>
           
+          <!-- Aba Empresa -->
           <section id="empresa" class="config-pane" hidden>
-             <h2>Dados da Empresa</h2>
-             <p>Em breve...</p>
+            <h2>Dados da Empresa</h2>
+            <p>Em breve...</p>
           </section>
+
         </section>
       </div>
     </div>
   </main>
 
-  <div id="toast" class="toast">
-    <div class="toast-content"><strong id="toast-titulo"></strong><div id="toast-descricao"></div></div>
+  <!-- Toast -->
+  <div id="toast" class="toast" role="status" aria-live="polite">
+    <div class="toast-content">
+      <strong id="toast-titulo"></strong>
+      <div id="toast-descricao"></div>
+    </div>
   </div>
 
-  <dialog id="dlg-ml-help" class="modal-detalhe" style="max-width: 400px; border:1px solid #e2e8f0; border-radius:12px; padding:0;">
+  <!-- Help multi-conta ML -->
+  <dialog id="dlg-ml-help" class="modal-detalhe"
+          style="max-width: 400px; border:1px solid #e2e8f0; border-radius:12px; padding:0;">
     <div class="modal-card" style="padding:1.5rem;">
       <header style="display:flex;justify-content:space-between;margin-bottom:1rem;">
         <h3 style="margin:0;font-size:1.1rem;">Nova Conta</h3>
-        <button id="close-help" style="background:none;border:none;font-size:1.2rem;cursor:pointer;">✕</button>
+        <button id="close-help"
+                type="button"
+                style="background:none;border:none;font-size:1.2rem;cursor:pointer;">
+          ✕
+        </button>
       </header>
       <p style="font-size:0.9rem; color:#475569; line-height:1.5; margin-bottom:1.5rem;">
         O Mercado Livre memoriza seu login. Para adicionar uma conta diferente:
       </p>
       <div style="display:flex; flex-direction:column; gap:0.75rem;">
-        <a href="https://www.mercadolivre.com.br" target="_blank" class="btn btn--ghost btn--sm" style="text-align:center; justify-content:center;">
+        <a href="https://www.mercadolivre.com.br"
+           target="_blank"
+           class="btn btn--ghost btn--sm"
+           style="text-align:center; justify-content:center;">
           1. Abrir ML e Sair (Logout) ↗
         </a>
-        <a href="/api/auth/ml/login" class="btn btn--primary btn--sm" style="text-align:center; justify-content:center;">
+        <a href="/api/auth/ml/login"
+           class="btn btn--primary btn--sm"
+           style="text-align:center; justify-content:center;">
           2. Conectar Nova Conta
         </a>
       </div>
