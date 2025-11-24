@@ -377,7 +377,8 @@ function flowFromClaimPreferReturn(claim = {}, ret = {}) {
 
 /* ======================= 0) Claim & Messages ======================= */
 
-router.get('/claims/:id', async (req, res) => {
+// >>> AQUI é a mudança importante: só aceita id numérico
+router.get('/claims/:id(\\d+)', async (req, res) => {
   try {
     const claimId = String(req.params.id || '').replace(/\D/g, '');
     if (!claimId) return res.status(400).json({ error: 'invalid_claim_id' });
