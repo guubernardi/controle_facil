@@ -19,10 +19,11 @@ router.get('/', async (req, res) => {
     const params       = [];
     const whereClauses = [];
 
-    // Filtro por Tenant
-    if (req.session?.user?.tenant_id) {
-      whereClauses.push(`tenant_id = $${params.length + 1}`);
-      params.push(req.session.user.tenant_id);
+    // Filtro por Tenant (fallback para linhas antigas sem tenant_id)
+    const tenantId = req.session?.user?.tenant_id || req.tenant?.id || null;
+    if (tenantId) {
+      whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
+      params.push(tenantId);
     }
 
     // Busca (Texto)
@@ -120,10 +121,28 @@ router.get('/sync', (req, res) => {
 // ==========================================
 router.get('/:id', async (req, res) => {
   try {
-    const { rows } = await query(
-      'SELECT * FROM devolucoes WHERE id = $1 OR id_venda = $1',
-      [req.params.id]
-    );
+    const tenantId = req.session?.user?.tenant_id || req.tenant?.id || null;
+    const idParam  = req.params.id;
+
+    let rows;
+    if (tenantId) {
+      const { rows: r } = await query(
+        `SELECT *
+           FROM devolucoes
+          WHERE (id = $1 OR id_venda = $1)
+            AND (tenant_id = $2 OR tenant_id IS NULL)
+          LIMIT 1`,
+        [idParam, tenantId]
+      );
+      rows = r;
+    } else {
+      const { rows: r } = await query(
+        'SELECT * FROM devolucoes WHERE id = $1 OR id_venda = $1 LIMIT 1',
+        [idParam]
+      );
+      rows = r;
+    }
+
     if (!rows.length) {
       return res.status(404).json({ error: 'Não encontrado' });
     }
