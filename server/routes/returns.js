@@ -5,11 +5,45 @@ const express = require('express');
 const router  = express.Router();
 const { query } = require('../db');
 
+// Usa o pool da request (quando existir) ou o global
+const qOf = (req) => req.q || query;
+
+/** Helper genérico para testar colunas de uma tabela */
+async function tableHasColumns(q, table, cols) {
+  const { rows } = await q(
+    `SELECT column_name
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name   = $1`,
+    [table]
+  );
+  const set = new Set(rows.map(r => r.column_name));
+  const out = {};
+  for (const c of cols) out[c] = set.has(c);
+  return out;
+}
+
+// cache simples para saber se devolucoes tem tenant_id
+let HAS_TENANT_COL = null;
+
+async function hasTenantColumn(q) {
+  if (HAS_TENANT_COL !== null) return HAS_TENANT_COL;
+  try {
+    const cols = await tableHasColumns(q, 'devolucoes', ['tenant_id']);
+    HAS_TENANT_COL = !!cols.tenant_id;
+  } catch (err) {
+    console.warn('[returns] Falha ao checar tenant_id:', err.message || err);
+    HAS_TENANT_COL = false;
+  }
+  return HAS_TENANT_COL;
+}
+
 // ==========================================
 // 1. LISTAGEM (Kanban / Scanner / Lista)
 // ==========================================
 router.get('/', async (req, res) => {
   try {
+    const q         = qOf(req);
     const limit     = parseInt(req.query.limit || '50', 10);
     const offset    = parseInt(req.query.offset || '0', 10);
     const search    = (req.query.search || '').trim();
@@ -19,9 +53,10 @@ router.get('/', async (req, res) => {
     const params       = [];
     const whereClauses = [];
 
-    // Filtro por Tenant (fallback para linhas antigas sem tenant_id)
-    const tenantId = req.session?.user?.tenant_id || req.tenant?.id || null;
-    if (tenantId) {
+    // Filtro por Tenant (mas só se a coluna existir)
+    const tenantId   = req.session?.user?.tenant_id || req.tenant?.id || null;
+    const hasTenant  = await hasTenantColumn(q);
+    if (tenantId && hasTenant) {
       whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
       params.push(tenantId);
     }
@@ -43,7 +78,7 @@ router.get('/', async (req, res) => {
       whereClauses.push(`created_at >= NOW() - INTERVAL '${rangeDays} days'`);
     }
 
-    // Filtro por Status (Mapeamento Kanban)
+    // Filtro por Status (Mapeamento Kanban / abas)
     if (status) {
       if (status === 'em_transporte') {
         whereClauses.push(`(
@@ -85,8 +120,8 @@ router.get('/', async (req, res) => {
     const countSql = `SELECT COUNT(*) AS total FROM devolucoes ${whereSql}`;
 
     const [rowsRes, countRes] = await Promise.all([
-      query(sql,   [...params, limit, offset]),
-      query(countSql, params)
+      q(sql,      [...params, limit, offset]),
+      q(countSql, params)
     ]);
 
     res.json({
@@ -121,12 +156,15 @@ router.get('/sync', (req, res) => {
 // ==========================================
 router.get('/:id', async (req, res) => {
   try {
+    const q        = qOf(req);
     const tenantId = req.session?.user?.tenant_id || req.tenant?.id || null;
     const idParam  = req.params.id;
 
+    const hasTenant = await hasTenantColumn(q);
+
     let rows;
-    if (tenantId) {
-      const { rows: r } = await query(
+    if (tenantId && hasTenant) {
+      const { rows: r } = await q(
         `SELECT *
            FROM devolucoes
           WHERE (id = $1 OR id_venda = $1)
@@ -136,7 +174,7 @@ router.get('/:id', async (req, res) => {
       );
       rows = r;
     } else {
-      const { rows: r } = await query(
+      const { rows: r } = await q(
         'SELECT * FROM devolucoes WHERE id = $1 OR id_venda = $1 LIMIT 1',
         [idParam]
       );
@@ -155,6 +193,7 @@ router.get('/:id', async (req, res) => {
 
 router.patch('/:id', async (req, res) => {
   try {
+    const q      = qOf(req);
     const { id } = req.params;
     const body   = req.body;
 
@@ -190,7 +229,7 @@ router.patch('/:id', async (req, res) => {
        WHERE id = $1
        RETURNING *
     `;
-    const { rows } = await query(sql, vals);
+    const { rows } = await q(sql, vals);
 
     if (!rows.length) {
       return res.status(404).json({ error: 'Não encontrado' });
@@ -208,10 +247,11 @@ router.patch('/:id', async (req, res) => {
 // ==========================================
 router.patch('/:id/cd/receive', async (req, res) => {
   try {
+    const q = qOf(req);
     const { id } = req.params;
     const { responsavel, when, updated_by } = req.body;
 
-    await query(`
+    await q(`
       UPDATE devolucoes
          SET cd_recebido_em = $1,
              cd_responsavel = $2,
@@ -222,7 +262,7 @@ router.patch('/:id/cd/receive', async (req, res) => {
 
     // Loga na timeline (se a tabela existir)
     try {
-      await query(`
+      await q(`
         INSERT INTO return_events (return_id, type, title, message, created_by)
         VALUES ($1, 'logistica', 'Recebido no CD', $2, $3)
       `, [
