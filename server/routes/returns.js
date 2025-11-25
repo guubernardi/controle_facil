@@ -39,7 +39,7 @@ async function hasTenantColumn(q) {
 }
 
 // ==========================================
-// 1. LISTAGEM (Kanban / Scanner / Lista)
+// 1. LISTAGEM (Kanban / Lista)
 // ==========================================
 router.get('/', async (req, res) => {
   try {
@@ -53,9 +53,9 @@ router.get('/', async (req, res) => {
     const params       = [];
     const whereClauses = [];
 
-    // Filtro por Tenant (mas só se a coluna existir)
-    const tenantId   = req.session?.user?.tenant_id || req.tenant?.id || null;
-    const hasTenant  = await hasTenantColumn(q);
+    // Filtro por Tenant (se coluna existir)
+    const tenantId  = req.session?.user?.tenant_id || req.tenant?.id || null;
+    const hasTenant = await hasTenantColumn(q);
     if (tenantId && hasTenant) {
       whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
       params.push(tenantId);
@@ -78,7 +78,8 @@ router.get('/', async (req, res) => {
       whereClauses.push(`created_at >= NOW() - INTERVAL '${rangeDays} days'`);
     }
 
-    // Filtro por Status (Mapeamento Kanban / abas)
+    // Filtro por Status (seria usado se você quiser filtrar no back,
+    // mas hoje as abas filtram no front. Mantive por compat.)
     if (status) {
       if (status === 'em_transporte') {
         whereClauses.push(`(
@@ -137,14 +138,13 @@ router.get('/', async (req, res) => {
 // ==========================================
 // 2. SYNC (importar devoluções via ML Sync)
 // ==========================================
-// IMPORTANTE: precisa vir ANTES de '/:id' senão o Express
-// interpreta 'sync' como sendo o :id
+// IMPORTANTE: precisa vir ANTES de '/:id'
 router.get('/sync', (req, res) => {
   const { days = '7', silent = '0' } = req.query;
 
   const qs = new URLSearchParams();
   if (days) qs.set('days', String(days));
-  qs.set('all', '1');                 // roda para TODAS as contas conectadas
+  qs.set('all', '1'); // roda para TODAS as contas conectadas
   if (silent) qs.set('silent', String(silent));
 
   // endpoint real do import está em /api/ml/claims/import
