@@ -229,7 +229,7 @@ class DevolucoesFeed {
     const dataFmt  = d.created_at ? new Date(d.created_at).toLocaleDateString("pt-BR") : "—";
     const valorFmt = Number(d.valor_produto || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
     const freteFmt = Number(d.valor_frete   || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    const fotoUrl  = d.foto_produto || "assets/img/box.png"; // Placeholder
+    const fotoUrl  = d.foto_produto || "assets/img/box.jpg"; // Placeholder
     
     // Status
     const statusML    = this.traduzirStatusML(d.ml_return_status);
