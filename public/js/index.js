@@ -232,11 +232,11 @@ class DevolucoesFeed {
     const fotoUrl  = d.foto_produto || "assets/img/box.png"; // Placeholder
     
     // Status
-    const statusML   = this.traduzirStatusML(d.ml_return_status);
+    const statusML    = this.traduzirStatusML(d.ml_return_status);
     const statusClass = this.getClassStatusML(d.ml_return_status);
 
-    const sInterno    = String(d.status || "").toLowerCase();
-    const podeReceber = (d.log_status === "recebido_cd" || d.ml_return_status === "delivered");
+    const sInterno     = String(d.status || "").toLowerCase();
+    const podeReceber  = (d.ml_return_status === "delivered" && d.log_status !== "recebido_cd");
     const jaFinalizado = ["aprovado", "rejeitado", "concluida", "concluido", "finalizado"]
       .includes(sInterno);
 

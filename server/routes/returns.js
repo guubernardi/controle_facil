@@ -78,8 +78,7 @@ router.get('/', async (req, res) => {
       whereClauses.push(`created_at >= NOW() - INTERVAL '${rangeDays} days'`);
     }
 
-    // Filtro por Status (seria usado se você quiser filtrar no back,
-    // mas hoje as abas filtram no front. Mantive por compat.)
+    // Filtro por Status (opcional, mantido por compatibilidade)
     if (status) {
       if (status === 'em_transporte') {
         whereClauses.push(`(
@@ -108,9 +107,20 @@ router.get('/', async (req, res) => {
       : '';
 
     const sql = `
-      SELECT id, id_venda, cliente_nome, loja_nome, sku,
-             status, log_status, ml_return_status, ml_claim_id,
-             updated_at, created_at, valor_produto, valor_frete
+      SELECT id,
+             id_venda,
+             cliente_nome,
+             loja_nome,
+             sku,
+             foto_produto,            -- ✅ importante pro front
+             status,
+             log_status,
+             ml_return_status,
+             ml_claim_id,
+             updated_at,
+             created_at,
+             valor_produto,
+             valor_frete
         FROM devolucoes
         ${whereSql}
        ORDER BY updated_at DESC
@@ -138,7 +148,6 @@ router.get('/', async (req, res) => {
 // ==========================================
 // 2. SYNC (importar devoluções via ML Sync)
 // ==========================================
-// IMPORTANTE: precisa vir ANTES de '/:id'
 router.get('/sync', (req, res) => {
   const { days = '7', silent = '0' } = req.query;
 
