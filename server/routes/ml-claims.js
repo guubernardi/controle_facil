@@ -377,7 +377,7 @@ function flowFromClaimPreferReturn(claim = {}, ret = {}) {
 
 /* ======================= 0) Claim & Messages ======================= */
 
-// >>> AQUI é a mudança importante: só aceita id numérico
+// Aceita apenas id numérico
 router.get('/claims/:id(\\d+)', async (req, res) => {
   try {
     const claimId = String(req.params.id || '').replace(/\D/g, '');
@@ -475,7 +475,8 @@ const TMP_DIR = path.join(__dirname, '..', '..', 'tmp-upload');
 fs.mkdirSync(TMP_DIR, { recursive: true });
 const upload = multer({ dest: TMP_DIR });
 
-router.post('/claims/:id/attachments-evidences', upload.single('file'), async (req, res) => {
+/** NOVO (doc atual): upload para returns/attachments */
+router.post('/claims/:id/returns/attachments', upload.single('file'), async (req, res) => {
   const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
   if (!req.file) return res.status(400).json({ error: 'file é obrigatório (multipart/form-data)' });
   try {
@@ -485,23 +486,28 @@ router.post('/claims/:id/attachments-evidences', upload.single('file'), async (r
       contentType: req.file.mimetype || 'application/octet-stream'
     });
     const extraHeaders = form.getHeaders();
-    const xPublic = req.get('x-public');
-    if (xPublic) extraHeaders['x-public'] = xPublic;
     const r = await mlFetchRaw(
       req,
-      `${ML_V1}/claims/${claimId}/attachments-evidences`,
+      `${ML_V1}/claims/${claimId}/returns/attachments`,
       { method: 'POST', headers: extraHeaders, body: form }
     );
     const out = await r.json().catch(() => ({}));
     fs.unlink(req.file.path, () => {});
-    const file_name = out?.file_name || out?.filename || null;
-    return ok(res, { file_name });
+    return ok(res, { file_name: out?.file_name || null, user_id: out?.user_id || null });
   } catch (e) {
     fs.unlink(req.file?.path || '', () => {});
     return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
 
+/** LEGADO — mantido como alias chamando a rota nova acima */
+router.post('/claims/:id/attachments-evidences', (req, res, next) => {
+  // redireciona internamente para a rota nova sem mudar o front antigo
+  req.url = `/claims/${encodeURIComponent(String(req.params.id||'').replace(/\D/g,''))}/returns/attachments`;
+  return router.handle(req, res, next);
+});
+
+// (Opcional) endpoints legados de GET/download — ainda existem na API antiga:
 router.get('/claims/:id/attachments-evidences/:attachmentId', async (req, res) => {
   try {
     const claimId = encodeURIComponent(String(req.params.id || '').replace(/\D/g, ''));
@@ -619,6 +625,76 @@ router.get('/returns/:return_id/reviews', async (req, res) => {
     res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
   }
 });
+
+/** NOVO: endpoint unificado de review (OK/Falha) por return_id */
+router.post('/returns/:return_id/return-review', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const returnId = String(req.params.return_id || '').replace(/\D/g, '');
+    if (!returnId) return res.status(400).json({ error: 'invalid_return_id' });
+
+    const body = req.body ?? null; // {} => OK ; [ ... ] => fail
+    const r = await mlFetch(req, `${ML_V1}/returns/${encodeURIComponent(returnId)}/return-review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: (body && Object.keys(body).length) || Array.isArray(body) ? JSON.stringify(body) : '{}'
+    });
+    return res.status(200).json(r || { ok: true });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
+
+/** Razões (SRF*) para review falho */
+router.get('/returns/reasons', async (req, res) => {
+  try {
+    const flow = String(req.query.flow || '').trim();       // seller_return_failed
+    const claimId = String(req.query.claim_id || '').replace(/\D/g, '');
+    if (!flow || !claimId) return res.status(400).json({ error: 'missing_params', detail: 'flow e claim_id são obrigatórios' });
+    const url = `${ML_V1}/returns/reasons?flow=${encodeURIComponent(flow)}&claim_id=${encodeURIComponent(claimId)}`;
+    const data = await mlFetch(req, url);
+    return res.json(Array.isArray(data) ? data : (data || []));
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
+
+/** ALIASES de compatibilidade para front antigo (claim->review ok/fail) */
+router.post('/claims/:id/actions/return-review-ok', async (req, res) => {
+  try {
+    const claimId = String(req.params.id || '').replace(/\D/g, '');
+    const raw = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`);
+    const ret = Array.isArray(raw) ? (raw[0] || null) : (raw || null);
+    if (!ret?.id) return res.status(404).json({ error: 'return_not_found' });
+    // body vazio = OK
+    const r = await mlFetch(req, `${ML_V1}/returns/${ret.id}/return-review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    return res.json(r || { ok: true });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
+
+router.post('/claims/:id/actions/return-review-fail', express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const claimId = String(req.params.id || '').replace(/\D/g, '');
+    const raw = await mlFetch(req, `${ML_V2}/claims/${encodeURIComponent(claimId)}/returns`);
+    const ret = Array.isArray(raw) ? (raw[0] || null) : (raw || null);
+    if (!ret?.id) return res.status(404).json({ error: 'return_not_found' });
+
+    const body = Array.isArray(req.body) ? req.body : (req.body ? [req.body] : []);
+    if (!body.length) return res.status(400).json({ error: 'missing_reviews', detail: 'Envie ao menos uma review' });
+
+    const r = await mlFetch(req, `${ML_V1}/returns/${ret.id}/return-review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    return res.json(r || { ok: true });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e.message, detail: e.body || null, metadata: e.metadata || null });
+  }
+});
+
+/* ======================= Orders (apoio) ======================= */
 
 router.get('/orders/:order_id', async (req, res) => {
   try {
@@ -751,7 +827,7 @@ router.get('/claims/:claim_id/returns/enriched', async (req, res) => {
   }
 });
 
-/* ======================= 6) Returns state (helper) ======================= */
+/* ======================= Returns state (helper) ======================= */
 
 router.get('/returns/state', async (req, res) => {
   const claimId = String(req.query.claim_id || req.query.claimId || '').replace(/\D/g, '');
@@ -813,7 +889,7 @@ router.get('/returns/state', async (req, res) => {
       raw_status: raw || null
     });
   } catch (e) {
-    // === Fallback “gracioso”: não quebra a UI em 401/403 ===
+    // Fallback “gracioso”: não quebra a UI em 401/403
     if ((e.status === 401 || e.status === 403) && orderId) {
       let last = null;
       try {
