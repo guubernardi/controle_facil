@@ -1,5 +1,5 @@
 // /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente (+ fluxo Recebido no CD)
-// — inclui: lock dataset.dirty, persist antes de recarregar, reload resiliente a 500, tradução de código PDD e fallback amplo de "Salvar"
+// — inclui: lock dataset.dirty, persist antes de recarregar, reload resiliente a 500
 (function () {
   /* =============== Helpers =============== */
   var $  = function (id) { return document.getElementById(id); };
@@ -76,10 +76,7 @@
     el.__dirtyBound = true;
   }
 
-  // --- Cache do texto do motivo vindo do ML para não "piscar" ---
-  var LAST_ML_REASON_TEXT = '';
-
-  // >>> PATCH 1: seletor de motivo mais permissivo
+  // seletor de motivo mais permissivo
   function getMotivoSelect() {
     return $('tipo_reclamacao')
         || $('motivo')
@@ -97,7 +94,6 @@
              '[data-role="motivo"]'
            ].join(','));
   }
-  // <<< PATCH 1
 
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
@@ -143,9 +139,9 @@
     var s = String(text || '').toLowerCase();
     var cls = 'pill -neutro';
     if (!text) cls = 'pill -neutro';
-    else if (s === 'em_transporte' || s === 'pronto_envio' || s.includes('pend') || s.includes('caminho')) cls = 'pill -pendente';
-    else if (s === 'recebido_cd' || s.includes('aprov') || s.includes('recebido')) cls = 'pill -aprovado';
-    else if (s === 'reprovado_cd' || s.includes('rej') || s.includes('neg') || s.includes('reprov')) cls = 'pill -rejeitado';
+    else if (s === 'em_transporte' || s === 'pronto_envio' || s.indexOf('pend') >= 0 || s.indexOf('caminho') >= 0) cls = 'pill -pendente';
+    else if (s === 'recebido_cd' || s.indexOf('aprov') >= 0 || s.indexOf('recebido') >= 0) cls = 'pill -aprovado';
+    else if (s === 'reprovado_cd' || s.indexOf('rej') >= 0 || s.indexOf('neg') >= 0 || s.indexOf('reprov') >= 0) cls = 'pill -rejeitado';
 
     el.className = cls;
     el.textContent = text || '—';
@@ -158,15 +154,13 @@
     var receivedAt = opts.receivedAt || null;
     var responsavel = opts.responsavel || null;
     var pill=$('pill-cd'), resp=$('cd-resp'), when=$('cd-when'), sep=$('cd-sep');
-    
-    // Atualiza texto do CTA se existir
-    var infoText = $('cd-info-text'); 
+    var infoText = $('cd-info-text');
 
     if (!pill) return;
     if (!receivedAt){
       pill.className = 'pill -neutro'; pill.textContent = 'Não recebido';
-      if (resp) resp.hidden = true; if (when) when.hidden = true; if (sep) sep.hidden = true; 
-      if (infoText) infoText.style.color = '#64748b'; // cinza
+      if (resp) resp.hidden = true; if (when) when.hidden = true; if (sep) sep.hidden = true;
+      if (infoText) infoText.style.color = '#64748b';
       return;
     }
     pill.className = 'pill -aprovado'; pill.textContent = 'Recebido no CD';
@@ -176,7 +170,7 @@
       when.textContent = 'Quando: ' + (isNaN(dt) ? receivedAt : dt.toLocaleString('pt-BR')); when.hidden = false;
     }
     if (sep) sep.hidden = false;
-    if (infoText) infoText.style.color = '#15803d'; // verde
+    if (infoText) infoText.style.color = '#15803d';
   }
 
   /* =============== Regras =============== */
@@ -186,14 +180,17 @@
     var lgs= String(d.log_status || '').toLowerCase();
     var vp = Number(d.valor_produto || 0);
     var vf = Number(d.valor_frete || 0);
-    if (st.includes('rej') || st.includes('neg')) return 0;
-    if (mot.includes('arrependimento') || mot === 'arrependimento_cliente') return 0;
+    if (st.indexOf('rej') >= 0 || st.indexOf('neg') >= 0) return 0;
+    if (mot.indexOf('arrependimento') >= 0 || mot === 'arrependimento_cliente') return 0;
     if (lgs === 'recebido_cd' || lgs === 'em_inspecao') return vf;
     return vp + vf;
   }
 
   /* =============== Normalização =============== */
-  function siteIdToName(siteId){ var map={MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre'}; return map[siteId] || 'Mercado Livre'; }
+  function siteIdToName(siteId){
+    var map={MLB:'Mercado Livre', MLA:'Mercado Livre', MLM:'Mercado Libre', MCO:'Mercado Libre', MPE:'Mercado Libre', MLC:'Mercado Libre', MLU:'Mercado Libre'};
+    return map[siteId] || 'Mercado Livre';
+  }
   function firstNonEmpty(){ for (var i=0;i<arguments.length;i++){ var v=arguments[i]; if(v!==undefined && v!==null && String(v).trim()!=='') return v; } return null; }
   function findWarehouseReceivedAt(j){
     try {
@@ -210,6 +207,8 @@
   }
 
   function normalize(j){
+    function recebidoDe(_j){ return recebCdEm; }
+
     var sellerName =
       (j.seller && (j.seller.nickname || j.seller.name || j.seller.nick_name)) ||
       j.seller_nickname || j.nickname || j.seller_name || j.store_name || null;
@@ -275,7 +274,6 @@
       cd_recebido_em: recebidoDe(j),
       cd_responsavel: recebResp
     };
-    function recebidoDe(_j){ return recebCdEm; }
   }
 
   var current = {};
@@ -283,7 +281,7 @@
 
   function sellerNick(){
     var ln = (current && current.loja_nome) ? String(current.loja_nome) : '';
-    if (ln.includes('·')) ln = ln.split('·')[1];
+    if (ln.indexOf('·') >= 0) ln = ln.split('·')[1];
     ln = (ln || '').trim();
     if (!ln) {
       var el = $('ml-nick-display');
@@ -296,21 +294,16 @@
   function updateStepper(status) {
     var steps = document.querySelectorAll('.step');
     if (!steps || steps.length < 3) return;
-    
-    // Limpa classes ativas
+
     steps.forEach(function(s){ s.className = 'step'; });
-    
+
     var s = String(status || '').toLowerCase();
 
-    // Passo 1: Sempre ativo se o registro existe
-    steps[0].classList.add('active'); 
-    
-    // Passo 3 (Final): Se estiver em status terminal
+    steps[0].classList.add('active');
+
     if (['aprovado', 'rejeitado', 'cancelado', 'concluida', 'finalizado'].indexOf(s) >= 0) {
        steps[2].classList.add('active');
-    } 
-    // Passo 2 (Processo): Se não for final, e não for vazio, assume processo
-    else if (['pendente', 'em_espera', 'em_analise', 'em_transporte', 'recebido_cd', 'disputa', 'defeituosa', 'troca', 'reembolso_parcial'].indexOf(s) >= 0) {
+    } else if (['pendente', 'em_espera', 'em_analise', 'em_transporte', 'recebido_cd', 'disputa', 'defeituosa', 'troca', 'reembolso_parcial'].indexOf(s) >= 0) {
        steps[1].classList.add('active');
     }
   }
@@ -324,8 +317,6 @@
     if (rp) rp.textContent = moneyBRL(d.valor_produto || 0);
     if (rf) rf.textContent = moneyBRL(d.valor_frete || 0);
     if (rt) rt.textContent = moneyBRL(calcTotalByRules(d));
-
-    // Atualiza a régua visual
     updateStepper(d.status);
   }
 
@@ -335,7 +326,6 @@
       id_venda:        readFirst(ORDER_ID_SELECTORS),
       cliente_nome:    readFirst(CLIENTE_SELECTORS),
       loja_nome:       readFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
-
       data_compra:     readFirst(['#data_compra','input[name="data_compra"]','.js-data']),
       status:          readFirst(['#status','select[name="status"]']),
       sku:             (readFirst(['#sku','input[name="sku"]','.js-sku']) || '').toUpperCase(),
@@ -377,7 +367,7 @@
   var CANON_LABELS = {
     produto_defeituoso: ['produto defeituoso','defeituoso','não funciona','nao funciona','not working','broken'],
     produto_danificado: ['produto danificado','danificado','avariado'],
-    nao_corresponde: ['não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado','item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'],
+    nao_corresponde: ['não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado','item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam peças','faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'],
     arrependimento_cliente: ['arrependimento do cliente','mudou de ideia','não quer mais','nao quer mais','não serviu','nao serviu'],
     entrega_atrasada: ['entrega atrasada','não entregue','nao entregue','not delivered','shipment delayed']
   };
@@ -394,22 +384,10 @@
     wrong_item:'nao_corresponde',missing_parts:'nao_corresponde',incomplete:'nao_corresponde',
     undelivered:'entrega_atrasada',not_delivered:'entrega_atrasada'
   };
-
-  // Mapeamento direto de códigos PDD -> label amigável
-  var CODE_HINTS = {
-    PDD9904: { label: 'Produto defeituoso',                  canon: 'produto_defeituoso' },
-    PDD9905: { label: 'Produto danificado',                  canon: 'produto_danificado' },
-    PDD9906: { label: 'Arrependimento do cliente',           canon: 'arrependimento_cliente' },
-    PDD9907: { label: 'Entrega atrasada',                    canon: 'entrega_atrasada' },
-    PDD9955: { label: 'Produto diferente do anunciado / faltam partes', canon: 'nao_corresponde' },
-    PDD9939: { label: 'Arrependimento do cliente',           canon: 'arrependimento_cliente' },
-    PDD9944: { label: 'Produto defeituoso',                  canon: 'produto_defeituoso' }
-  };
-
   function canonFromCode(code){
     var c = String(code||'').toUpperCase();
     if (!c) return null;
-    var SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso', PDD9955:'nao_corresponde' };
+    var SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso' };
     if (SPEC[c]) return SPEC[c];
     if (c === 'PNR') return 'entrega_atrasada';
     if (c === 'CS')  return 'arrependimento_cliente';
@@ -428,8 +406,6 @@
     var fromDict = MOTIVO_CANON[t]; if (fromDict) return fromDict;
     return null;
   }
-
-  // >>> PATCH 2: extrator robusto do motivo vindo do ML (claim/summary)
   function extractMlReason(root){
     if (!root || typeof root !== 'object') return null;
     var c = root.claim || root;
@@ -441,25 +417,6 @@
       txt = (typeof cr === 'string') ? cr : (cr.label || cr.raw || null);
     }
     return txt || null;
-  }
-  // <<< PATCH 2
-
-  // Resolve razão do ML priorizando texto, mas traduzindo código (ex.: PDD9955)
-  function resolveMlReason(root){
-    var text = extractMlReason(root);
-    if (text) {
-      var canon = canonFromText(text) || REASONNAME_TO_CANON[text] || REASONKEY_TO_CANON[text] || null;
-      return { display: text, canon: canon, code: null };
-    }
-    var claim = root && (root.claim || root);
-    var code = (claim && (claim.reason_id || claim.reason_code)) || (root && root.reason_id) || null;
-    if (code) {
-      var up = String(code).toUpperCase();
-      var hint = CODE_HINTS[up];
-      if (hint) return { display: hint.label + ' (' + up + ')', canon: hint.canon, code: up };
-      return { display: 'Código ' + up, canon: canonFromCode(up), code: up };
-    }
-    return { display: null, canon: null, code: null };
   }
 
   function lockMotivo(lock, hint){
@@ -483,26 +440,19 @@
   }
   function setMotivoCanon(canon, lock){
     var sel = getMotivoSelect(); if (!sel || !canon) return false;
-    if (sel.dataset && sel.dataset.dirty === '1') return false; // não sobrescreve escolha do usuário
-    // tenta pelo value exato
     for (var i=0;i<sel.options.length;i++){
       if (sel.options[i].value === canon) {
-        sel.value = canon;
-        sel.dataset.dirty = '1';               // trava contra re-hidratações
-        sel.dispatchEvent(new Event('change'));
+        sel.value = canon; sel.dispatchEvent(new Event('change'));
         if (lock) lockMotivo(true,'(ML)');
         return true;
       }
     }
-    // tenta por labels "parecidas"
     var wanted = (CANON_LABELS[canon] || []).map(norm);
     for (var j=0;j<sel.options.length;j++){
       var opt = sel.options[j];
       var labelN = norm(opt.text || opt.label || '');
       if (labelN && (labelN === norm(canon) || wanted.indexOf(labelN) >= 0)) {
-        sel.value = opt.value;
-        sel.dataset.dirty = '1';               // trava contra re-hidratações
-        sel.dispatchEvent(new Event('change'));
+        sel.value = opt.value; sel.dispatchEvent(new Event('change'));
         if (lock) lockMotivo(true,'(ML)');
         return true;
       }
@@ -519,7 +469,7 @@
      getFirst(ORDER_ID_SELECTORS),
      getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
      getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
-    ].forEach(bindDirty);
+    ].forEach(function(el){ if (el) bindDirty(el); });
     upperSKUInstant();
 
     setFirst(ORDER_ID_SELECTORS, d.id_venda);
@@ -543,11 +493,6 @@
 
     var sel = getMotivoSelect();
     if (sel) {
-      // marca dirty quando o usuário mexer
-      if (!sel.__dirtyChangeBound) {
-        sel.addEventListener('change', function(){ sel.dataset.dirty = '1'; recalc(); });
-        sel.__dirtyChangeBound = true;
-      }
       var mot = d.tipo_reclamacao || '';
       var wasSet = false;
       if (/_/.test(mot) || mot === 'nao_corresponde') wasSet = setMotivoCanon(mot, false);
@@ -559,61 +504,40 @@
     if (!LOG_LOCKED) setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
 
-    // ====== NOVO: preencher Status/Motivo reais do ML ======
     try {
       var realStatus = null;
       if (d.raw) {
-        if (d.raw.claim && d.raw.claim.status) {
-          realStatus = d.raw.claim.status;
-        } else if (d.raw.return && d.raw.return.status) {
-          realStatus = d.raw.return.status;
-        } else if (d.raw.shipping && d.raw.shipping.status) {
-          realStatus = d.raw.shipping.status;
-        }
+        if (d.raw.claim && d.raw.claim.status) realStatus = d.raw.claim.status;
+        else if (d.raw.return && d.raw.return.status) realStatus = d.raw.return.status;
+        else if (d.raw.shipping && d.raw.shipping.status) realStatus = d.raw.shipping.status;
       }
-      // Fallback: campos já achatados, se o backend mandar
       if (!realStatus) {
-        realStatus = firstNonEmpty(
-          d.ml_return_status,
-          d.ml_shipping_status,
-          d.status // pelo menos mostra algo
-        );
+        realStatus = firstNonEmpty(d.ml_return_status, d.ml_shipping_status, d.status);
       }
-
       var elStatusReal = $('ml_status_real');
-      if (elStatusReal) {
-        elStatusReal.value = realStatus
-          ? String(realStatus).replace(/_/g, ' ')
-          : '—';
-      }
+      if (elStatusReal) elStatusReal.value = realStatus ? String(realStatus).replace(/_/g, ' ') : '—';
 
-      // >>> PATCH 3: motivo com resolução (texto ou código), lock e persistência
-      var resolved = resolveMlReason(d.raw || {});
-      var showTxt  = resolved.display || LAST_ML_REASON_TEXT || firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
+      var realReason = null;
+      if (d.raw) realReason = extractMlReason(d.raw);
+      if (!realReason) realReason = firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
+
       var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) {
-        elReasonReal.value = showTxt || '—';
-        elReasonReal.title = showTxt || '';
-      }
-      if (resolved.display) LAST_ML_REASON_TEXT = resolved.display;
+      if (elReasonReal) { elReasonReal.value = realReason || '—'; elReasonReal.title = realReason || ''; }
 
-      var canon = resolved.canon
-               || (showTxt ? (canonFromText(showTxt) || REASONNAME_TO_CANON[showTxt] || REASONKEY_TO_CANON[showTxt]) : null)
-               || null;
-
-      if (canon && setMotivoCanon(canon, true)) {
-        var idp = current.id || returnId;
-        if (idp) {
-          fetch('/api/returns/' + encodeURIComponent(idp), {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-ml-reason' })
-          }).catch(function(){});
+      if (realReason) {
+        var canon = canonFromText(realReason) || REASONNAME_TO_CANON[realReason] || REASONKEY_TO_CANON[realReason] || null;
+        if (canon && setMotivoCanon(canon, true)) {
+          var idp = current.id || returnId;
+          if (idp) {
+            fetch('/api/returns/' + encodeURIComponent(idp), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-ml-reason' })
+            }).catch(function(){});
+          }
         }
       }
-      // <<< PATCH 3
     } catch(_){}
-    // ====== FIM NOVO BLOCO ======
 
     fillMlSummaryFromCurrent();
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);
@@ -673,8 +597,8 @@
 
   /* =============== Claim UI =============== */
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
-  function clearList(id){ var el=$(id); if (el).innerHTML=''; }
-  function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li); } }
+  function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
+  function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
   function setPillState(id, label, state){
     var el=$(id); if(!el) return;
     var map = { neutro:'-neutro', pendente:'-pendente', aprovado:'-aprovado', rejeitado:'-rejeitado' };
@@ -689,7 +613,7 @@
     setTxt('claim-stage',      claim.stage || claim.stage_name);
     setTxt('claim-version',    claim.claim_version);
     setTxt('claim-reason',     claim.reason_id || (claim.reason && (claim.reason.id || claim.reason.name)) || claim.reason_name);
-    setTxt('claim-fulfilled',  String(claim.fulfilled ?? '—'));
+    setTxt('claim-fulfilled',  String(claim.fulfilled == null ? '—' : claim.fulfilled));
     setTxt('claim-qtytype',    claim.quantity_type);
     setTxt('claim-created',    claim.created_date ? new Date(claim.created_date).toLocaleString('pt-BR') : '—');
     setTxt('claim-updated',    claim.last_updated ? new Date(claim.last_updated).toLocaleString('pt-BR') : '—');
@@ -704,10 +628,10 @@
       var role = p.role || '-';
       var type = p.type || '-';
       var uid  = p.user_id || '-';
-      pushLi('claim-players', `<b>${role}</b> • ${type} • #${uid}`);
+      pushLi('claim-players', '<b>' + role + '</b> • ' + type + ' • #' + uid);
     });
 
-    var prefer = (function (root) {
+    (function () {
       function canonFromPayload(root){
         if (!root || typeof root !== 'object') return null;
         if (root.reason_key && REASONKEY_TO_CANON[root.reason_key]) return REASONKEY_TO_CANON[root.reason_key];
@@ -717,25 +641,22 @@
         if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
         return null;
       }
-      return canonFromPayload({ reason_key: claim.reason_key, reason_name: claim.reason_name, reason_id: claim.reason_id, reason_detail: claim.reason_detail })
-             || canonFromCode(claim.reason_id);
+      var prefer = canonFromPayload({ reason_key: claim.reason_key, reason_name: claim.reason_name, reason_id: claim.reason_id, reason_detail: claim.reason_detail }) || canonFromCode(claim.reason_id);
+      if (prefer) setMotivoCanon(prefer, true);
     })();
-    if (prefer) { setMotivoCanon(prefer, true); }
 
-    // >>> PATCH 4: preencher campo "motivo real" e tentar aplicar canon também
     var txt = extractMlReason(claim);
     if (txt) {
       var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
       if (canon) setMotivoCanon(canon, true);
       var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; LAST_ML_REASON_TEXT = txt; }
+      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
     }
-    // <<< PATCH 4
 
     try {
       var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
       var status = (claim.status || '').toString().toLowerCase();
-      var inMediation = stage.includes('mediation') || status.includes('mediation');
+      var inMediation = stage.indexOf('mediation') >= 0 || status.indexOf('mediation') >= 0;
       setPillState('pill-mediacao', inMediation ? 'Em mediação' : 'Sem mediação', inMediation ? 'pendente' : 'neutro');
 
       var statusDesc =
@@ -773,14 +694,14 @@
   }
   function suggestLogFromMLReturn(s){
     var k = String(s || '').toLowerCase();
-    if (k === 'delivered')                          return 'recebido_cd';
+    if (k === 'delivered') return 'recebido_cd';
     if (k === 'shipped' || k === 'pending_delivered') return 'em_transporte';
     if (k === 'label_generated' || k === 'ready_to_ship') return 'pronto_envio';
-    if (k === 'return_to_buyer')                    return 'retorno_comprador';
-    if (k === 'cancelled' || k === 'canceled')      return 'cancelado';
-    if (k === 'expired')                            return 'expirado';
-    if (k === 'failed' || k === 'pending_failure')  return 'falha';
-    if (k === 'scheduled')                          return 'agendado';
+    if (k === 'return_to_buyer') return 'retorno_comprador';
+    if (k === 'cancelled' || k === 'canceled') return 'cancelado';
+    if (k === 'expired') return 'expirado';
+    if (k === 'failed' || k === 'pending_failure') return 'falha';
+    if (k === 'scheduled') return 'agendado';
     return 'pendente';
   }
   function showReturnShipmentsFromRet(ret){
@@ -840,15 +761,13 @@
       var cr = $('claim-reason'); if (cr) cr.textContent = summary.claim_reason.label || summary.claim_reason.raw || cr.textContent;
     }
 
-    // >>> PATCH 5: usar extrator e refletir no campo de motivo real
     var txt = extractMlReason(j);
     if (txt) {
       var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
       if (canon) setMotivoCanon(canon, true);
       var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; LAST_ML_REASON_TEXT = txt; }
+      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
     }
-    // <<< PATCH 5
 
     var cid = j.claim_id || readFirst(CLAIM_ID_SELECTORS);
     var oid = readFirst(ORDER_ID_SELECTORS) || (Array.isArray(j.orders) && j.orders[0] && j.orders[0].order_id) || null;
@@ -934,8 +853,7 @@
     return next();
   }
 
-  function applyOrderToUi(ord, opts){
-    opts = opts || {};
+  function applyOrderToUi(ord){
     if (!ord || typeof ord !== 'object') return Promise.resolve(false);
 
     var nick = (ord.seller && (ord.seller.nickname || ord.seller.nick_name)) || null;
@@ -1099,8 +1017,8 @@
     var diffMs = Date.now() - d.getTime(); var abs = Math.abs(diffMs);
     var min = 60*1000, hr = 60*min, day = 24*hr;
     function s(n,u){ return n + ' ' + u + (n>1?'s':''); }
-    if (abs < hr)  return s(Math.round(abs/min)||0,'min') + (diffMs>=0?' atrás':' depois');
-    if (abs < day) return s(Math.round(abs/hr),'hora') + (diffMs>=0?'s atrás':'s depois');
+    if (abs < hr)  return (Math.round(abs/min)||0) + ' min' + (diffMs>=0?' atrás':' depois');
+    if (abs < day) return Math.round(abs/hr) + ' horas' + (diffMs>=0?' atrás':' depois');
     return d.toLocaleString('pt-BR');
   }
   function iconFor(type){ if (type==='status') return '🛈'; if (type==='note') return '📝'; if (type==='warn') return '⚠️'; if (type==='error') return '⛔'; return '•'; }
@@ -1180,10 +1098,17 @@
   ['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto',
    '#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete',
    '#status','select[name="status"]'
-  ].forEach(function(sel){ var el=pickEl(sel); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc); });
-  (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', function(){ sel.dataset.dirty='1'; recalc(); }); } })();
+  ].forEach(function(sel){
+    var el=pickEl(sel);
+    if (!el) return;
+    el.addEventListener('input', recalc);
+    if (el.tagName === 'SELECT') el.addEventListener('change', recalc);
+  });
+  (function(){
+    var sel=getMotivoSelect();
+    if (sel){ sel.addEventListener('change', recalc); }
+  })();
 
-  // Removido 'btn-mark' da lista para limpeza
   ['btn-insp-aprova','btn-insp-reprova','rq-aprovar','rq-reprovar','rq-receber','btn-cd','btn-salvar','btn-enrich']
     .forEach(neutralizeSubmit);
 
@@ -1199,33 +1124,11 @@
   var btnCd = $('btn-cd');   if (btnCd) safeOnClick(btnCd, openReceiveDialog);
 
   var btnSalvar=$('btn-salvar'); if (btnSalvar) safeOnClick(btnSalvar, save);
+  var btnEnrich=$('btn-enrich'); if (btnEnrich) safeOnClick(btnEnrich, function(){ enrichFromML('manual'); });
 
-  /* === Fallback amplo para "Salvar" (ids diferentes / form submit) === */
-  function bindSaveFallbacks() {
-    // botões comuns
-    var cand = document.querySelectorAll('#btn-salvar, #salvar, button[data-action="save"], .js-save, #save, .btn-salvar');
-    cand.forEach(function(b){
-      if (b.__saveBound) return;
-      b.addEventListener('click', function(e){ e.preventDefault(); save(); });
-      b.__saveBound = true;
-    });
-    // submit de forms relacionados
-    var forms = document.querySelectorAll('#form-devolucao, form[data-form="devolucao"], form[action*="/returns"], form[action*="/devolucao"]');
-    forms.forEach(function(f){
-      if (f.__saveBound) return;
-      f.addEventListener('submit', function(e){ e.preventDefault(); save(); });
-      f.__saveBound = true;
-    });
-    // último recurso: botão com label "Salvar"
-    if (!cand.length) {
-      var btn = Array.from(document.querySelectorAll('button')).find(function(b){
-        return (b.textContent || '').trim().toLowerCase() === 'salvar';
-      });
-      if (btn && !btn.__saveBound) {
-        btn.addEventListener('click', function(e){ e.preventDefault(); save(); });
-        btn.__saveBound = true;
-      }
-    }
+  function disableHead(disabled){
+    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd']
+      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
   }
 
   /* =============== Save =============== */
@@ -1264,7 +1167,6 @@
     .then(function(){ disableHead(false); });
   }
 
-  // Abre a claim do ML (se existir) para iniciar disputa
   function suggestOpenDispute(){
     var cid = readFirst(CLAIM_ID_SELECTORS) || (current.raw && (current.raw.claim_id || current.raw.ml_claim_id));
     if (!cid) {
@@ -1278,7 +1180,6 @@
     }
   }
 
-  // Patch auxiliar para finalizar/disputar após o recebimento
   function patchStatusAndMaybeLog(statusValue, logValue, metaTag){
     var id = current.id || returnId; if (!id) return Promise.resolve();
     var body = { updated_by: metaTag || 'frontend-receive-flow' };
@@ -1322,12 +1223,9 @@
         var okVal = (selectOk && selectOk.value) || '';
         if (dlg.close) dlg.close(); else dlg.setAttribute('hidden','');
 
-        // 1) Marca recebido
         runReceive(nome, whenLocal ? new Date(whenLocal).toISOString() : null)
           .then(function(){
-            // 2) Caminho de decisão
             if ((okVal || '').toLowerCase() === 'sim') {
-              // Finaliza + fixa log em recebido_cd para regra do frete
               return patchStatusAndMaybeLog('concluida', 'recebido_cd', 'frontend-receive-finalize')
                 .then(function(){
                   setLogPill('recebido_cd', { lock:true });
@@ -1337,7 +1235,6 @@
                 .then(function(){ return Promise.all([reloadCurrent(), refreshTimeline(current.id || returnId)]); })
                 .then(recalc);
             } else if ((okVal || '').toLowerCase() === 'nao') {
-              // Disputa sugerida
               return patchStatusAndMaybeLog('disputa', null, 'frontend-receive-dispute')
                 .then(function(){
                   toast('Status atualizado para disputa.', 'warning');
@@ -1347,18 +1244,21 @@
                 .then(recalc);
             }
           })
-          .catch(function(){ /* erros já toasteados no runReceive/patch */ })
-          .finally(function(){ cleanup(); });
+          .catch(function(){})
+          .then(function(){
+            if (form)  form.removeEventListener('submit', submit);
+            if (btnNo) btnNo.removeEventListener('click', cancel);
+          });
       }
-      function cancel(){ if (dlg.close) dlg.close(); cleanup(); }
-      function cleanup(){
+      function cancel(){
+        if (dlg.close) dlg.close();
         if (form)  form.removeEventListener('submit', submit);
         if (btnNo) btnNo.removeEventListener('click', cancel);
       }
       if (form)  form.addEventListener('submit', submit);
       if (btnNo) btnNo.addEventListener('click', cancel);
       if (dlg.showModal) dlg.showModal(); else dlg.removeAttribute('hidden');
-      setTimeout(function(){ inputNome && inputNome.focus(); }, 0);
+      setTimeout(function(){ if (inputNome) inputNome.focus(); }, 0);
       return;
     }
     // Fallback sem <dialog>
@@ -1443,7 +1343,13 @@
     var faltamMetadados = !d || !d.id_venda || !d.cliente_nome || !d.loja_nome || !d.data_compra;
     return faltamValores || faltamMetadados;
   }
-  function canEnrichNow(){ var key='rf_enrich_'+returnId; var last=Number(localStorage.getItem(key) || 0); var ok=!last || (Date.now()-last)>ENRICH_TTL_MS; if(ok) localStorage.setItem(key,String(Date.now())); return ok; }
+  function canEnrichNow(){
+    var key='rf_enrich_'+returnId;
+    var last=Number(localStorage.getItem(key) || 0);
+    var ok=!last || (Date.now()-last)>ENRICH_TTL_MS;
+    if(ok) localStorage.setItem(key,String(Date.now()));
+    return ok;
+  }
 
   function persistMetaPatch(patch){
     var idp = current.id || returnId;
@@ -1451,8 +1357,8 @@
     return fetch('/api/returns/' + encodeURIComponent(idp), {
       method: 'PATCH',
       headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' })) }
-    ).catch(function(){});
+      body: JSON.stringify(Object.assign({}, patch, { updated_by:'frontend-auto-enrich-meta' }))
+    }).catch(function(){});
   }
   function searchClaimsByOrder(orderId){
     if (!orderId) return Promise.resolve([]);
@@ -1514,7 +1420,7 @@
     var typedClaimId = readFirst(CLAIM_ID_SELECTORS) || qs.get('claim_id');
 
     function enrichedFetchByClaim(cId){
-      if (!cId) return Promise.reject(Object.assign(new Error('no_claim'), {status:400}));
+      if (!cId) return Promise.reject({status:400, message:'no_claim'});
       var nk = sellerNick();
       var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
       return fetch(url, { headers: { 'Accept': 'application/json' } })
@@ -1539,7 +1445,7 @@
 
     return claimPromise
       .then(function(claimId){
-        if (!claimId) throw Object.assign(new Error('Sem claim para enriquecer'), {status:404});
+        if (!claimId) throw {status:404, message:'Sem claim para enriquecer'};
         return enrichedFetchByClaim(claimId).then(function(j){ return { claimId: claimId, payload: j }; });
       })
       .then(function(res){
@@ -1581,7 +1487,6 @@
           toast('ML não trouxe valores. Tentando pelo pedido…', 'warning');
         }
 
-        // Persist amounts e só depois recarrega
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
         if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
@@ -1600,7 +1505,7 @@
         var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id) || (current.raw && (current.raw.order_id || current.raw.resource_id));
         var afterOrderFallback = Promise.resolve();
         if (needsEnrichment(Object.assign({}, current, capture()))) {
-          afterOrderFallback = orderId ? fetchOrderInfo(orderId).then(function(ord){ if (ord) return applyOrderToUi(ord, {persist:true}); }) : Promise.resolve(null);
+          afterOrderFallback = orderId ? fetchOrderInfo(orderId).then(function(ord){ if (ord) return applyOrderToUi(ord); }) : Promise.resolve(null);
         }
 
         return Promise.all([persistPromise, afterOrderFallback]).then(function(){
@@ -1614,7 +1519,7 @@
           return fetchOrderInfo(String(orderId).replace(/\D+/g,''))
             .then(function(ord){
               if (ord) {
-                return applyOrderToUi(ord, {persist:true}).then(function(){
+                return applyOrderToUi(ord).then(function(){
                   return hasLocalRow ? reloadCurrent() : null;
                 });
               }
@@ -1646,7 +1551,6 @@
             return Promise.reject({ status:404, body:j });
           }
           if (!r.ok) {
-            // Em 500+ não derruba UI; mantém o que já está preenchido
             try { console.warn('[reloadCurrent] GET falhou', r.status, (j && j.error) || j); } catch(_){}
             return Promise.reject({ status:r.status, body:j });
           }
@@ -1659,8 +1563,7 @@
         normalizeAndSet(data);
       })
       .catch(function (e) {
-        if (e && e.status === 404) return; // nada a fazer
-        // Qualquer outro erro: ignora para não apagar valores na tela
+        if (e && e.status === 404) return;
       });
   }
 
@@ -1672,10 +1575,10 @@
     reloadCurrent()
       .then(function(){
         upperSKUInstant();
-        [getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
-         getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
-        ].forEach(bindDirty);
-        bindSaveFallbacks(); // garante que o botão/form de salvar funcione em qualquer layout
+        var el1=getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
+        var el2=getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
+        if (el1) bindDirty(el1);
+        if (el2) bindDirty(el2);
       })
       .catch(function(){})
       .then(function(){
