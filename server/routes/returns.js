@@ -56,6 +56,7 @@ router.get('/', async (req, res) => {
     const search    = (req.query.search || '').trim();
     const status    = (req.query.status || '').trim();
     const rangeDays = parseInt(req.query.range_days || '0', 10);
+    const debug     = req.query.debug === '1';
 
     const cols = await columnsOf(q, 'devolucoes');
     const has  = (c) => cols.has(c);
@@ -65,11 +66,9 @@ router.get('/', async (req, res) => {
     ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status',
      'updated_at','created_at','valor_produto','valor_frete'
     ].forEach(c => { if (has(c)) selectCols.push(c); });
-
     if (has('foto_produto'))     selectCols.push('foto_produto');
     if (has('ml_return_status')) selectCols.push('ml_return_status');
     if (has('ml_claim_id'))      selectCols.push('ml_claim_id');
-
     if (!selectCols.length) selectCols.push('*');
 
     const params       = [];
@@ -83,37 +82,27 @@ router.get('/', async (req, res) => {
       params.push(tenantId);
     }
 
-    // busca textual / por ID (defensivo em colunas opcionais)
+    // busca textual
     if (search) {
-      const orPieces = [];
-
-      const likeIdx = params.length + 1;
       const likes = [];
-      if (has('id_venda'))     likes.push(`id_venda ILIKE $${likeIdx}`);
-      if (has('sku'))          likes.push(`sku ILIKE $${likeIdx}`);
-      if (has('cliente_nome')) likes.push(`cliente_nome ILIKE $${likeIdx}`);
-      if (has('nfe_chave'))    likes.push(`nfe_chave ILIKE $${likeIdx}`);
+      if (has('id_venda'))     likes.push(`id_venda ILIKE $${params.length + 1}`);
+      if (has('sku'))          likes.push(`sku ILIKE $${params.length + 1}`);
+      if (has('cliente_nome')) likes.push(`cliente_nome ILIKE $${params.length + 1}`);
+      if (has('nfe_chave'))    likes.push(`nfe_chave ILIKE $${params.length + 1}`);
+      likes.push(`CAST(id AS TEXT) = $${params.length + 1}`);
       if (likes.length) {
-        orPieces.push('(' + likes.join(' OR ') + ')');
+        whereClauses.push('(' + likes.join(' OR ') + ')');
         params.push(`%${search}%`);
       }
-
-      if (/^\d+$/.test(search)) {
-        // pesquisa direta por ID interno
-        orPieces.push(`id = $${params.length + 1}::bigint`);
-        params.push(search);
-      }
-
-      if (orPieces.length) whereClauses.push('(' + orPieces.join(' OR ') + ')');
     }
 
-    // filtro por data (usa created_at se existir, senão updated_at)
+    // data
     if (rangeDays > 0) {
       const dcol = has('created_at') ? 'created_at' : (has('updated_at') ? 'updated_at' : null);
       if (dcol) whereClauses.push(`${dcol} >= NOW() - INTERVAL '${rangeDays} days'`);
     }
 
-    // filtro por status (defensivo p/ colunas opcionais)
+    // status
     if (status) {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
@@ -144,7 +133,7 @@ router.get('/', async (req, res) => {
     }
 
     const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
-    const orderCol = has('updated_at') ? 'updated_at' : (has('created_at') ? 'created_at' : 'id');
+    const orderCol = cols.has('updated_at') ? 'updated_at' : (cols.has('created_at') ? 'created_at' : 'id');
 
     const sql = `
       SELECT ${selectCols.join(',\n             ')}
@@ -162,10 +151,13 @@ router.get('/', async (req, res) => {
       q(countSql, params)
     ]);
 
-    res.json({
+    const payload = {
       items: rowsRes.rows,
       total: parseInt(countRes.rows[0]?.total || 0, 10)
-    });
+    };
+    if (debug) payload.debug = { sql, params, countSql };
+
+    res.json(payload);
   } catch (e) {
     console.error('[returns:list] ERRO', e);
     res.status(500).json({ error: 'Erro interno ao listar' });
@@ -210,52 +202,74 @@ async function buildSafeSelect(q) {
 }
 
 router.get('/:id', async (req, res) => {
+  const debug = req.query.debug === '1';
   try {
     const q        = qOf(req);
     const selSql   = await buildSafeSelect(q);
-    const hasCols  = await columnsOf(q, 'devolucoes');
-    const hasIdVenda = hasCols.has('id_venda');
-
     const hasTenant= await hasTenantColumn(q);
     const tenantId = getTenantId(req);
-    const raw      = String(req.params.id || '').trim();
-    const idNum    = /^\d+$/.test(raw) ? raw : null;
+    const idParam  = String(req.params.id || '').trim();
 
-    // Estratégia robusta: tenta por ID interno (se numérico) **ou** por id_venda (se existir)
-    const whereParts = [];
     const args = [];
+    const wh = [];
 
-    // 1) id interno (condição vira false quando $1 é NULL)
-    args.push(idNum);
-    whereParts.push(`($1::bigint IS NOT NULL AND id = $1::bigint)`);
-
-    // 2) id_venda literal (se coluna existir)
-    if (hasIdVenda) {
-      args.push(raw);
-      whereParts.push(`id_venda = $${args.length}`);
+    // 1) tenta por id (numérico)
+    const isNumeric = /^\d+$/.test(idParam);
+    if (isNumeric) {
+      args.push(Number(idParam));
+      wh.push(`id = $${args.length}`);
+    } else {
+      // forçou por id_venda textual
+      args.push(idParam);
+      wh.push(`id_venda = $${args.length}`);
     }
 
-    let whereSql = '(' + whereParts.join(' OR ') + ')';
-
-    // 3) tenant (se aplicável)
     if (hasTenant && tenantId) {
       args.push(tenantId);
-      whereSql += ` AND (tenant_id = $${args.length} OR tenant_id IS NULL)`;
+      wh.push(`(tenant_id = $${args.length} OR tenant_id IS NULL)`);
     }
 
-    const orderFrag = hasCols.has('updated_at') ? ' ORDER BY updated_at DESC' : '';
-    const sql = `${selSql} WHERE ${whereSql}${orderFrag} LIMIT 1`;
+    let sql = `${selSql} WHERE ${wh.join(' AND ')} LIMIT 1`;
+    let row = null;
+    try {
+      const r1 = await q(sql, args);
+      row = r1.rows[0] || null;
+    } catch (err) {
+      console.error('[returns:get] SQL1 falhou:', err.message);
+      if (debug) return res.status(500).json({ error:'sql_error', sql, args, detail: err.message });
+      throw err;
+    }
 
-    const { rows } = await q(sql, args);
-    if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
-    res.json(rows[0]);
+    // 2) fallback: se não achou e param é numérico, tenta como id_venda
+    if (!row && isNumeric) {
+      const args2 = [ idParam ];
+      const wh2 = [`id_venda = $1`];
+      if (hasTenant && tenantId) {
+        args2.push(tenantId);
+        wh2.push(`(tenant_id = $${args2.length} OR tenant_id IS NULL)`);
+      }
+      sql = `${selSql} WHERE ${wh2.join(' AND ')} LIMIT 1`;
+      try {
+        const r2 = await q(sql, args2);
+        row = r2.rows[0] || null;
+      } catch (err) {
+        console.error('[returns:get] SQL2 falhou:', err.message);
+        if (debug) return res.status(500).json({ error:'sql_error', sql, args: args2, detail: err.message });
+        throw err;
+      }
+    }
+
+    if (!row) return res.status(404).json({ error: 'Não encontrado' });
+
+    if (debug) return res.json({ row, debug: true });
+    res.json(row);
   } catch (e) {
     console.error('[returns:get] ERRO', e);
     res.status(500).json({ error: 'Erro interno ao buscar' });
   }
 });
 
-/* =============== 3b) PATCH /:id (whitelist + colunas opcionais) =============== */
+/* =============== 3b) PATCH /:id =============== */
 router.patch('/:id', express.json(), async (req, res) => {
   try {
     const q   = qOf(req);
@@ -384,7 +398,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
         await q(
           `INSERT INTO devolucoes_events (return_id, type, title, message, created_by)
            VALUES ($1,$2,$3,$4,$5)`,
-          [ id, 'logistica', 'Recebido no CD', `Pacote conferido por ${responsavel || 'cd'}`, updated_by || 'scanner' ]
+          [ id,'logistica','Recebido no CD',`Pacote conferido por ${responsavel || 'cd'}`,updated_by || 'scanner' ]
         );
       }
     } catch (err) {
