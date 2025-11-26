@@ -75,11 +75,27 @@
     el.addEventListener('input', function(){ el.dataset.dirty = '1'; });
     el.__dirtyBound = true;
   }
+
+  // >>> PATCH 1: seletor de motivo mais permissivo
   function getMotivoSelect() {
     return $('tipo_reclamacao')
         || $('motivo')
-        || document.querySelector('#tipo_reclamacao, #motivo, select[name="tipo_reclamacao"], select[name="motivo"]');
+        || $('motivo_reclamacao')
+        || document.querySelector([
+             '#tipo_reclamacao',
+             '#motivo',
+             '#motivo_reclamacao',
+             'select[name="tipo_reclamacao"]',
+             'select[name="motivo"]',
+             'select[name*="motivo"]',
+             'select[id*="motivo"]',
+             'select[data-motivo]',
+             '[data-field="motivo"]',
+             '[data-role="motivo"]'
+           ].join(','));
   }
+  // <<< PATCH 1
+
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return isFinite(v) ? v : 0;
@@ -398,6 +414,21 @@
     return null;
   }
 
+  // >>> PATCH 2: extrator robusto do motivo vindo do ML (claim/summary)
+  function extractMlReason(root){
+    if (!root || typeof root !== 'object') return null;
+    var c = root.claim || root;
+    var txt =
+      (c && (c.reason_detail || c.title || c.reason_name || (c.reason && (c.reason.description || c.reason.name)))) ||
+      null;
+    if (!txt && root.summary && root.summary.claim_reason) {
+      var cr = root.summary.claim_reason;
+      txt = (typeof cr === 'string') ? cr : (cr.label || cr.raw || null);
+    }
+    return txt || null;
+  }
+  // <<< PATCH 2
+
   function lockMotivo(lock, hint){
     var sel = getMotivoSelect(); if (!sel) return;
     sel.disabled = !!lock;
@@ -511,14 +542,10 @@
           : '—';
       }
 
+      // >>> PATCH 3: extrai motivo, aplica no select e persiste
       var realReason = null;
-      if (d.raw && d.raw.claim) {
-        realReason = firstNonEmpty(
-          d.raw.claim.reason_detail,
-          d.raw.claim.title,
-          d.raw.claim.reason_name,
-          d.raw.claim.reason && (d.raw.claim.reason.description || d.raw.claim.reason.name)
-        );
+      if (d.raw) {
+        realReason = extractMlReason(d.raw);
       }
       if (!realReason) {
         realReason = firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
@@ -529,6 +556,24 @@
         elReasonReal.value = realReason || '—';
         elReasonReal.title = realReason || '';
       }
+
+      if (realReason) {
+        var canon = canonFromText(realReason)
+                 || REASONNAME_TO_CANON[realReason]
+                 || REASONKEY_TO_CANON[realReason]
+                 || null;
+        if (canon && setMotivoCanon(canon, true)) {
+          var idp = current.id || returnId;
+          if (idp) {
+            fetch('/api/returns/' + encodeURIComponent(idp), {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-ml-reason' })
+            }).catch(function(){});
+          }
+        }
+      }
+      // <<< PATCH 3
     } catch(_){}
     // ====== FIM NOVO BLOCO ======
 
@@ -639,6 +684,16 @@
     })();
     if (prefer) { setMotivoCanon(prefer, true); }
 
+    // >>> PATCH 4: preencher campo "motivo real" e tentar aplicar canon também
+    var txt = extractMlReason(claim);
+    if (txt) {
+      var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
+      if (canon) setMotivoCanon(canon, true);
+      var elReasonReal = $('ml_motivo_real');
+      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
+    }
+    // <<< PATCH 4
+
     try {
       var stage = (claim.stage || claim.stage_name || '').toString().toLowerCase();
       var status = (claim.status || '').toString().toLowerCase();
@@ -746,6 +801,17 @@
       if (c) setMotivoCanon(c, true);
       var cr = $('claim-reason'); if (cr) cr.textContent = summary.claim_reason.label || summary.claim_reason.raw || cr.textContent;
     }
+
+    // >>> PATCH 5: usar extrator e refletir no campo de motivo real
+    var txt = extractMlReason(j);
+    if (txt) {
+      var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
+      if (canon) setMotivoCanon(canon, true);
+      var elReasonReal = $('ml_motivo_real');
+      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
+    }
+    // <<< PATCH 5
+
     var cid = j.claim_id || readFirst(CLAIM_ID_SELECTORS);
     var oid = readFirst(ORDER_ID_SELECTORS) || (Array.isArray(j.orders) && j.orders[0] && j.orders[0].order_id) || null;
     if (cid) syncReturnState(cid, oid);
