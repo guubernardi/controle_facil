@@ -1,5 +1,5 @@
 // /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente (+ fluxo Recebido no CD)
-// — inclui: lock dataset.dirty, persist antes de recarregar, reload resiliente a 500
+// — inclui: lock dataset.dirty, persist antes de recarregar, reload resiliente a 500, tradução de código PDD e fallback amplo de "Salvar"
 (function () {
   /* =============== Helpers =============== */
   var $  = function (id) { return document.getElementById(id); };
@@ -75,6 +75,9 @@
     el.addEventListener('input', function(){ el.dataset.dirty = '1'; });
     el.__dirtyBound = true;
   }
+
+  // --- Cache do texto do motivo vindo do ML para não "piscar" ---
+  var LAST_ML_REASON_TEXT = '';
 
   // >>> PATCH 1: seletor de motivo mais permissivo
   function getMotivoSelect() {
@@ -374,7 +377,7 @@
   var CANON_LABELS = {
     produto_defeituoso: ['produto defeituoso','defeituoso','não funciona','nao funciona','not working','broken'],
     produto_danificado: ['produto danificado','danificado','avariado'],
-    nao_corresponde: ['não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado','item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam peças','faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'],
+    nao_corresponde: ['não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado','item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'],
     arrependimento_cliente: ['arrependimento do cliente','mudou de ideia','não quer mais','nao quer mais','não serviu','nao serviu'],
     entrega_atrasada: ['entrega atrasada','não entregue','nao entregue','not delivered','shipment delayed']
   };
@@ -391,10 +394,22 @@
     wrong_item:'nao_corresponde',missing_parts:'nao_corresponde',incomplete:'nao_corresponde',
     undelivered:'entrega_atrasada',not_delivered:'entrega_atrasada'
   };
+
+  // Mapeamento direto de códigos PDD -> label amigável
+  var CODE_HINTS = {
+    PDD9904: { label: 'Produto defeituoso',                  canon: 'produto_defeituoso' },
+    PDD9905: { label: 'Produto danificado',                  canon: 'produto_danificado' },
+    PDD9906: { label: 'Arrependimento do cliente',           canon: 'arrependimento_cliente' },
+    PDD9907: { label: 'Entrega atrasada',                    canon: 'entrega_atrasada' },
+    PDD9955: { label: 'Produto diferente do anunciado / faltam partes', canon: 'nao_corresponde' },
+    PDD9939: { label: 'Arrependimento do cliente',           canon: 'arrependimento_cliente' },
+    PDD9944: { label: 'Produto defeituoso',                  canon: 'produto_defeituoso' }
+  };
+
   function canonFromCode(code){
     var c = String(code||'').toUpperCase();
     if (!c) return null;
-    var SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso' };
+    var SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso', PDD9955:'nao_corresponde' };
     if (SPEC[c]) return SPEC[c];
     if (c === 'PNR') return 'entrega_atrasada';
     if (c === 'CS')  return 'arrependimento_cliente';
@@ -429,6 +444,24 @@
   }
   // <<< PATCH 2
 
+  // Resolve razão do ML priorizando texto, mas traduzindo código (ex.: PDD9955)
+  function resolveMlReason(root){
+    var text = extractMlReason(root);
+    if (text) {
+      var canon = canonFromText(text) || REASONNAME_TO_CANON[text] || REASONKEY_TO_CANON[text] || null;
+      return { display: text, canon: canon, code: null };
+    }
+    var claim = root && (root.claim || root);
+    var code = (claim && (claim.reason_id || claim.reason_code)) || (root && root.reason_id) || null;
+    if (code) {
+      var up = String(code).toUpperCase();
+      var hint = CODE_HINTS[up];
+      if (hint) return { display: hint.label + ' (' + up + ')', canon: hint.canon, code: up };
+      return { display: 'Código ' + up, canon: canonFromCode(up), code: up };
+    }
+    return { display: null, canon: null, code: null };
+  }
+
   function lockMotivo(lock, hint){
     var sel = getMotivoSelect(); if (!sel) return;
     sel.disabled = !!lock;
@@ -450,19 +483,26 @@
   }
   function setMotivoCanon(canon, lock){
     var sel = getMotivoSelect(); if (!sel || !canon) return false;
+    if (sel.dataset && sel.dataset.dirty === '1') return false; // não sobrescreve escolha do usuário
+    // tenta pelo value exato
     for (var i=0;i<sel.options.length;i++){
       if (sel.options[i].value === canon) {
-        sel.value = canon; sel.dispatchEvent(new Event('change'));
+        sel.value = canon;
+        sel.dataset.dirty = '1';               // trava contra re-hidratações
+        sel.dispatchEvent(new Event('change'));
         if (lock) lockMotivo(true,'(ML)');
         return true;
       }
     }
+    // tenta por labels "parecidas"
     var wanted = (CANON_LABELS[canon] || []).map(norm);
     for (var j=0;j<sel.options.length;j++){
       var opt = sel.options[j];
       var labelN = norm(opt.text || opt.label || '');
       if (labelN && (labelN === norm(canon) || wanted.indexOf(labelN) >= 0)) {
-        sel.value = opt.value; sel.dispatchEvent(new Event('change'));
+        sel.value = opt.value;
+        sel.dataset.dirty = '1';               // trava contra re-hidratações
+        sel.dispatchEvent(new Event('change'));
         if (lock) lockMotivo(true,'(ML)');
         return true;
       }
@@ -503,6 +543,11 @@
 
     var sel = getMotivoSelect();
     if (sel) {
+      // marca dirty quando o usuário mexer
+      if (!sel.__dirtyChangeBound) {
+        sel.addEventListener('change', function(){ sel.dataset.dirty = '1'; recalc(); });
+        sel.__dirtyChangeBound = true;
+      }
       var mot = d.tipo_reclamacao || '';
       var wasSet = false;
       if (/_/.test(mot) || mot === 'nao_corresponde') wasSet = setMotivoCanon(mot, false);
@@ -542,35 +587,28 @@
           : '—';
       }
 
-      // >>> PATCH 3: extrai motivo, aplica no select e persiste
-      var realReason = null;
-      if (d.raw) {
-        realReason = extractMlReason(d.raw);
-      }
-      if (!realReason) {
-        realReason = firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
-      }
-
+      // >>> PATCH 3: motivo com resolução (texto ou código), lock e persistência
+      var resolved = resolveMlReason(d.raw || {});
+      var showTxt  = resolved.display || LAST_ML_REASON_TEXT || firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
       var elReasonReal = $('ml_motivo_real');
       if (elReasonReal) {
-        elReasonReal.value = realReason || '—';
-        elReasonReal.title = realReason || '';
+        elReasonReal.value = showTxt || '—';
+        elReasonReal.title = showTxt || '';
       }
+      if (resolved.display) LAST_ML_REASON_TEXT = resolved.display;
 
-      if (realReason) {
-        var canon = canonFromText(realReason)
-                 || REASONNAME_TO_CANON[realReason]
-                 || REASONKEY_TO_CANON[realReason]
-                 || null;
-        if (canon && setMotivoCanon(canon, true)) {
-          var idp = current.id || returnId;
-          if (idp) {
-            fetch('/api/returns/' + encodeURIComponent(idp), {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-ml-reason' })
-            }).catch(function(){});
-          }
+      var canon = resolved.canon
+               || (showTxt ? (canonFromText(showTxt) || REASONNAME_TO_CANON[showTxt] || REASONKEY_TO_CANON[showTxt]) : null)
+               || null;
+
+      if (canon && setMotivoCanon(canon, true)) {
+        var idp = current.id || returnId;
+        if (idp) {
+          fetch('/api/returns/' + encodeURIComponent(idp), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-ml-reason' })
+          }).catch(function(){});
         }
       }
       // <<< PATCH 3
@@ -635,7 +673,7 @@
 
   /* =============== Claim UI =============== */
   function setTxt(id, v){ var el=$(id); if (el) el.textContent = (v===undefined||v===null||v==='') ? '—' : String(v); }
-  function clearList(id){ var el=$(id); if (el) el.innerHTML=''; }
+  function clearList(id){ var el=$(id); if (el).innerHTML=''; }
   function pushLi(id, html){ var el=$(id); if (el){ var li=document.createElement('li'); li.innerHTML=html; el.appendChild(li);} }
   function setPillState(id, label, state){
     var el=$(id); if(!el) return;
@@ -690,7 +728,7 @@
       var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
       if (canon) setMotivoCanon(canon, true);
       var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
+      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; LAST_ML_REASON_TEXT = txt; }
     }
     // <<< PATCH 4
 
@@ -808,7 +846,7 @@
       var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
       if (canon) setMotivoCanon(canon, true);
       var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
+      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; LAST_ML_REASON_TEXT = txt; }
     }
     // <<< PATCH 5
 
@@ -1143,7 +1181,7 @@
    '#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete',
    '#status','select[name="status"]'
   ].forEach(function(sel){ var el=pickEl(sel); if (!el) return; el.addEventListener('input', recalc); if (el.tagName === 'SELECT') el.addEventListener('change', recalc); });
-  (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', recalc); } })();
+  (function(){ var sel=getMotivoSelect(); if (sel){ sel.addEventListener('change', function(){ sel.dataset.dirty='1'; recalc(); }); } })();
 
   // Removido 'btn-mark' da lista para limpeza
   ['btn-insp-aprova','btn-insp-reprova','rq-aprovar','rq-reprovar','rq-receber','btn-cd','btn-salvar','btn-enrich']
@@ -1162,14 +1200,32 @@
 
   var btnSalvar=$('btn-salvar'); if (btnSalvar) safeOnClick(btnSalvar, save);
 
-  /* === REMOVIDO LÓGICA DO BOTÃO 'APLICAR' (BTN-MARK) === */
-
-  var btnEnrich=$('btn-enrich'); if (btnEnrich) safeOnClick(btnEnrich, function(){ enrichFromML('manual'); });
-  
-  function disableHead(disabled){
-    // Removido 'btn-mark' da lista
-    ['btn-salvar','btn-enrich','btn-insp-aprova','btn-insp-reprova','rq-receber','rq-aprovar','rq-reprovar','btn-cd']
-      .forEach(function(id){ var el=$(id); if (el) el.disabled = !!disabled; });
+  /* === Fallback amplo para "Salvar" (ids diferentes / form submit) === */
+  function bindSaveFallbacks() {
+    // botões comuns
+    var cand = document.querySelectorAll('#btn-salvar, #salvar, button[data-action="save"], .js-save, #save, .btn-salvar');
+    cand.forEach(function(b){
+      if (b.__saveBound) return;
+      b.addEventListener('click', function(e){ e.preventDefault(); save(); });
+      b.__saveBound = true;
+    });
+    // submit de forms relacionados
+    var forms = document.querySelectorAll('#form-devolucao, form[data-form="devolucao"], form[action*="/returns"], form[action*="/devolucao"]');
+    forms.forEach(function(f){
+      if (f.__saveBound) return;
+      f.addEventListener('submit', function(e){ e.preventDefault(); save(); });
+      f.__saveBound = true;
+    });
+    // último recurso: botão com label "Salvar"
+    if (!cand.length) {
+      var btn = Array.from(document.querySelectorAll('button')).find(function(b){
+        return (b.textContent || '').trim().toLowerCase() === 'salvar';
+      });
+      if (btn && !btn.__saveBound) {
+        btn.addEventListener('click', function(e){ e.preventDefault(); save(); });
+        btn.__saveBound = true;
+      }
+    }
   }
 
   /* =============== Save =============== */
@@ -1619,6 +1675,7 @@
         [getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
          getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
         ].forEach(bindDirty);
+        bindSaveFallbacks(); // garante que o botão/form de salvar funcione em qualquer layout
       })
       .catch(function(){})
       .then(function(){
