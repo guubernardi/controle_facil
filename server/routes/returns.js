@@ -10,13 +10,17 @@ const qOf = (req) => req.q || query;
 
 /* ================= helpers ================= */
 async function columnsOf(q, table) {
-  const { rows } = await q(
-    `SELECT column_name
-       FROM information_schema.columns
-      WHERE table_schema='public' AND table_name=$1`,
-    [table]
-  );
-  return new Set(rows.map(r => r.column_name));
+  try {
+    const { rows } = await q(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=$1`,
+      [table]
+    );
+    return new Set(rows.map(r => r.column_name));
+  } catch (e) {
+    return new Set(); // fallback
+  }
 }
 
 async function hasTable(q, table) {
@@ -30,24 +34,35 @@ async function hasTable(q, table) {
   return !!rows.length;
 }
 
-let HAS_TENANT_COL = null;
-async function hasTenantColumn(q) {
-  if (HAS_TENANT_COL !== null) return HAS_TENANT_COL;
-  try {
-    const cols = await columnsOf(q, 'devolucoes');
-    HAS_TENANT_COL = cols.has('tenant_id');
-  } catch (e) {
-    console.warn('[returns] tenant_id check failed:', e.message || e);
-    HAS_TENANT_COL = false;
-  }
-  return HAS_TENANT_COL;
-}
-
 function getTenantId(req) {
   return req.session?.user?.tenant_id || req.tenant?.id || null;
 }
 
-/* =============== 1) LISTAGEM (Kanban / Lista) =============== */
+function humanizeReason(idOrText = '') {
+  const s = String(idOrText || '').toLowerCase();
+  const map = {
+    different_from_description: 'Produto diferente do anunciado',
+    not_as_described: 'Produto diferente do anunciado',
+    wrong_item: 'Produto diferente do anunciado',
+    variations_mismatch: 'Variação errada',
+    size_color_mismatch: 'Variação errada',
+    damaged_item: 'Produto com defeito',
+    broken: 'Produto com defeito',
+    incomplete_item: 'Produto incompleto',
+    missing_parts: 'Produto incompleto',
+    not_delivered: 'Entrega atrasada',
+    undelivered: 'Entrega atrasada'
+  };
+  if (map[s]) return map[s];
+  if (/diferente.*anunciad|not.*describ/.test(s)) return 'Produto diferente do anunciado';
+  if (/cor|tamanho|variaç|variation/.test(s))     return 'Variação errada';
+  if (/defeit|quebrad|broken|damag/.test(s))      return 'Produto com defeito';
+  if (/incomplet|faltando|missing/.test(s))       return 'Produto incompleto';
+  if (/undeliver|not.*deliver|atras/.test(s))     return 'Entrega atrasada';
+  return idOrText || 'Outro';
+}
+
+/* =============== 1) LISTAGEM =============== */
 router.get('/', async (req, res) => {
   try {
     const q         = qOf(req);
@@ -61,7 +76,6 @@ router.get('/', async (req, res) => {
     const cols = await columnsOf(q, 'devolucoes');
     const has  = (c) => cols.has(c);
 
-    // monta SELECT seguro
     const selectCols = [];
     ['id','id_venda','cliente_nome','loja_nome','sku','status','log_status',
      'updated_at','created_at','valor_produto','valor_frete'
@@ -74,15 +88,13 @@ router.get('/', async (req, res) => {
     const params       = [];
     const whereClauses = [];
 
-    // tenant
-    const tenantId  = getTenantId(req);
-    const hasTenant = await hasTenantColumn(q);
-    if (tenantId && hasTenant) {
+    // tenant (sem cache: usa as colunas reais do momento)
+    const tenantId = getTenantId(req);
+    if (tenantId && has('tenant_id')) {
       whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
       params.push(tenantId);
     }
 
-    // busca textual
     if (search) {
       const likes = [];
       if (has('id_venda'))     likes.push(`id_venda ILIKE $${params.length + 1}`);
@@ -90,19 +102,15 @@ router.get('/', async (req, res) => {
       if (has('cliente_nome')) likes.push(`cliente_nome ILIKE $${params.length + 1}`);
       if (has('nfe_chave'))    likes.push(`nfe_chave ILIKE $${params.length + 1}`);
       likes.push(`CAST(id AS TEXT) = $${params.length + 1}`);
-      if (likes.length) {
-        whereClauses.push('(' + likes.join(' OR ') + ')');
-        params.push(`%${search}%`);
-      }
+      whereClauses.push('(' + likes.join(' OR ') + ')');
+      params.push(`%${search}%`);
     }
 
-    // data
     if (rangeDays > 0) {
       const dcol = has('created_at') ? 'created_at' : (has('updated_at') ? 'updated_at' : null);
       if (dcol) whereClauses.push(`${dcol} >= NOW() - INTERVAL '${rangeDays} days'`);
     }
 
-    // status
     if (status) {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
@@ -115,11 +123,9 @@ router.get('/', async (req, res) => {
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'concluida') {
-        let clause = `(`;
-        clause += `status IN ('concluida','finalizado','aprovado','rejeitado')`;
-        if (has('log_status')) clause += ` OR log_status = 'recebido_cd'`;
-        if (has('ml_return_status')) clause += ` OR ml_return_status = 'delivered'`;
-        clause += `)`;
+        let clause = `status IN ('concluida','finalizado','aprovado','rejeitado')`;
+        if (has('log_status'))       clause = `(${clause} OR log_status = 'recebido_cd')`;
+        if (has('ml_return_status')) clause = `(${clause} OR ml_return_status = 'delivered')`;
         whereClauses.push(clause);
       } else if (status !== 'todos') {
         const opts = [];
@@ -133,7 +139,7 @@ router.get('/', async (req, res) => {
     }
 
     const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
-    const orderCol = cols.has('updated_at') ? 'updated_at' : (cols.has('created_at') ? 'created_at' : 'id');
+    const orderCol = has('updated_at') ? 'updated_at' : (has('created_at') ? 'created_at' : 'id');
 
     const sql = `
       SELECT ${selectCols.join(',\n             ')}
@@ -174,7 +180,7 @@ router.get('/sync', (req, res) => {
   return res.redirect(`/api/ml/claims/import?${qs.toString()}`);
 });
 
-/* =============== 3) DETALHES =============== */
+/* =============== 3) DETALHES (com fallbacks) =============== */
 async function buildSafeSelect(q) {
   const cols = await columnsOf(q, 'devolucoes');
   const has  = (c) => cols.has(c);
@@ -197,74 +203,90 @@ async function buildSafeSelect(q) {
   if (has('foto_produto'))     opt.push('foto_produto');
 
   const all = base.concat(opt);
-  return all.length ? `SELECT ${all.join(', ')} FROM devolucoes`
-                    : `SELECT * FROM devolucoes`;
+  return {
+    sql: all.length ? `SELECT ${all.join(', ')} FROM devolucoes` : `SELECT * FROM devolucoes`,
+    hasTenant: has('tenant_id'),
+    has: (name) => has(name)
+  };
 }
 
 router.get('/:id', async (req, res) => {
   const debug = req.query.debug === '1';
   try {
     const q        = qOf(req);
-    const selSql   = await buildSafeSelect(q);
-    const hasTenant= await hasTenantColumn(q);
+    const { sql: selSql, hasTenant } = await buildSafeSelect(q);
     const tenantId = getTenantId(req);
     const idParam  = String(req.params.id || '').trim();
-
-    const args = [];
-    const wh = [];
-
-    // 1) tenta por id (numérico)
     const isNumeric = /^\d+$/.test(idParam);
-    if (isNumeric) {
-      args.push(Number(idParam));
-      wh.push(`id = $${args.length}`);
-    } else {
-      // forçou por id_venda textual
-      args.push(idParam);
-      wh.push(`id_venda = $${args.length}`);
-    }
 
+    // tenta por id
+    let sql1 = `${selSql} WHERE id = $1`;
+    const args1 = [ Number(isNumeric ? idParam : 0) ];
     if (hasTenant && tenantId) {
-      args.push(tenantId);
-      wh.push(`(tenant_id = $${args.length} OR tenant_id IS NULL)`);
+      sql1 += ` AND (tenant_id = $2 OR tenant_id IS NULL)`;
+      args1.push(tenantId);
     }
+    sql1 += ` LIMIT 1`;
 
-    let sql = `${selSql} WHERE ${wh.join(' AND ')} LIMIT 1`;
     let row = null;
     try {
-      const r1 = await q(sql, args);
+      const r1 = await q(sql1, args1);
       row = r1.rows[0] || null;
     } catch (err) {
-      console.error('[returns:get] SQL1 falhou:', err.message);
-      if (debug) return res.status(500).json({ error:'sql_error', sql, args, detail: err.message });
-      throw err;
+      // fallback para SELECT * (se a projeção com colunas falhou)
+      try {
+        const r1b = await q(
+          `SELECT * FROM devolucoes WHERE id = $1 ${hasTenant && tenantId ? 'AND (tenant_id = $2 OR tenant_id IS NULL)' : ''} LIMIT 1`,
+          args1
+        );
+        row = r1b.rows[0] || null;
+        if (!debug) console.warn('[returns:get] fallback SELECT * (id)', err.message);
+      } catch (err2) {
+        if (debug) return res.status(500).json({ error: 'sql_error', sql: sql1, args: args1, detail: err2.message });
+        throw err2;
+      }
     }
 
-    // 2) fallback: se não achou e param é numérico, tenta como id_venda
-    if (!row && isNumeric) {
+    // se não achou (ou param não era numérico), tenta por id_venda
+    if (!row) {
       const args2 = [ idParam ];
-      const wh2 = [`id_venda = $1`];
+      let sql2 = `${selSql} WHERE id_venda = $1`;
       if (hasTenant && tenantId) {
+        sql2 += ` AND (tenant_id = $2 OR tenant_id IS NULL)`;
         args2.push(tenantId);
-        wh2.push(`(tenant_id = $${args2.length} OR tenant_id IS NULL)`);
       }
-      sql = `${selSql} WHERE ${wh2.join(' AND ')} LIMIT 1`;
+      sql2 += ` LIMIT 1`;
+
       try {
-        const r2 = await q(sql, args2);
+        const r2 = await q(sql2, args2);
         row = r2.rows[0] || null;
       } catch (err) {
-        console.error('[returns:get] SQL2 falhou:', err.message);
-        if (debug) return res.status(500).json({ error:'sql_error', sql, args: args2, detail: err.message });
-        throw err;
+        try {
+          const r2b = await q(
+            `SELECT * FROM devolucoes WHERE id_venda = $1 ${hasTenant && tenantId ? 'AND (tenant_id = $2 OR tenant_id IS NULL)' : ''} LIMIT 1`,
+            args2
+          );
+          row = r2b.rows[0] || null;
+          if (!debug) console.warn('[returns:get] fallback SELECT * (id_venda)', err.message);
+        } catch (err2) {
+          if (debug) return res.status(500).json({ error:'sql_error', sql: sql2, args: args2, detail: err2.message });
+          throw err2;
+        }
       }
     }
 
     if (!row) return res.status(404).json({ error: 'Não encontrado' });
 
-    if (debug) return res.json({ row, debug: true });
-    res.json(row);
+    // motivo “derivado” para o front ter algo mesmo sem enrich ML
+    const rawMotivo = row.tipo_reclamacao || row.reclamacao || row.ml_return_status || '';
+    const motivo_label = humanizeReason(rawMotivo);
+
+    res.json({ ...row, motivo_label });
   } catch (e) {
     console.error('[returns:get] ERRO', e);
+    if (req.query.debug === '1') {
+      return res.status(500).json({ error: e.message || 'Erro interno ao buscar' });
+    }
     res.status(500).json({ error: 'Erro interno ao buscar' });
   }
 });
@@ -312,7 +334,7 @@ router.patch('/:id', express.json(), async (req, res) => {
     push('cd_recebido_em',  body.cd_recebido_em || null);
     push('cd_responsavel',  body.cd_responsavel || null);
 
-    if (cols.has('updated_at')) set.push('updated_at = NOW()');
+    if (has('updated_at')) set.push('updated_at = NOW()');
 
     if (!set.length) return res.status(400).json({ error: 'empty_patch' });
 
@@ -321,9 +343,9 @@ router.patch('/:id', express.json(), async (req, res) => {
     whereArgs.push(Number(id));
     where.push(`id = $${whereArgs.length}`);
 
-    const hasTenant = await hasTenantColumn(q);
+    const hasTenantNow = cols.has('tenant_id');
     const tenantId  = getTenantId(req);
-    if (hasTenant && tenantId) {
+    if (hasTenantNow && tenantId) {
       whereArgs.push(tenantId);
       where.push(`(tenant_id = $${whereArgs.length} OR tenant_id IS NULL)`);
     }
@@ -366,9 +388,9 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
     const wargs = [ Number(id) ];
     where.push(`id = $${wargs.length}`);
 
-    const hasTenant = await hasTenantColumn(q);
+    const hasTenantNow = has('tenant_id');
     const tenantId  = getTenantId(req);
-    if (hasTenant && tenantId) {
+    if (hasTenantNow && tenantId) {
       wargs.push(tenantId);
       where.push(`(tenant_id = $${wargs.length} OR tenant_id IS NULL)`);
     }
@@ -383,7 +405,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
 
-    // timeline (tenta nas duas tabelas conhecidas)
+    // timeline
     try {
       const hasRetEvents  = await hasTable(q, 'return_events');
       const hasDevEvents  = await hasTable(q, 'devolucoes_events');
@@ -398,7 +420,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
         await q(
           `INSERT INTO devolucoes_events (return_id, type, title, message, created_by)
            VALUES ($1,$2,$3,$4,$5)`,
-          [ id,'logistica','Recebido no CD',`Pacote conferido por ${responsavel || 'cd'}`,updated_by || 'scanner' ]
+          [ id, 'logistica', 'Recebido no CD', `Pacote conferido por ${responsavel || 'cd'}`, updated_by || 'scanner' ]
         );
       }
     } catch (err) {
@@ -412,7 +434,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
   }
 });
 
-/* =============== 5) TIMELINE (/api/returns/:id/events) =============== */
+/* =============== 5) TIMELINE =============== */
 router.get('/:id/events', async (req, res) => {
   try {
     const q   = qOf(req);
@@ -425,12 +447,9 @@ router.get('/:id/events', async (req, res) => {
     if (!hasRetEvents && !hasDevEvents) return res.json({ items: [] });
 
     const params = [ Number(id) ];
-    let sql;
-    if (hasRetEvents) {
-      sql = `SELECT * FROM return_events WHERE return_id = $1 ORDER BY created_at DESC NULLS LAST, id DESC`;
-    } else {
-      sql = `SELECT * FROM devolucoes_events WHERE return_id = $1 ORDER BY created_at DESC NULLS LAST, id DESC`;
-    }
+    const sql = hasRetEvents
+      ? `SELECT * FROM return_events WHERE return_id = $1 ORDER BY created_at DESC NULLS LAST, id DESC`
+      : `SELECT * FROM devolucoes_events WHERE return_id = $1 ORDER BY created_at DESC NULLS LAST, id DESC`;
 
     const { rows } = await q(sql, params);
     res.json({ items: rows || [] });

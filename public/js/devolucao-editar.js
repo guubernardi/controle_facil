@@ -1,4 +1,5 @@
 // /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente (+ fluxo Recebido no CD)
+// — inclui: lock dataset.dirty, persist antes de recarregar, reload resiliente a 500
 (function () {
   /* =============== Helpers =============== */
   var $  = function (id) { return document.getElementById(id); };
@@ -49,7 +50,7 @@
     var el = getFirst(selectors); if (!el) return false;
     var incomingEmpty = (value === undefined || value === null || (typeof value === 'string' && value.trim() === ''));
     if ('value' in el) {
-      if (el.dataset && el.dataset.dirty === '1') return false;
+      if (el.dataset && el.dataset.dirty === '1') return false; // não sobrescrever campo sujo
       var hasCurrent = String(el.value || '').trim() !== '';
       if (incomingEmpty && hasCurrent) return false;
       var v = (value == null ? '' : String(value));
@@ -881,8 +882,8 @@
 
       var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
       var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
-      if (product != null && ip && ip.dataset.dirty!=='1') { ip.value = String(product); current.valor_produto = product; changed = true; }
-      if (freight != null && ifr && ifr.dataset.dirty!=='1') { ifr.value = String(freight); current.valor_frete = freight; changed = true; }
+      if (product != null && ip && ip.dataset.dirty!=='1') { ip.value = String(product); ip.dataset.dirty='1'; current.valor_produto = product; changed = true; }
+      if (freight != null && ifr && ifr.dataset.dirty!=='1') { ifr.value = String(freight); ifr.dataset.dirty='1'; current.valor_frete = freight; changed = true; }
 
       if (changed) {
         recalc();
@@ -936,7 +937,7 @@
     var wasDirty = inputFrete && inputFrete.dataset.dirty === '1';
     var curFrete = inputFrete ? toNum(inputFrete.value) : toNum(current.valor_frete);
     if (!wasDirty && toNum(curFrete) === 0 && toNum(brlAmount) > 0) {
-      if (inputFrete) { inputFrete.value = String(toNum(brlAmount)); }
+      if (inputFrete) { inputFrete.value = String(toNum(brlAmount)); inputFrete.dataset.dirty='1'; }
       current.valor_frete = toNum(brlAmount);
       recalc();
       if (opts.persist && (current.id || returnId)) {
@@ -1442,8 +1443,14 @@
         var ip = getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']);
         var ifr = getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete']);
         var changed = false;
-        if (product !== null && toNum(product) !== toNum(current.valor_produto)) { current.valor_produto = toNum(product); if (ip && ip.dataset.dirty!=='1')  { ip.value  = String(current.valor_produto); changed = true; } }
-        if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   { current.valor_frete   = toNum(freight); if (ifr && ifr.dataset.dirty!=='1'){ ifr.value = String(current.valor_frete);   changed = true; } }
+        if (product !== null && toNum(product) !== toNum(current.valor_produto)) {
+          current.valor_produto = toNum(product);
+          if (ip) { ip.value  = String(current.valor_produto); ip.dataset.dirty='1'; changed = true; }
+        }
+        if (freight !== null && toNum(freight) !== toNum(current.valor_frete))   {
+          current.valor_frete   = toNum(freight);
+          if (ifr) { ifr.value = String(current.valor_frete); ifr.dataset.dirty='1'; changed = true; }
+        }
 
         if (changed) {
           recalc(); updateSummary(Object.assign({}, current, capture()));
@@ -1452,11 +1459,14 @@
           toast('ML não trouxe valores. Tentando pelo pedido…', 'warning');
         }
 
+        // Persist amounts e só depois recarrega
         var amountsPatch = {};
         if (product !== null) amountsPatch.valor_produto = toNum(product);
         if (freight !== null) amountsPatch.valor_frete   = toNum(freight);
+
+        var persistPromise = Promise.resolve();
         if ((current.id || returnId) && Object.keys(amountsPatch).length) {
-          fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
+          persistPromise = fetch('/api/returns/' + encodeURIComponent(current.id || returnId), {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(Object.assign({}, amountsPatch, { updated_by: 'frontend-auto-enrich' }))
           }).catch(function(){});
@@ -1466,11 +1476,15 @@
         fetchAndApplyReturnCost(res.claimId, { persist: true });
 
         var orderId = readFirst(ORDER_ID_SELECTORS) || (j.orders && j.orders[0] && j.orders[0].order_id) || (current.raw && (current.raw.order_id || current.raw.resource_id));
+        var afterOrderFallback = Promise.resolve();
         if (needsEnrichment(Object.assign({}, current, capture()))) {
-          return orderId ? fetchOrderInfo(orderId).then(function(ord){ if (ord) return applyOrderToUi(ord, {persist:true}); }) : null;
+          afterOrderFallback = orderId ? fetchOrderInfo(orderId).then(function(ord){ if (ord) return applyOrderToUi(ord, {persist:true}); }) : Promise.resolve(null);
         }
+
+        return Promise.all([persistPromise, afterOrderFallback]).then(function(){
+          if (hasLocalRow) return reloadCurrent();
+        });
       })
-      .then(function(){ if (hasLocalRow) return reloadCurrent(); })
       .catch(function (e) {
         if (e && (e.status === 429 || e.status === 403)) toast('Limite do ML (429/403). Usando fallback do pedido…', 'warning');
         var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id') || (current.raw && (current.raw.order_id || current.raw.resource_id));
@@ -1501,13 +1515,21 @@
     if (!returnId) return Promise.resolve();
     return fetch('/api/returns/' + encodeURIComponent(returnId), { headers: { 'Accept': 'application/json' } })
       .then(function(r){
-        if (r.status === 404) {
-          current = { id: returnId };
-          hasLocalRow = false;
-          return Promise.reject(Object.assign(new Error('404'), { status: 404 }));
-        }
-        if (!r.ok) throw new Error('HTTP '+r.status);
-        return r.json();
+        return r.text().then(function(txt){
+          var j = {};
+          try { j = txt ? JSON.parse(txt) : {}; } catch(_){}
+          if (r.status === 404) {
+            current = { id: returnId };
+            hasLocalRow = false;
+            return Promise.reject({ status:404, body:j });
+          }
+          if (!r.ok) {
+            // Em 500+ não derruba UI; mantém o que já está preenchido
+            try { console.warn('[reloadCurrent] GET falhou', r.status, (j && j.error) || j); } catch(_){}
+            return Promise.reject({ status:r.status, body:j });
+          }
+          return j;
+        });
       })
       .then(function (j) {
         var data = (j && (j.data || j.item || j.return || j)) || j || {};
@@ -1515,8 +1537,8 @@
         normalizeAndSet(data);
       })
       .catch(function (e) {
-        if (e && e.status === 404) return;
-        throw e;
+        if (e && e.status === 404) return; // nada a fazer
+        // Qualquer outro erro: ignora para não apagar valores na tela
       });
   }
 
@@ -1555,7 +1577,7 @@
       })
       .then(function(){ return ensureBuyerName({ persist:true }); })
       .catch(function (e) {
-        var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>'+(e.message || 'Falha ao carregar.')+'</b></div>';
+        var cont=document.querySelector('.page-wrap'); if (cont) cont.innerHTML='<div class="card"><b>'+(e && e.message ? e.message : 'Falha ao carregar.')+'</b></div>';
       });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load); else load();
