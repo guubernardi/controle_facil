@@ -31,23 +31,20 @@ class DevolucoesFeed {
     this.configurarUI();
     this.exposeGlobalReload();
 
-    // Permite que outras telas/JS forcem o reload da lista
     document.addEventListener('rf:returns:reload', async () => {
       await this.carregar();
       this.renderizar();
     });
 
-    // Carregamento inicial
     await this.carregar();
     this.renderizar();
 
-    // Auto-sync silencioso (de tempos em tempos)
     this.startAutoSync();
   }
 
   // ===== Configuração da Interface =====
   configurarUI() {
-    // 1. Busca (com debounce para não travar)
+    // 1. Busca (com debounce)
     const inputBusca = document.getElementById("campo-pesquisa");
     if (inputBusca) {
       let timeout;
@@ -68,7 +65,6 @@ class DevolucoesFeed {
         const btn = e.target.closest(".aba");
         if (!btn) return;
         
-        // Remove ativo dos outros
         listaAbas.querySelectorAll(".aba").forEach(b => b.classList.remove("is-active"));
         btn.classList.add("is-active");
         
@@ -86,7 +82,6 @@ class DevolucoesFeed {
         if (btn && !btn.disabled) {
           this.page = Number(btn.dataset.page);
           this.renderizar();
-          // Scroll suave pro topo da lista
           document.getElementById("filtros")?.scrollIntoView({ behavior: "smooth" });
         }
       });
@@ -95,7 +90,7 @@ class DevolucoesFeed {
     // 4. Botão Exportar
     document.getElementById("botao-exportar")?.addEventListener("click", () => this.exportar());
 
-    // 5. Botão Nova Devolução → vai pra tela de edição/criação
+    // 5. Nova Devolução
     const btnNova = document.getElementById("btn-nova-devolucao");
     if (btnNova) {
       btnNova.addEventListener("click", () => {
@@ -103,7 +98,7 @@ class DevolucoesFeed {
       });
     }
 
-    // 6. Botão Sincronizar devoluções
+    // 6. Sincronizar
     const btnSync = document.getElementById("botao-sync");
     if (btnSync) {
       btnSync.addEventListener("click", () => this.sincronizar());
@@ -119,10 +114,9 @@ class DevolucoesFeed {
       if (!res.ok) throw new Error("Erro ao buscar dados");
 
       const json = await res.json();
-      // Normaliza a resposta (pode vir num objeto .items ou direto array)
       this.items = Array.isArray(json) ? json : (json.items || []);
 
-      // garante mais recentes primeiro, mesmo se o backend não ordenar
+      // mais recentes primeiro, independente do backend
       this.items.sort((a, b) => {
         const da = new Date(
           a.created_at ||
@@ -183,12 +177,20 @@ class DevolucoesFeed {
     const status = String(row.ml_claim_status || row.claim_status || "").toLowerCase();
     const type   = String(row.ml_claim_type   || row.claim_type   || "").toLowerCase();
 
-    // stage "dispute" ou "mediation"
+    // campos de triagem (reviews de /v2/claims/$CLAIM_ID/returns), se o backend mandar
+    const triageStage  = String(row.ml_triage_stage  || row.triage_stage  || "").toLowerCase();
+    const triageStatus = String(row.ml_triage_status || row.triage_status || "").toLowerCase();
+
+    // stage/status "dispute" ou "mediation"
     if (stage.includes("dispute") || stage.includes("mediation")) return true;
-    // status com palavra "mediation"/"dispute"
     if (status.includes("mediation") || status.includes("dispute")) return true;
-    // type típico do ML para mediação
     if (type === "meditations") return true;
+
+    // triage pendente = tratamos como em mediação
+    if (["seller_review_pending", "pending"].includes(triageStage)) return true;
+
+    // triage com status explícito de falha também é um caso de conflito ativo
+    if (triageStatus === "failed" && triageStage !== "closed") return true;
 
     return false;
   }
@@ -220,26 +222,22 @@ class DevolucoesFeed {
   formatarDataBR(v) {
     if (!v) return "—";
 
-    // já é Date
     if (v instanceof Date) {
       return v.toLocaleDateString("pt-BR");
     }
 
     const s = String(v);
 
-    // YYYY-MM-DD
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) {
       return `${m[3]}/${m[2]}/${m[1]}`;
     }
 
-    // tenta parse normal
     const d = new Date(s);
     if (!Number.isNaN(d.getTime())) {
       return d.toLocaleDateString("pt-BR");
     }
 
-    // fallback bruto
     return s;
   }
 
@@ -262,6 +260,29 @@ class DevolucoesFeed {
     return diff >= 0 && diff <= LIMITE_MS;
   }
 
+  // ===== Helpers de valor (parse robusto) =====
+  toNumber(raw) {
+    if (raw === null || raw === undefined || raw === "") return 0;
+    if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
+
+    let v = String(raw).trim();
+    // remove símbolos tipo "R$"
+    v = v.replace(/[^\d.,-]/g, "");
+
+    const parts = v.split(",");
+    if (parts.length > 2) return 0;
+
+    if (parts.length === 2) {
+      const intPart = parts[0].replace(/\./g, "");
+      const decPart = parts[1].padEnd(2, "0").slice(0, 2);
+      const n = Number(intPart + "." + decPart);
+      return Number.isNaN(n) ? 0 : n;
+    }
+
+    const n = Number(v.replace(/\./g, ""));
+    return Number.isNaN(n) ? 0 : n;
+  }
+
   // ===== Helpers de valores (Produto / Frete) =====
   getValorProduto(d) {
     const candidatos = [
@@ -274,8 +295,8 @@ class DevolucoesFeed {
       d.total_produtos
     ];
     for (const v of candidatos) {
-      const n = Number(v);
-      if (!Number.isNaN(n) && n > 0) return n;
+      const n = this.toNumber(v);
+      if (n > 0) return n;
     }
     return 0;
   }
@@ -290,8 +311,8 @@ class DevolucoesFeed {
       d.valor_envio
     ];
     for (const v of candidatos) {
-      const n = Number(v);
-      if (!Number.isNaN(n) && n > 0) return n;
+      const n = this.toNumber(v);
+      if (n > 0) return n;
     }
     return 0;
   }
@@ -304,9 +325,7 @@ class DevolucoesFeed {
     const termo        = this.filtros.pesquisa.toLowerCase();
     const statusFiltro = this.filtros.status;
 
-    // Filtragem client-side
     const filtrados = this.items.filter(d => {
-      // Filtro de texto
       const matchTexto = [
         d.id_venda,
         d.cliente_nome,
@@ -318,12 +337,10 @@ class DevolucoesFeed {
 
       if (!matchTexto) return false;
 
-      // Filtro de Status (abas)
       if (statusFiltro === "todos") return true;
       return this.identificarGrupo(d) === statusFiltro;
     });
 
-    // Paginação client-side
     const total      = filtrados.length;
     const totalPages = Math.ceil(total / this.pageSize) || 1;
     if (this.page > totalPages) this.page = totalPages;
@@ -357,7 +374,6 @@ class DevolucoesFeed {
     const el = document.createElement("div");
     el.className = "card-devolucao";
     
-    // Fonte da data:
     const dataFonte =
       d.created_at ||
       d.updated_at ||
@@ -380,9 +396,9 @@ class DevolucoesFeed {
       currency: "BRL"
     });
 
-    const fotoUrl  = d.foto_produto || "assets/img/box.jpg"; // Placeholder
+    const fotoUrl  = d.foto_produto || "assets/img/box.jpg";
     
-    // Status
+    // Status da devolução no ML
     const statusML    = this.traduzirStatusML(d.ml_return_status);
     const statusClass = this.getClassStatusML(d.ml_return_status);
 
@@ -443,8 +459,11 @@ class DevolucoesFeed {
   }
 
   // ===== Helpers Visuais =====
-  traduzirStatusML(st) {
+  traduzirStatusML(stRaw) {
+    const st = String(stRaw || "").toLowerCase();
+
     const map = {
+      // principais
       pending:         "Pendente",
       shipped:         "Em trânsito",
       delivered:       "Entregue no CD",
@@ -453,16 +472,47 @@ class DevolucoesFeed {
       expired:         "Expirado",
       label_generated: "Pronta para envio",
       dispute:         "Mediação",
-      mediation:       "Mediação"
+      mediation:       "Mediação",
+
+      // mapeando variações do /v2/claims/$CLAIM_ID/returns
+      pending_cancel:     "Pendente",
+      pending_expiration: "Pendente",
+      pending_failure:    "Pendente",
+      scheduled:          "Pendente",
+      pending_delivered:  "Em trânsito",
+      return_to_buyer:    "Em trânsito",
+      failed:             "Cancelado",
+      not_delivered:      "Não entregue",
+
+      // shipment.status
+      ready_to_ship: "Pronta para envio"
     };
-    return map[st] || st || "—";
+
+    return map[st] || (st || "—");
   }
 
-  getClassStatusML(st) {
-    if (st === "delivered")       return "badge-status-aprovado";
-    if (st === "shipped")         return "badge-status-neutro";
-    if (st === "label_generated") return "badge-status-neutro";
-    if (st === "cancelled")       return "badge-status-rejeitado";
+  getClassStatusML(stRaw) {
+    const st = String(stRaw || "").toLowerCase();
+
+    // entregues
+    if (st === "delivered") return "badge-status-aprovado";
+
+    // em trânsito / a caminho
+    if (["shipped", "pending_delivered", "return_to_buyer"].includes(st)) {
+      return "badge-status-neutro";
+    }
+
+    // pronta para envio / etiqueta gerada
+    if (["label_generated", "ready_to_ship", "scheduled"].includes(st)) {
+      return "badge-status-neutro";
+    }
+
+    // problemas / cancelado / falha
+    if (["cancelled", "failed", "not_delivered", "expired"].includes(st)) {
+      return "badge-status-rejeitado";
+    }
+
+    // default = pendente
     return "badge-status-pendente";
   }
 
@@ -474,7 +524,7 @@ class DevolucoesFeed {
       return '<span class="badge badge-status-rejeitado">Em mediação (ML)</span>';
     }
 
-    if (["aprovado", "concluida", "concluido", "finalizado"].includes(s)) {
+    if (["aprovado", "concluida", "concluido", "finalizado", "encerrado"].includes(s)) {
       return '<span class="badge badge-status-aprovado">Concluído</span>';
     }
     if (["rejeitado", "disputa", "mediacao", "reclamacao"].includes(s)) {
@@ -552,7 +602,6 @@ class DevolucoesFeed {
 
       if (!res.ok) throw new Error("Falha ao iniciar sincronização");
 
-      // Depois que o backend rodar o import, recarrega a lista
       await this.carregar();
       this.renderizar();
       this.toast("Sincronização", "Devoluções atualizadas com sucesso.", "success");
