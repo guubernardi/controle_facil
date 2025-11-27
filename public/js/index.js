@@ -451,7 +451,9 @@ class DevolucoesFeed {
       cancelled:       "Cancelado",
       closed:          "Encerrado",
       expired:         "Expirado",
-      label_generated: "Pronta para envio"
+      label_generated: "Pronta para envio",
+      dispute:         "Mediação",
+      mediation:       "Mediação"
     };
     return map[st] || st || "—";
   }
