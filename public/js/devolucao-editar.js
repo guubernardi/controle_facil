@@ -531,21 +531,26 @@
     return false;
   }
 
-  /* =============== UI fill =============== */
+    /* =============== UI fill =============== */
   function fill(d){
-    var dvId=$('dv-id'); if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
+    var dvId=$('dv-id'); 
+    if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
 
-    [getFirst(CLIENTE_SELECTORS),
-     getFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
-     getFirst(ORDER_ID_SELECTORS),
-     getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
-     getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
+    [
+      getFirst(CLIENTE_SELECTORS),
+      getFirst(['#loja_nome','input[name="loja_nome"]','.js-loja']),
+      getFirst(ORDER_ID_SELECTORS),
+      getFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto']),
+      getFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'])
     ].forEach(function(el){ if (el) bindDirty(el); });
+
     upperSKUInstant();
 
+    // campos básicos
     setFirst(ORDER_ID_SELECTORS, d.id_venda);
     setFirst(CLIENTE_SELECTORS, d.cliente_nome);
     setFirst(['#loja_nome','input[name="loja_nome"]','.js-loja'], d.loja_nome);
+
     var dataStr = d.data_compra ? String(d.data_compra).slice(0,10) : '';
     setFirst(['#data_compra','input[name="data_compra"]','.js-data'], dataStr);
     setFirst(['#status','select[name="status"]'], d.status);
@@ -554,68 +559,125 @@
     setFirst(['#nfe_numero','input[name="nfe_numero"]'], d.nfe_numero || '');
     setFirst(['#nfe_chave','input[name="nfe_chave"]'],   d.nfe_chave  || '');
     setFirst(['#reclamacao','textarea[name="reclamacao"]'], d.reclamacao || '');
-    setFirst(['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto'], (d.valor_produto == null ? '' : String(toNum(d.valor_produto))));
-    setFirst(['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'], (d.valor_frete == null ? '' : String(toNum(d.valor_frete))));
 
+    setFirst(
+      ['#valor_produto','#produto_valor','input[name="valor_produto"]','.js-valor-produto'],
+      (d.valor_produto == null ? '' : String(toNum(d.valor_produto)))
+    );
+    setFirst(
+      ['#valor_frete','#frete_valor','input[name="valor_frete"]','.js-valor-frete'],
+      (d.valor_frete == null ? '' : String(toNum(d.valor_frete)))
+    );
+
+    // ids brutos (pedido / claim)
     var rawOrderId = firstNonEmpty(d.raw && d.raw.order_id, d.raw && d.raw.id_venda, d.id_venda);
     setFirst(['#order_id','input[name="order_id"]','.js-order-id-raw'].concat(ORDER_ID_SELECTORS), rawOrderId);
-    var rawClaimId = firstNonEmpty(d.raw && (d.raw.ml_claim_id || d.raw.claim_id), d.raw && d.raw.claim && d.raw.claim.id);
+
+    var rawClaimId = firstNonEmpty(
+      d.raw && (d.raw.ml_claim_id || d.raw.claim_id),
+      d.raw && d.raw.claim && d.raw.claim.id
+    );
     setFirst(CLAIM_ID_SELECTORS, rawClaimId);
 
+    // motivo interno (select)
     var sel = getMotivoSelect();
     if (sel) {
       var mot = d.tipo_reclamacao || '';
       var wasSet = false;
-      if (/_/.test(mot) || mot === 'nao_corresponde') wasSet = setMotivoCanon(mot, false);
-      if (!wasSet && mot)         wasSet = setMotivoCanon(canonFromText(mot), false);
-      if (!wasSet && d.reclamacao)wasSet = setMotivoCanon(canonFromText(d.reclamacao), false);
+
+      if (/_/.test(mot) || mot === 'nao_corresponde') {
+        wasSet = setMotivoCanon(mot, false);
+      }
+      if (!wasSet && mot) {
+        wasSet = setMotivoCanon(canonFromText(mot), false);
+      }
+      if (!wasSet && d.reclamacao) {
+        wasSet = setMotivoCanon(canonFromText(d.reclamacao), false);
+      }
       if (!wasSet) lockMotivo(false);
     }
 
+    // status logística + CD
     if (!LOG_LOCKED) setLogPill(d.log_status || '—');
     setCdInfo({ receivedAt: d.cd_recebido_em || null, responsavel: d.cd_responsavel || null });
 
     try {
+      // ===== Status real do ML (claim/return/shipping) =====
       var realStatus = null;
       if (d.raw) {
-        if (d.raw.claim && d.raw.claim.status) realStatus = d.raw.claim.status;
-        else if (d.raw.return && d.raw.return.status) realStatus = d.raw.return.status;
+        if (d.raw.claim && d.raw.claim.status)       realStatus = d.raw.claim.status;
+        else if (d.raw.return && d.raw.return.status)realStatus = d.raw.return.status;
         else if (d.raw.shipping && d.raw.shipping.status) realStatus = d.raw.shipping.status;
       }
       if (!realStatus) {
         realStatus = firstNonEmpty(d.ml_return_status, d.ml_shipping_status, d.status);
       }
-      var elStatusReal = $('ml_status_real');
-      if (elStatusReal) elStatusReal.value = realStatus ? String(realStatus).replace(/_/g, ' ') : '—';
 
-      // NOVO: só define motivo real se houver candidato; passa {code,name}
-      var rrCode = (d.raw && (d.raw.reason_id || (d.raw.claim && d.raw.claim.reason_id))) || null;
-      var rrName = d.raw ? extractMlReason(d.raw) : null;
-      var candidate = rrCode || rrName || d.tipo_reclamacao || d.reclamacao;
-      if (candidate) {
-        setMlReason({ code: rrCode, name: rrName }, { force: true });
+      var elStatusReal = $('ml_status_real');
+      if (elStatusReal) {
+        elStatusReal.value = realStatus ? String(realStatus).replace(/_/g, ' ') : '—';
       }
 
+      // ===== Motivo do cliente (CLIENTE ALEGOU ML) =====
+      var rrCode = (d.raw && (d.raw.reason_id || (d.raw.claim && d.raw.claim.reason_id))) || null;
+      var rrName = d.raw ? extractMlReason(d.raw) : null;
+
+      // preferimos o motivo_label do back (já humanizado),
+      // senão caímos no tipo_reclamacao / reclamacao
+      var fallbackName =
+        (d.raw && d.raw.motivo_label) ||
+        d.tipo_reclamacao ||
+        d.reclamacao ||
+        null;
+
+      var candidate = rrCode || rrName || fallbackName;
+
+      if (candidate) {
+        // Se temos info "oficial" do ML (code/name), usamos ela
+        if (rrCode || rrName) {
+          setMlReason(
+            { code: rrCode, name: rrName || fallbackName },
+            { force: true }  // pode sobrescrever o "—" inicial, mas ainda sem lock
+          );
+        } else if (fallbackName) {
+          // Sem dado do ML (401/429 etc): usa o motivo local como CLIENTE ALEGOU
+          setMlReason(fallbackName, { force: true });
+        }
+      }
+
+      // Se veio código/nome do ML, daí sim tentamos
+      // converter para canon e gravar de volta na devolução
       if (rrCode || rrName) {
-        var txt = rrName || '';
-        var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || canonFromCode(rrCode, txt) || null;
+        var txt   = rrName || '';
+        var canon = canonFromText(txt) ||
+                    REASONNAME_TO_CANON[txt] ||
+                    REASONKEY_TO_CANON[txt] ||
+                    canonFromCode(rrCode, txt) ||
+                    null;
+
         if (canon && setMotivoCanon(canon, true)) {
           var idp = current.id || returnId;
           if (idp) {
             fetch('/api/returns/' + encodeURIComponent(idp), {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tipo_reclamacao: canon, updated_by: 'frontend-ml-reason' })
+              body: JSON.stringify({
+                tipo_reclamacao: canon,
+                updated_by: 'frontend-ml-reason'
+              })
             }).catch(function(){});
           }
         }
       }
     } catch(_){}
 
+    // Resumo ML + claim
     fillMlSummaryFromCurrent();
     if (d.raw && d.raw.claim) fillClaimUI(d.raw.claim);
 
-    updateSummary(d); recalc();
+    // Cards de resumo + total
+    updateSummary(d);
+    recalc();
   }
 
   /* =============== Resumo ML =============== */
