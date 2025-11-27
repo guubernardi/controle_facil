@@ -138,7 +138,7 @@
     var s = String(text || '').toLowerCase();
     var cls = 'pill -neutro';
     if (!text) cls = 'pill -neutro';
-    else if (s === 'em_transporte' || s === 'pronto_envio' || s.indexOf('pend') >= 0 || s.indexOf('caminho') >= 0) cls = 'pill -pendente';
+    else if (s === 'em_transporte' || s === 'pronto_envio' || s === 'mediacao'|| s.indexOf('pend') >= 0 || s.indexOf('caminho') >= 0) cls = 'pill -pendente';
     else if (s === 'recebido_cd' || s.indexOf('aprov') >= 0 || s.indexOf('recebido') >= 0) cls = 'pill -aprovado';
     else if (s === 'reprovado_cd' || s.indexOf('rej') >= 0 || s.indexOf('neg') >= 0 || s.indexOf('reprov') >= 0) cls = 'pill -rejeitado';
 
