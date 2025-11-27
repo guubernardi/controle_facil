@@ -122,6 +122,27 @@ class DevolucoesFeed {
       // Normaliza a resposta (pode vir num objeto .items ou direto array)
       this.items = Array.isArray(json) ? json : (json.items || []);
 
+      // garante mais recentes primeiro, mesmo se o backend não ordenar
+      this.items.sort((a, b) => {
+        const da = new Date(
+          a.created_at ||
+          a.updated_at ||
+          a.cd_recebido_em ||
+          a.data_compra ||
+          a.order_date ||
+          0
+        ).getTime();
+        const db = new Date(
+          b.created_at ||
+          b.updated_at ||
+          b.cd_recebido_em ||
+          b.data_compra ||
+          b.order_date ||
+          0
+        ).getTime();
+        return db - da;
+      });
+
       this.atualizarContadores();
     } catch (e) {
       console.error("Falha no carregamento:", e);
@@ -140,8 +161,6 @@ class DevolucoesFeed {
       if (counts[grupo] !== undefined) counts[grupo]++;
     });
 
-    // IDs no HTML:
-    // count-todos, count-pendente, count-analise, count-disputa, count-finalizado
     const mapaIds = {
       todos:      "count-todos",
       pendente:   "count-pendente",
@@ -162,6 +181,86 @@ class DevolucoesFeed {
       if (set.has(s)) return grupo;
     }
     return "pendente"; // Fallback
+  }
+
+  // ===== Helpers de data =====
+  formatarDataBR(v) {
+    if (!v) return "—";
+
+    // já é Date
+    if (v instanceof Date) {
+      return v.toLocaleDateString("pt-BR");
+    }
+
+    const s = String(v);
+
+    // YYYY-MM-DD
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      return `${m[3]}/${m[2]}/${m[1]}`;
+    }
+
+    // tenta parse normal
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleDateString("pt-BR");
+    }
+
+    // fallback bruto
+    return s;
+  }
+
+  // devolução "nova" se caiu nas últimas 4h
+  isNovaDevolucao(d) {
+    const LIMITE_MS = 4 * 60 * 60 * 1000; // 4 horas
+    const fonte =
+      d.created_at ||
+      d.updated_at ||
+      d.cd_recebido_em ||
+      d.data_compra ||
+      d.order_date;
+
+    if (!fonte) return false;
+
+    const dt = new Date(fonte);
+    if (Number.isNaN(dt.getTime())) return false;
+
+    const diff = Date.now() - dt.getTime();
+    return diff >= 0 && diff <= LIMITE_MS;
+  }
+
+  // ===== Helpers de valores (Produto / Frete) =====
+  getValorProduto(d) {
+    const candidatos = [
+      d.valor_produto,
+      d.valor_produto_ml,
+      d.valor_item,
+      d.item_price,
+      d.ml_item_price,
+      d.total_produto,
+      d.total_produtos
+    ];
+    for (const v of candidatos) {
+      const n = Number(v);
+      if (!Number.isNaN(n) && n > 0) return n;
+    }
+    return 0;
+  }
+
+  getValorFrete(d) {
+    const candidatos = [
+      d.valor_frete,
+      d.frete,
+      d.ml_valor_frete,
+      d.ml_shipping_cost,
+      d.shipping_cost,
+      d.valor_envio
+    ];
+    for (const v of candidatos) {
+      const n = Number(v);
+      if (!Number.isNaN(n) && n > 0) return n;
+    }
+    return 0;
   }
 
   // ===== Renderização =====
@@ -225,10 +324,29 @@ class DevolucoesFeed {
     const el = document.createElement("div");
     el.className = "card-devolucao";
     
-    // Dados formatados
-    const dataFmt  = d.created_at ? new Date(d.created_at).toLocaleDateString("pt-BR") : "—";
-    const valorFmt = Number(d.valor_produto || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-    const freteFmt = Number(d.valor_frete   || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    // Fonte da data:
+    const dataFonte =
+      d.created_at ||
+      d.updated_at ||
+      d.cd_recebido_em ||
+      d.data_compra ||
+      d.order_date;
+
+    const dataFmt  = this.formatarDataBR(dataFonte);
+    const isNova   = this.isNovaDevolucao(d);
+
+    const valorProduto = this.getValorProduto(d);
+    const valorFrete   = this.getValorFrete(d);
+
+    const valorFmt = valorProduto.toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL"
+    });
+    const freteFmt = valorFrete.toLocaleString("pt-BR", {
+      style: "currency",
+      currency: "BRL"
+    });
+
     const fotoUrl  = d.foto_produto || "assets/img/box.jpg"; // Placeholder
     
     // Status
@@ -247,7 +365,10 @@ class DevolucoesFeed {
 
     el.innerHTML = `
       <div class="devolucao-header">
-        <span class="badge-id" title="ID do Pedido">#${d.id_venda || d.id}</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span class="badge-id" title="ID do Pedido">#${d.id_venda || d.id}</span>
+          ${isNova ? '<span class="pill-nova">Nova devolução</span>' : ''}
+        </div>
         <span class="data-br">${dataFmt}</span>
       </div>
 
@@ -291,20 +412,22 @@ class DevolucoesFeed {
   // ===== Helpers Visuais =====
   traduzirStatusML(st) {
     const map = {
-      pending:   "Pendente",
-      shipped:   "Em trânsito",
-      delivered: "Entregue no CD",
-      cancelled: "Cancelado",
-      closed:    "Encerrado",
-      expired:   "Expirado"
+      pending:         "Pendente",
+      shipped:         "Em trânsito",
+      delivered:       "Entregue no CD",
+      cancelled:       "Cancelado",
+      closed:          "Encerrado",
+      expired:         "Expirado",
+      label_generated: "Pronta para envio"
     };
     return map[st] || st || "—";
   }
 
   getClassStatusML(st) {
-    if (st === "delivered") return "badge-status-aprovado";
-    if (st === "shipped")   return "badge-status-neutro";
-    if (st === "cancelled") return "badge-status-rejeitado";
+    if (st === "delivered")       return "badge-status-aprovado";
+    if (st === "shipped")         return "badge-status-neutro";
+    if (st === "label_generated") return "badge-status-neutro";
+    if (st === "cancelled")       return "badge-status-rejeitado";
     return "badge-status-pendente";
   }
 

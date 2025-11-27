@@ -278,6 +278,18 @@ body {
   line-height: 1.3;
 }
 
+.pill-nova {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12);  /* verdinho leve */
+  color: #15803d;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
 .motivo-linha {
   font-size: 0.8rem;
   margin-bottom: 0.5rem;
