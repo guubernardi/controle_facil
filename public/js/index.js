@@ -157,7 +157,7 @@ class DevolucoesFeed {
     
     this.items.forEach(d => {
       counts.todos++;
-      const grupo = this.identificarGrupo(d.status);
+      const grupo = this.identificarGrupo(d);
       if (counts[grupo] !== undefined) counts[grupo]++;
     });
 
@@ -175,8 +175,41 @@ class DevolucoesFeed {
     });
   }
 
-  identificarGrupo(status) {
-    const s = String(status || "").toLowerCase();
+  // ===== Claim / Mediação ML =====
+  isEmMediacaoML(row) {
+    if (!row || typeof row !== 'object') return false;
+
+    const stage  = String(row.ml_claim_stage  || row.claim_stage  || row.ml_claim_stage_name || "").toLowerCase();
+    const status = String(row.ml_claim_status || row.claim_status || "").toLowerCase();
+    const type   = String(row.ml_claim_type   || row.claim_type   || "").toLowerCase();
+
+    // stage "dispute" ou "mediation"
+    if (stage.includes("dispute") || stage.includes("mediation")) return true;
+    // status com palavra "mediation"/"dispute"
+    if (status.includes("mediation") || status.includes("dispute")) return true;
+    // type típico do ML para mediação
+    if (type === "meditations") return true;
+
+    return false;
+  }
+
+  identificarGrupo(statusOrRow) {
+    let row = null;
+    let s   = "";
+
+    if (statusOrRow && typeof statusOrRow === "object") {
+      row = statusOrRow;
+      s   = String(row.status || "").toLowerCase();
+    } else {
+      s = String(statusOrRow || "").toLowerCase();
+    }
+
+    // prioridade: se a claim está em mediação/disputa no ML,
+    // força a devolução pra aba "disputa"
+    if (row && this.isEmMediacaoML(row)) {
+      return "disputa";
+    }
+
     for (const [grupo, set] of Object.entries(this.STATUS_GRUPOS)) {
       if (set.has(s)) return grupo;
     }
@@ -287,7 +320,7 @@ class DevolucoesFeed {
 
       // Filtro de Status (abas)
       if (statusFiltro === "todos") return true;
-      return this.identificarGrupo(d.status) === statusFiltro;
+      return this.identificarGrupo(d) === statusFiltro;
     });
 
     // Paginação client-side
@@ -396,7 +429,7 @@ class DevolucoesFeed {
       <div class="devolucao-footer">
         <div style="display:flex; gap:8px; align-items:center;">
           <span class="badge ${statusClass}">${statusML}</span>
-          ${this.getBadgeInterno(d.status)}
+          ${this.getBadgeInterno(d)}
         </div>
         
         <div class="devolucao-cta">
@@ -431,8 +464,14 @@ class DevolucoesFeed {
     return "badge-status-pendente";
   }
 
-  getBadgeInterno(st) {
-    const s = String(st || "").toLowerCase();
+  getBadgeInterno(row) {
+    const s = String(row && row.status || "").toLowerCase();
+
+    // Prioridade: se a claim está em mediação no ML, mostra badge próprio
+    if (this.isEmMediacaoML(row)) {
+      return '<span class="badge badge-status-rejeitado">Em mediação (ML)</span>';
+    }
+
     if (["aprovado", "concluida", "concluido", "finalizado"].includes(s)) {
       return '<span class="badge badge-status-aprovado">Concluído</span>';
     }
