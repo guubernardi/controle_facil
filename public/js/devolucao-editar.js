@@ -1,5 +1,4 @@
-// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER + buyer/users fallback + persistente (+ fluxo Recebido no CD)
-// — inclui: lock dataset.dirty, persist antes de recarregar, reload resiliente a 500
+// /public/js/devolucao-editar.js — ML enriched + FALLBACK via ORDER/CLAIM + buyer/users fallback + persistente (+ fluxo Recebido no CD)
 (function () {
   /* =============== Helpers =============== */
   var $  = function (id) { return document.getElementById(id); };
@@ -367,7 +366,7 @@
   var CANON_LABELS = {
     produto_defeituoso: ['produto defeituoso','defeituoso','não funciona','nao funciona','not working','broken'],
     produto_danificado: ['produto danificado','danificado','avariado'],
-    nao_corresponde: ['não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado','item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam peças','faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'],
+    nao_corresponde: ['Não corresponde à descrição','não corresponde à descrição','nao corresponde a descricao','produto diferente do anunciado','item errado','produto trocado','incompleto','faltam partes','faltando peças','faltam peças','faltam partes ou acessórios do produto','faltam acessórios','faltam pecas ou acessorios'],
     arrependimento_cliente: ['arrependimento do cliente','mudou de ideia','não quer mais','nao quer mais','não serviu','nao serviu'],
     entrega_atrasada: ['entrega atrasada','não entregue','nao entregue','not delivered','shipment delayed']
   };
@@ -384,15 +383,27 @@
     wrong_item:'nao_corresponde',missing_parts:'nao_corresponde',incomplete:'nao_corresponde',
     undelivered:'entrega_atrasada',not_delivered:'entrega_atrasada'
   };
-  function canonFromCode(code){
-    var c = String(code||'').toUpperCase();
-    if (!c) return null;
+
+  // NOVO: code-aware, com heurística para PDD*
+  function canonFromCode(code, nameText){
+    var C = String(code || '').toUpperCase();
+    var NT = String(nameText || '').toLowerCase();
+    if (!C) return null;
+
+    if (C === 'PNR') return 'entrega_atrasada';
+    if (C === 'CS')  return 'arrependimento_cliente';
+
+    // Família PDDxxxx (Produto Diferente/Defeituoso)
+    if (/^PDD\d{1,6}$/.test(C)) {
+      if (/(defeit|nao\s*funciona|não\s*funciona|broken|not\s*working)/.test(NT)) return 'produto_defeituoso';
+      if (/(danific|avariad|in\s*transit)/.test(NT)) return 'produto_danificado';
+      return 'nao_corresponde';
+    }
+
     var SPEC = { PDD9939:'arrependimento_cliente', PDD9904:'produto_defeituoso', PDD9905:'produto_danificado', PDD9906:'arrependimento_cliente', PDD9907:'entrega_atrasada', PDD9944:'produto_defeituoso' };
-    if (SPEC[c]) return SPEC[c];
-    if (c === 'PNR') return 'entrega_atrasada';
-    if (c === 'CS')  return 'arrependimento_cliente';
-    return null;
+    return SPEC[C] || null;
   }
+
   function canonFromText(text){
     var t = norm(text);
     if (!t) return null;
@@ -417,6 +428,66 @@
       txt = (typeof cr === 'string') ? cr : (cr.label || cr.raw || null);
     }
     return txt || null;
+  }
+
+  // === HUMANIZE & LOCK DE MOTIVO (ML) ===
+  var ML_REASON_LOCKED = false;
+  function humanizeCanon(c){
+    c = String(c || '').toLowerCase();
+    var map = {
+      'arrependimento_cliente': 'Arrependimento do Cliente',
+      'nao_corresponde':        'Não corresponde à descrição',
+      'produto_defeituoso':     'Produto defeituoso',
+      'produto_danificado':     'Produto danificado',
+      'entrega_atrasada':       'Entrega atrasada'
+    };
+    if (map[c]) return map[c];
+    if (!c) return '—';
+    var lowers = ['do','da','dos','das','de','del','a','à','e','ou','no','na','nos','nas','com','para','por'];
+    return c.replace(/_/g,' ').split(' ').map(function(w,i){
+      var lw = w.toLowerCase();
+      if (i>0 && lowers.indexOf(lw)>=0) return lw;
+      return lw.charAt(0).toUpperCase() + lw.slice(1);
+    }).join(' ');
+  }
+  function humanizeReason(any){
+    if (!any) return '—';
+    var canon = canonFromText(any) || REASONNAME_TO_CANON[any] || REASONKEY_TO_CANON[any] || (/_/.test(any) ? any : null);
+    return humanizeCanon(canon || any);
+  }
+
+  // NOVO: aceita string OU {code, name}; escreve em input OU span/div; não apaga quando vazio
+  function setMlReason(reason, opts){
+    opts = opts || {};
+    if (ML_REASON_LOCKED && !opts.force) return;
+
+    var code = '', name = '';
+    if (reason && typeof reason === 'object') {
+      code = reason.code || reason.reason_id || '';
+      name = reason.name || reason.reason_name || reason.detail || '';
+    } else {
+      name = String(reason || '');
+    }
+
+    var canon =
+      canonFromText(name) ||
+      REASONNAME_TO_CANON[name] ||
+      REASONKEY_TO_CANON[name] ||
+      canonFromCode(code || name, name);
+
+    var human = humanizeCanon(canon) || (name || '—');
+
+    var el = $('ml_motivo_real');
+    if (el) {
+      if ('value' in el) el.value = human;
+      else el.textContent = human;
+      if (el.dataset) el.dataset.code = code || '';
+      el.title = (code ? code + ' · ' : '') + human;
+    }
+    var codeEl = $('ml_reason_code');
+    if (codeEl) codeEl.textContent = code || '';
+
+    if (opts.lock) ML_REASON_LOCKED = true;
   }
 
   function lockMotivo(lock, hint){
@@ -517,15 +588,17 @@
       var elStatusReal = $('ml_status_real');
       if (elStatusReal) elStatusReal.value = realStatus ? String(realStatus).replace(/_/g, ' ') : '—';
 
-      var realReason = null;
-      if (d.raw) realReason = extractMlReason(d.raw);
-      if (!realReason) realReason = firstNonEmpty(d.reclamacao, d.tipo_reclamacao);
+      // NOVO: só define motivo real se houver candidato; passa {code,name}
+      var rrCode = (d.raw && (d.raw.reason_id || (d.raw.claim && d.raw.claim.reason_id))) || null;
+      var rrName = d.raw ? extractMlReason(d.raw) : null;
+      var candidate = rrCode || rrName || d.tipo_reclamacao || d.reclamacao;
+      if (candidate) {
+        setMlReason({ code: rrCode, name: rrName }, { force: true });
+      }
 
-      var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = realReason || '—'; elReasonReal.title = realReason || ''; }
-
-      if (realReason) {
-        var canon = canonFromText(realReason) || REASONNAME_TO_CANON[realReason] || REASONKEY_TO_CANON[realReason] || null;
+      if (rrCode || rrName) {
+        var txt = rrName || '';
+        var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || canonFromCode(rrCode, txt) || null;
         if (canon && setMotivoCanon(canon, true)) {
           var idp = current.id || returnId;
           if (idp) {
@@ -612,7 +685,7 @@
     setTxt('claim-type',       claim.type);
     setTxt('claim-stage',      claim.stage || claim.stage_name);
     setTxt('claim-version',    claim.claim_version);
-    setTxt('claim-reason',     claim.reason_id || (claim.reason && (claim.reason.id || claim.reason.name)) || claim.reason_name);
+    setTxt('claim-reason',     humanizeReason(claim.reason_id || (claim.reason && (claim.reason.id || claim.reason.name)) || claim.reason_name));
     setTxt('claim-fulfilled',  String(claim.fulfilled == null ? '—' : claim.fulfilled));
     setTxt('claim-qtytype',    claim.quantity_type);
     setTxt('claim-created',    claim.created_date ? new Date(claim.created_date).toLocaleString('pt-BR') : '—');
@@ -638,19 +711,18 @@
         if (root.reason_name && REASONNAME_TO_CANON[root.reason_name]) return REASONNAME_TO_CANON[root.reason_name];
         if (root.reason_name) { var t = canonFromText(root.reason_name); if (t) return t; }
         if (root.reason_detail) { var td = canonFromText(root.reason_detail); if (td) return td; }
-        if (root.reason_id) { var c = canonFromCode(root.reason_id); if (c) return c; }
+        if (root.reason_id) { var c = canonFromCode(root.reason_id, root.reason_name || root.reason_detail); if (c) return c; }
         return null;
       }
-      var prefer = canonFromPayload({ reason_key: claim.reason_key, reason_name: claim.reason_name, reason_id: claim.reason_id, reason_detail: claim.reason_detail }) || canonFromCode(claim.reason_id);
+      var prefer = canonFromPayload({ reason_key: claim.reason_key, reason_name: claim.reason_name, reason_id: claim.reason_id, reason_detail: claim.reason_detail }) || canonFromCode(claim.reason_id, claim.reason_name || claim.reason_detail);
       if (prefer) setMotivoCanon(prefer, true);
     })();
 
     var txt = extractMlReason(claim);
-    if (txt) {
-      var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
+    if (txt || claim.reason_id) {
+      var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || canonFromCode(claim.reason_id, txt) || null;
       if (canon) setMotivoCanon(canon, true);
-      var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
+      setMlReason({ code: claim.reason_id, name: txt || claim.reason_name }, { lock: true });
     }
 
     try {
@@ -758,15 +830,15 @@
     if (summary && summary.claim_reason) {
       var c = canonFromText(summary.claim_reason.label || summary.claim_reason.raw);
       if (c) setMotivoCanon(c, true);
-      var cr = $('claim-reason'); if (cr) cr.textContent = summary.claim_reason.label || summary.claim_reason.raw || cr.textContent;
+      var cr = $('claim-reason'); if (cr) cr.textContent = humanizeReason(summary.claim_reason.label || summary.claim_reason.raw || cr.textContent);
     }
 
-    var txt = extractMlReason(j);
-    if (txt) {
-      var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || null;
+    var rCode = j.reason_id || (j.claim && j.claim.reason_id);
+    var txt = extractMlReason(j) || (j.claim && (j.claim.reason_name || j.claim.reason_detail)) || null;
+    if (txt || rCode) {
+      var canon = canonFromText(txt) || REASONNAME_TO_CANON[txt] || REASONKEY_TO_CANON[txt] || canonFromCode(rCode, txt) || null;
       if (canon) setMotivoCanon(canon, true);
-      var elReasonReal = $('ml_motivo_real');
-      if (elReasonReal) { elReasonReal.value = txt; elReasonReal.title = txt; }
+      setMlReason({ code: rCode, name: txt }, { lock: true });
     }
 
     var cid = j.claim_id || readFirst(CLAIM_ID_SELECTORS);
@@ -1059,7 +1131,7 @@
       var reasonTxt =
         (meta && (meta.reason_name || meta.reason || meta.tipo_reclamacao ||
           (meta.claim && (meta.claim.reason_name || (meta.claim.reason && (meta.claim.reason.name || meta.claim.reason.description)))))) || null;
-      if (reasonTxt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">motivo: <b>'+ reasonTxt +'</b></span>');
+      if (reasonTxt) metaBox.insertAdjacentHTML('beforeend','<span class="tl-badge">motivo: <b>'+ humanizeReason(reasonTxt) +'</b></span>');
 
       frag.appendChild(item);
     });
@@ -1418,6 +1490,7 @@
 
     var typedOrderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id');
     var typedClaimId = readFirst(CLAIM_ID_SELECTORS) || qs.get('claim_id');
+    var lastClaimId  = null;
 
     function enrichedFetchByClaim(cId){
       if (!cId) return Promise.reject({status:400, message:'no_claim'});
@@ -1425,7 +1498,7 @@
       var url = '/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true' + (nk ? ('&nick=' + encodeURIComponent(nk)) : '');
       return fetch(url, { headers: { 'Accept': 'application/json' } })
         .then(function(r){
-          if ((r.status === 403 || r.status === 429) && nk) {
+          if ((r.status === 403 || r.status === 429 || r.status === 401) && nk) {
             return fetch('/api/ml/claims/' + encodeURIComponent(cId) + '/returns/enriched?usd=true', { headers: { 'Accept':'application/json' } });
           }
           return r;
@@ -1445,6 +1518,7 @@
 
     return claimPromise
       .then(function(claimId){
+        lastClaimId = claimId;
         if (!claimId) throw {status:404, message:'Sem claim para enriquecer'};
         return enrichedFetchByClaim(claimId).then(function(j){ return { claimId: claimId, payload: j }; });
       })
@@ -1513,22 +1587,34 @@
         });
       })
       .catch(function (e) {
-        if (e && (e.status === 429 || e.status === 403)) toast('Limite do ML (429/403). Usando fallback do pedido…', 'warning');
-        var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id') || (current.raw && (current.raw.order_id || current.raw.resource_id));
-        if (orderId) {
-          return fetchOrderInfo(String(orderId).replace(/\D+/g,''))
-            .then(function(ord){
-              if (ord) {
-                return applyOrderToUi(ord).then(function(){
-                  return hasLocalRow ? reloadCurrent() : null;
-                });
-              }
-            })
-            .then(function(){ return ensureBuyerName({ persist:true }); })
-            .catch(function(){});
+        if (e && (e.status === 429 || e.status === 403 || e.status === 401)) toast('Limite/Permissão do ML (401/403/429). Usando fallback…', 'warning');
+
+        // Fallback: tentar claim simples para extrair motivo
+        var claimFallback = Promise.resolve();
+        if (lastClaimId || typedClaimId) {
+          claimFallback = tryFetchClaimDetails(String((lastClaimId || typedClaimId)).replace(/\D+/g,''));
+        } else {
+          var ordId0 = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id') || (current.raw && (current.raw.order_id || current.raw.resource_id));
+          if (ordId0) {
+            claimFallback = searchClaimsByOrder(String(ordId0).replace(/\D+/g,''))
+              .then(pickLatestClaimId)
+              .then(function(cid){ if (cid) return tryFetchClaimDetails(cid); });
+          }
         }
-        if (e && e.status === 404) toast('Sem dados do ML para esta devolução.', 'warning');
-        else if (e) toast(e.message || 'Falha no ML', 'error');
+
+        var orderId = readFirst(ORDER_ID_SELECTORS) || qs.get('order_id') || (current.raw && (current.raw.order_id || current.raw.resource_id));
+        var orderFallback = orderId
+          ? fetchOrderInfo(String(orderId).replace(/\D+/g,''))
+              .then(function(ord){ if (ord) return applyOrderToUi(ord).then(function(){ if (hasLocalRow) return reloadCurrent(); }); })
+          : Promise.resolve();
+
+        return Promise.all([claimFallback, orderFallback])
+          .then(function(){ return ensureBuyerName({ persist:true }); })
+          .catch(function(){})
+          .then(function(){
+            if (e && e.status === 404) toast('Sem dados do ML para esta devolução.', 'warning');
+            else if (e) toast(e.message || 'Falha no ML', 'error');
+          });
       })
       .then(function(){
         return ensureBuyerName({ persist:true });
