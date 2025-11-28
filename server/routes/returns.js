@@ -77,6 +77,8 @@ router.get('/', async (req, res) => {
     const has  = (c) => cols.has(c);
 
     const selectCols = [];
+
+    // colunas principais que o front usa na listagem
     [
       'id',
       'id_venda',
@@ -85,16 +87,38 @@ router.get('/', async (req, res) => {
       'sku',
       'status',
       'log_status',
-      'updated_at',
       'created_at',
+      'updated_at',
+      'data_compra',
+      'cd_recebido_em',
       'valor_produto',
       'valor_frete'
     ].forEach(c => { if (has(c)) selectCols.push(c); });
 
+    // extras de UI
     if (has('foto_produto'))     selectCols.push('foto_produto');
+
+    // status de devolução no ML
     if (has('ml_return_status')) selectCols.push('ml_return_status');
+
+    // dados de claim / triage do ML
     if (has('ml_claim_id'))      selectCols.push('ml_claim_id');
-    if (!selectCols.length)      selectCols.push('*');
+    if (has('ml_claim_stage'))   selectCols.push('ml_claim_stage');
+    if (has('ml_claim_status'))  selectCols.push('ml_claim_status');
+    if (has('ml_claim_type'))    selectCols.push('ml_claim_type');
+
+    if (has('ml_triage_stage'))               selectCols.push('ml_triage_stage');
+    if (has('ml_triage_status'))              selectCols.push('ml_triage_status');
+    if (has('ml_triage_benefited'))           selectCols.push('ml_triage_benefited');
+    if (has('ml_triage_reason_id'))           selectCols.push('ml_triage_reason_id');
+    if (has('ml_triage_product_condition'))   selectCols.push('ml_triage_product_condition');
+    if (has('ml_triage_product_destination')) selectCols.push('ml_triage_product_destination');
+
+    // motivo canônico, caso exista
+    if (has('tipo_reclamacao')) selectCols.push('tipo_reclamacao');
+
+    // fallback extremo
+    if (!selectCols.length) selectCols.push('*');
 
     const params       = [];
     const whereClauses = [];
@@ -106,6 +130,7 @@ router.get('/', async (req, res) => {
       params.push(tenantId);
     }
 
+    // busca textual
     if (search) {
       const likes = [];
       if (has('id_venda'))     likes.push(`id_venda ILIKE $${params.length + 1}`);
@@ -117,6 +142,7 @@ router.get('/', async (req, res) => {
       params.push(`%${search}%`);
     }
 
+    // filtro por range de dias
     if (rangeDays > 0) {
       const dcol = has('created_at')
         ? 'created_at'
@@ -126,6 +152,7 @@ router.get('/', async (req, res) => {
       }
     }
 
+    // filtro por status (usado eventualmente por outras telas / exports)
     if (status) {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
@@ -135,10 +162,26 @@ router.get('/', async (req, res) => {
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'disputa') {
-        let clause = `(status IN ('disputa','mediacao')`;
+        // disputa / mediação: considera status interno, devolução no ML,
+        // stage/status da claim e infos da triage
+        let clause = `(status IN ('disputa','mediacao','reclamacao')`;
+
         if (has('ml_return_status')) {
           clause += ` OR ml_return_status IN ('dispute','mediation','pending','open')`;
         }
+        if (has('ml_claim_stage')) {
+          clause += ` OR LOWER(ml_claim_stage) IN ('dispute','mediation')`;
+        }
+        if (has('ml_claim_status')) {
+          clause += ` OR LOWER(ml_claim_status) IN ('dispute','mediation')`;
+        }
+        if (has('ml_triage_stage')) {
+          clause += ` OR LOWER(ml_triage_stage) IN ('seller_review_pending','pending')`;
+        }
+        if (has('ml_triage_status')) {
+          clause += ` OR LOWER(ml_triage_status) = 'failed'`;
+        }
+
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'concluida') {

@@ -398,12 +398,13 @@ class DevolucoesFeed {
 
     const fotoUrl  = d.foto_produto || "assets/img/box.jpg";
     
-    // Status da devolução no ML
-    const statusML    = this.traduzirStatusML(d.ml_return_status);
-    const statusClass = this.getClassStatusML(d.ml_return_status);
+    // Status da devolução no ML (case-insensitive)
+    const rawStatusML = String(d.ml_return_status || "").toLowerCase();
+    const statusML    = this.traduzirStatusML(rawStatusML);
+    const statusClass = this.getClassStatusML(rawStatusML);
 
     const sInterno     = String(d.status || "").toLowerCase();
-    const podeReceber  = (d.ml_return_status === "delivered" && d.log_status !== "recebido_cd");
+    const podeReceber  = (rawStatusML === "delivered" && d.log_status !== "recebido_cd");
     const jaFinalizado = ["aprovado", "rejeitado", "concluida", "concluido", "finalizado"]
       .includes(sInterno);
 

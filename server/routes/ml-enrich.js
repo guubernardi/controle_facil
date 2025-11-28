@@ -175,12 +175,45 @@ function shapeClaimForUI(raw) {
   };
 }
 
+// ---------- RETURNS (v2) / triage helpers ----------
+async function fetchClaimReturns(token, claimId) {
+  if (!notBlank(claimId)) return null;
+  // doc: /post-purchase/v2/claims/$CLAIM_ID/returns
+  return await mget(token, `/post-purchase/v2/claims/${encodeURIComponent(claimId)}/returns`);
+}
+
+function extractTriageFromReturns(ret) {
+  if (!ret || typeof ret !== 'object' || !Array.isArray(ret.reviews)) return null;
+
+  // prioriza método "triage"
+  let best = ret.reviews.find(r => r && r.method === 'triage') || ret.reviews[0];
+  if (!best) return null;
+
+  const rr = Array.isArray(best.resource_reviews) && best.resource_reviews.length
+    ? best.resource_reviews[0]
+    : {};
+
+  const tri = {
+    stage:  best.stage  ?? rr.stage  ?? null,
+    status: best.status ?? rr.status ?? null,
+    product_condition:      best.product_condition      ?? rr.product_condition      ?? null,
+    product_destination:    best.product_destination    ?? rr.product_destination    ?? null,
+    reason_id:              best.reason_id              ?? rr.reason_id              ?? null,
+    benefited:              best.benefited              ?? rr.benefited              ?? null,
+    seller_status:          rr.seller_status            ?? null,
+    seller_reason:          rr.seller_reason            ?? null,
+    missing_quantity:       rr.missing_quantity         ?? null
+  };
+
+  // se tudo vazio, ignora
+  const hasAny = Object.values(tri).some(v => v !== null && v !== undefined && v !== '');
+  return hasAny ? tri : null;
+}
+
 module.exports = function registerMlEnrich(app) {
 
-  // NOTE: preview endpoint `/api/ml/returns/:id/fetch-amounts` is intentionally
-  // handled by `server/routes/ml-amounts.js` which provides the shape expected
-  // by the frontend (including `reason_label`). We avoid registering a
-  // duplicate handler here to prevent response-shape conflicts.
+  // NOTE: preview endpoint `/api/ml/returns/:id/fetch-amounts` é tratado
+  // em `server/routes/ml-amounts.js`. Aqui só fazemos enrich da linha.
 
   // ------- enrich handler compartilhado (GET/POST) -------
   async function handleEnrich(req, res) {
@@ -199,7 +232,11 @@ module.exports = function registerMlEnrich(app) {
         'id_venda','order_id',
         'valor_produto','valor_frete',
         'claim_id','ml_claim_id',
-        'cliente_nome','sku','data_compra','loja_nome'
+        'cliente_nome','sku','data_compra','loja_nome',
+        'ml_return_status',
+        'ml_claim_stage','ml_claim_status','ml_claim_type',
+        'ml_triage_stage','ml_triage_status','ml_triage_benefited',
+        'ml_triage_reason_id','ml_triage_product_condition','ml_triage_product_destination'
       ], req);
 
       const orderId =
@@ -220,6 +257,7 @@ module.exports = function registerMlEnrich(app) {
       let novo_sku           = null;
       let novo_data_compra   = null;
       let novo_loja_nome     = null;
+      let novo_ml_return_status = null;
 
       // order
       let order = null;
@@ -257,7 +295,7 @@ module.exports = function registerMlEnrich(app) {
         }
       }
 
-      // claim raw + shape (guardamos raw para tentativa de derivar motivo)
+      // claim raw + shape (guardamos raw para derivar motivo e status/etapa)
       let claim = null;
       let claimRaw = null;
       if (notBlank(claimId)) {
@@ -268,6 +306,22 @@ module.exports = function registerMlEnrich(app) {
           claim = shapeClaimForUI(raw);
         } catch (e) {
           meta.errors.push({ where: 'claim', status: e.status || null, message: e.message });
+        }
+      }
+
+      // returns v2 + triage
+      let claimReturns = null;
+      let triageInfo   = null;
+      if (notBlank(claimId)) {
+        meta.steps.push({ op: 'GET /claims/{id}/returns', claimId, using: pick.tokenFrom });
+        try {
+          claimReturns = await fetchClaimReturns(pick.token, claimId);
+          if (claimReturns && claimReturns.status) {
+            novo_ml_return_status = String(claimReturns.status);
+          }
+          triageInfo = extractTriageFromReturns(claimReturns);
+        } catch (e) {
+          meta.errors.push({ where: 'claim-returns', status: e.status || null, message: e.message });
         }
       }
 
@@ -305,11 +359,11 @@ module.exports = function registerMlEnrich(app) {
       try {
         const cl = claimRaw || null;
         if (cl) {
-          const reasonKey = cl?.reason_key || cl?.reason?.key || null;
-          const reasonId  = cl?.reason_id  || cl?.reason?.id || null;
+          const reasonKey  = cl?.reason_key || cl?.reason?.key || null;
+          const reasonId   = cl?.reason_id  || cl?.reason?.id || null;
           const reasonName = cl?.reason_name || cl?.reason?.name || cl?.reason?.description || null;
           if (reasonKey && REASONKEY_TO_CANON[reasonKey]) tipoSug = REASONKEY_TO_CANON[reasonKey];
-          if (!tipoSug && reasonId) tipoSug = canonFromCode(reasonId);
+          if (!tipoSug && reasonId)  tipoSug = canonFromCode(reasonId);
           if (!tipoSug && reasonName) tipoSug = canonFromText(reasonName);
           if (!tipoSug && cl?.problem_description) tipoSug = canonFromText(cl.problem_description);
         }
@@ -319,6 +373,7 @@ module.exports = function registerMlEnrich(app) {
       const set = [];
       const p   = [];
 
+      // valores
       if (has.valor_produto && novo_valor_produto != null &&
           toNumber(dev.valor_produto) !== toNumber(novo_valor_produto)) {
         set.push(`valor_produto=$${p.push(toNumber(novo_valor_produto))}`);
@@ -344,6 +399,56 @@ module.exports = function registerMlEnrich(app) {
         set.push(`loja_nome=$${p.push(novo_loja_nome)}`);
       }
 
+      // status da devolução no ML (v2 returns.status)
+      if (has.ml_return_status && notBlank(novo_ml_return_status) &&
+          String(dev.ml_return_status || '') !== String(novo_ml_return_status)) {
+        set.push(`ml_return_status=$${p.push(String(novo_ml_return_status))}`);
+      }
+
+      // campos da claim (stage / status / type)
+      if (claimRaw) {
+        if (has.ml_claim_stage && notBlank(claimRaw.stage) &&
+            String(dev.ml_claim_stage || '') !== String(claimRaw.stage)) {
+          set.push(`ml_claim_stage=$${p.push(String(claimRaw.stage))}`);
+        }
+        if (has.ml_claim_status && notBlank(claimRaw.status) &&
+            String(dev.ml_claim_status || '') !== String(claimRaw.status)) {
+          set.push(`ml_claim_status=$${p.push(String(claimRaw.status))}`);
+        }
+        if (has.ml_claim_type && notBlank(claimRaw.type) &&
+            String(dev.ml_claim_type || '') !== String(claimRaw.type)) {
+          set.push(`ml_claim_type=$${p.push(String(claimRaw.type))}`);
+        }
+      }
+
+      // triage (reviews de /v2/claims/{id}/returns)
+      if (triageInfo) {
+        if (has.ml_triage_stage && notBlank(triageInfo.stage) &&
+            String(dev.ml_triage_stage || '') !== String(triageInfo.stage)) {
+          set.push(`ml_triage_stage=$${p.push(String(triageInfo.stage))}`);
+        }
+        if (has.ml_triage_status && notBlank(triageInfo.status) &&
+            String(dev.ml_triage_status || '') !== String(triageInfo.status)) {
+          set.push(`ml_triage_status=$${p.push(String(triageInfo.status))}`);
+        }
+        if (has.ml_triage_benefited && notBlank(triageInfo.benefited) &&
+            String(dev.ml_triage_benefited || '') !== String(triageInfo.benefited)) {
+          set.push(`ml_triage_benefited=$${p.push(String(triageInfo.benefited))}`);
+        }
+        if (has.ml_triage_reason_id && notBlank(triageInfo.reason_id) &&
+            String(dev.ml_triage_reason_id || '') !== String(triageInfo.reason_id)) {
+          set.push(`ml_triage_reason_id=$${p.push(String(triageInfo.reason_id))}`);
+        }
+        if (has.ml_triage_product_condition && notBlank(triageInfo.product_condition) &&
+            String(dev.ml_triage_product_condition || '') !== String(triageInfo.product_condition)) {
+          set.push(`ml_triage_product_condition=$${p.push(String(triageInfo.product_condition))}`);
+        }
+        if (has.ml_triage_product_destination && notBlank(triageInfo.product_destination) &&
+            String(dev.ml_triage_product_destination || '') !== String(triageInfo.product_destination)) {
+          set.push(`ml_triage_product_destination=$${p.push(String(triageInfo.product_destination))}`);
+        }
+      }
+
       // se derivamos um tipo canônico, tenta persistir no campo `tipo_reclamacao` (se a coluna existir)
       try {
         const hasTipo = await tableHasColumns('devolucoes', ['tipo_reclamacao'], req);
@@ -363,6 +468,8 @@ module.exports = function registerMlEnrich(app) {
           order,
           return_cost: retCost,
           claim,
+          claim_returns: claimReturns,
+          triage: triageInfo,
           sources: { order_id: orderId || null, claim_id: claimId || null },
           meta
         });
@@ -377,6 +484,8 @@ module.exports = function registerMlEnrich(app) {
         order,
         return_cost: retCost,
         claim,
+        claim_returns: claimReturns,
+        triage: triageInfo,
         sources: { order_id: orderId || null, claim_id: claimId || null },
         meta
       });
