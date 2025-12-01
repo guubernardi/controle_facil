@@ -268,6 +268,15 @@ try {
   console.warn('⚠️ [BOOT] ML Sync não carregado:', e.message || e);
 }
 
+// ML Enrich (enriquecer devolução específica com dados do ML)
+try {
+  const registerMlEnrich = require('./routes/ml-enrich');
+  registerMlEnrich(app);
+  console.log('✅ [BOOT] ML Enrich carregado (/api/ml/returns/:id/enrich)');
+} catch (e) {
+  console.warn('⚠️ [BOOT] ML Enrich não carregado:', e.message || e);
+}
+
 // Rotas Opcionais
 try { app.use('/api/ml', require('./routes/ml-shipping')); } catch (e) { console.warn('⚠️ [MOD] ML Shipping off:', e.message || e); }
 try { app.use('/api/dashboard', require('./routes/dashboard')); } catch (e) { console.warn('⚠️ [MOD] Dashboard off:', e.message || e); }

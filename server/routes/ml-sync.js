@@ -939,18 +939,6 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
-  // Enriquecer uma devolução específica com dados do pedido do ML
-  router.post('/api/ml/returns/:id/enrich', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const out = await enrichReturnFromML(req, id);
-      return res.json({ ok: true, ...out });
-    } catch (e) {
-      const detail = e?.response?.data || e?.message || String(e);
-      return res.status(500).json({ ok: false, error: detail });
-    }
-  });
-
   // Backfill simples para usar no pós-login (últimos N dias, padrão 7)
   router.post('/api/ml/claims/backfill-on-login', async (req, res) => {
     try {
