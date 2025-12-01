@@ -259,22 +259,50 @@ class DevolucoesFeed {
     if (raw === null || raw === undefined || raw === "") return 0;
     if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
 
-    let v = String(raw).trim();
-    // remove símbolos tipo "R$"
-    v = v.replace(/[^\d.,-]/g, "");
+    let s = String(raw).trim();
+    // mantém apenas dígitos, vírgula e ponto
+    s = s.replace(/[^\d.,-]/g, "");
+    if (!s) return 0;
 
-    const parts = v.split(",");
-    if (parts.length > 2) return 0;
+    const hasComma = s.includes(",");
+    const hasDot   = s.includes(".");
 
-    if (parts.length === 2) {
-      const intPart = parts[0].replace(/\./g, "");
-      const decPart = parts[1].padEnd(2, "0").slice(0, 2);
-      const n = Number(intPart + "." + decPart);
-      return Number.isNaN(n) ? 0 : n;
+    // Tem vírgula e ponto → decide pelo último separador
+    if (hasComma && hasDot) {
+      const lastComma = s.lastIndexOf(",");
+      const lastDot   = s.lastIndexOf(".");
+      if (lastComma > lastDot) {
+        // pt-BR: vírgula decimal, pontos = milhar
+        const n = parseFloat(s.replace(/\./g, "").replace(",", "."));
+        return Number.isFinite(n) ? n : 0;
+      } else {
+        // ponto como decimal (en-US), remove vírgulas de milhar
+        const n = parseFloat(s.replace(/,/g, ""));
+        return Number.isFinite(n) ? n : 0;
+      }
     }
 
-    const n = Number(v.replace(/\./g, ""));
-    return Number.isNaN(n) ? 0 : n;
+    // Só vírgula → vírgula decimal
+    if (hasComma && !hasDot) {
+      const n = parseFloat(s.replace(/\./g, "").replace(",", "."));
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    // Só ponto
+    if (!hasComma && hasDot) {
+      // Se for padrão en-US com 1–4 casas decimais (ex: 54.42), trata como decimal
+      if (/^\d+\.\d{1,4}$/.test(s)) {
+        const n = parseFloat(s);
+        return Number.isFinite(n) ? n : 0;
+      }
+      // Caso contrário: pontos como milhar (ex: 6.934)
+      const n = parseFloat(s.replace(/\./g, ""));
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    // Só dígitos
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : 0;
   }
 
   // ===== Helpers de valores (Produto / Frete) =====
@@ -313,7 +341,7 @@ class DevolucoesFeed {
       d.valor_envio
     ];
     for (const v of candidatos) {
-      const n = self.toNumber ? self.toNumber(v) : this.toNumber(v);
+      const n = this.toNumber(v); // <-- fix: sempre usa this.toNumber
       if (n > 0) return n;
     }
     return 0;
