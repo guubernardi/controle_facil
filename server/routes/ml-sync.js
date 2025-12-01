@@ -8,7 +8,6 @@ const { getAuthedAxios } = require('../mlClient');
 
 const isTrue = (v) => ['1','true','yes','on','y'].includes(String(v || '').toLowerCase());
 const qOf    = (req) => (req?.q || query);
-// formato aceito pelo ML nos filtros de range: 2025-10-22T12:34:56.789-0300
 const fmtML  = (d) => dayjs(d).format('YYYY-MM-DDTHH:mm:ss.SSSZZ');
 
 /** Helper genérico para testar colunas de uma tabela (usa pool global) */
@@ -36,13 +35,11 @@ module.exports = function registerMlSync(app, opts = {}) {
   // tenta descobrir todas as contas do ML disponíveis
   async function resolveMlAccounts(req) {
     if (typeof opts.listMlAccounts === 'function') {
-      // esperado: retorna [{ http, account }, ...]
       return await opts.listMlAccounts(req);
     }
     if (typeof getAuthedAxios.listAccounts === 'function') {
       return await getAuthedAxios.listAccounts(req);
     }
-    // fallback: conta atual apenas
     const one = await getAuthedAxios(req);
     return [one];
   }
@@ -72,26 +69,11 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
-  // soma total do pedido (unit_price * quantity) com fallback
-  function sumOrderItemsTotal(order) {
-    const items = Array.isArray(order?.order_items) ? order.order_items
-                 : Array.isArray(order?.items)      ? order.items : [];
-    let sum = 0;
-    for (const it of items) {
-      const unit = Number(it?.unit_price ?? it?.sale_price ?? it?.price ?? 0);
-      const qty  = Number(it?.quantity ?? 1);
-      if (Number.isFinite(unit) && Number.isFinite(qty)) sum += unit * qty;
-    }
-    return sum > 0 ? sum : null;
-  }
-
-  // pega um claimId seguro (somente numérico > 0)
   function selectClaimId(it) {
     const candidates = [
       it?.id,
       it?.claim_id,
       it?.claim?.id,
-      // às vezes vem como string; strip não-dígitos:
       typeof it?.id === 'string' ? it.id.replace(/\D/g, '') : null,
       typeof it?.claim_id === 'string' ? it.claim_id.replace(/\D/g, '') : null,
     ].filter(Boolean);
@@ -132,30 +114,21 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   }
 
-  /**
-   * Garante que exista uma devolução para o order_id.
-   * Se a tabela tiver tenant_id, procura primeiro pelo tenant atual; se não achar,
-   * "adota" registros órfãos (tenant_id IS NULL) para o tenant atual; por fim, cria.
-   */
   async function ensureReturnByOrder(req, {
     order_id,
     sku = null,
     loja_nome = null,
-    created_by = 'ml-sync' // hoje só vai pro evento, não pra tabela
+    created_by = 'ml-sync'
   }) {
     const q = qOf(req);
     const orderIdStr = String(order_id);
-
-    // descobre tenant atual (se existir)
     const tenantId = req.session?.user?.tenant_id || req.tenant?.id || null;
 
-    // descobre se existe coluna tenant_id (cacheada)
     if (HAS_TENANT_COL === null) {
       const cols = await tableHasColumns('devolucoes', ['tenant_id']);
       HAS_TENANT_COL = !!cols.tenant_id;
     }
 
-    // 1) Se temos coluna e tenant, tenta achar do tenant
     if (HAS_TENANT_COL && tenantId) {
       const r1 = await q(
         `SELECT id, tenant_id
@@ -167,7 +140,6 @@ module.exports = function registerMlSync(app, opts = {}) {
       );
       if (r1.rows[0]?.id) return r1.rows[0].id;
 
-      // 2) Não tem pro tenant? tenta achar órfão e "adota"
       const rOrf = await q(
         `SELECT id, tenant_id
            FROM devolucoes
@@ -184,11 +156,10 @@ module.exports = function registerMlSync(app, opts = {}) {
               WHERE id = $2`,
             [tenantId, rOrf.rows[0].id]
           );
-        } catch (_) { /* se houver constraint/erro, seguimos */ }
+        } catch (_) {}
         return rOrf.rows[0].id;
       }
     } else {
-      // Compat antigo: sem coluna tenant_id
       const rAny = await q(
         `SELECT id
            FROM devolucoes
@@ -199,7 +170,6 @@ module.exports = function registerMlSync(app, opts = {}) {
       if (rAny.rows[0]?.id) return rAny.rows[0].id;
     }
 
-    // 3) Não achou: cria (com tenant quando possível)
     let ins;
     if (HAS_TENANT_COL && tenantId) {
       ins = await q(`
@@ -229,51 +199,27 @@ module.exports = function registerMlSync(app, opts = {}) {
     return id;
   }
 
-  // ===== Mapeamentos compatíveis com a UI =====
-  // Status do "return v2" → token do fluxo reconhecido pelo front
+  // ===== Mapeamentos de fluxo → badges
   function mapFlowFromReturn(retStatusRaw) {
     const s = String(retStatusRaw || '').toLowerCase();
-
-    // to_be_sent → etiqueta emitida aguardando postagem
-    if (s === 'to_be_sent' || s === 'label_generated') return 'aguardando_postagem';
-
-    // shipped / in_transit / to_be_received → em trânsito
-    if (s === 'shipped' || s === 'in_transit' || s === 'to_be_received' || s === 'pending_delivered' || s === 'return_to_buyer') {
-      return 'em_transito';
-    }
-
-    // received / arrived / delivered → recebido no CD (fim logístico)
+    if (s === 'to_be_sent') return 'aguardando_postagem';
+    if (s === 'shipped' || s === 'in_transit' || s === 'to_be_received') return 'em_transito';
     if (s === 'received' || s === 'arrived' || s === 'delivered') return 'recebido_cd';
-
-    // cancelled / refunded / closed / not_delivered / returned_to_sender → fluxo encerrado
-    if (s === 'cancelled' || s === 'refunded' || s === 'closed' || s === 'not_delivered' || s === 'returned_to_sender' || s === 'failed' || s === 'expired') {
-      return 'fechado';
-    }
-
-    // inspeção / revisão não mapeiam diretamente no pipeline logístico
-    if (s === 'in_review' || s === 'under_review' || s === 'inspection' || s === 'scheduled' || s === 'ready_to_ship') {
-      return 'aguardando_postagem';
-    }
-
+    if (s === 'cancelled' || s === 'refunded' || s === 'closed' || s === 'not_delivered' || s === 'returned_to_sender') return 'fechado';
+    if (s === 'in_review' || s === 'under_review' || s === 'inspection') return 'aguardando_postagem';
     return 'pendente';
   }
-
-  // Deriva um "status" interno a partir do fluxo (coerente com badges internas)
   function mapInternalStatusFromFlow(flow) {
     if (flow === 'fechado' || flow === 'recebido_cd') return 'finalizado';
     if (flow === 'em_transito' || flow === 'aguardando_postagem') return 'aprovado';
     return 'pendente';
   }
 
-  // ===== Motivo derivation (canonical) =====
+  // ===== Motivo (canônico)
   function normalizeKeyLocal(s = '') {
-    try {
-      return String(s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
-    } catch {
-      return String(s || '').toLowerCase();
-    }
+    try { return String(s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase(); }
+    catch { return String(s || '').toLowerCase(); }
   }
-
   const REASONKEY_TO_CANON_LOCAL = {
     product_defective: 'produto_defeituoso', not_working: 'produto_defeituoso', broken: 'produto_defeituoso',
     damaged: 'produto_danificado', damaged_in_transit: 'produto_danificado',
@@ -281,24 +227,15 @@ module.exports = function registerMlSync(app, opts = {}) {
     buyer_remorse: 'arrependimento_cliente', changed_mind: 'arrependimento_cliente', doesnt_fit: 'arrependimento_cliente', size_issue: 'arrependimento_cliente',
     not_delivered: 'entrega_atrasada', shipment_delayed: 'entrega_atrasada'
   };
-
   function canonFromCodeLocal(code) {
     const c = String(code || '').toUpperCase();
     if (!c) return null;
-    const SPEC = {
-      PDD9939: 'arrependimento_cliente',
-      PDD9904: 'produto_defeituoso',
-      PDD9905: 'produto_danificado',
-      PDD9906: 'arrependimento_cliente',
-      PDD9907: 'entrega_atrasada',
-      PDD9944: 'produto_defeituoso'
-    };
+    const SPEC = { PDD9939: 'arrependimento_cliente', PDD9904: 'produto_defeituoso', PDD9905: 'produto_danificado', PDD9906: 'arrependimento_cliente', PDD9907: 'entrega_atrasada', PDD9944: 'produto_defeituoso' };
     if (SPEC[c]) return SPEC[c];
     if (c === 'PNR') return 'entrega_atrasada';
     if (c === 'CS')  return 'arrependimento_cliente';
     return null;
   }
-
   function canonFromTextLocal(text) {
     if (!text) return null;
     const s = normalizeKeyLocal(String(text));
@@ -312,228 +249,82 @@ module.exports = function registerMlSync(app, opts = {}) {
     return null;
   }
 
-  // -------- Claims Search robusto (com fallback + paginação) ----------
-  async function fetchClaimsPaged(http, account, {
-    fromIso, toIso, status, siteId, limitPerPage = 200, max = 2000
-  }) {
-    const used    = [];
-    const collect = [];
-    let totalFetched = 0;
-
-    const strategies = [
-      {
-        label: 'v1:new/date_created',
-        path:  '/post-purchase/v1/claims/search',
-        makeParams: (off) => ({
-          player_role: 'seller',
-          player_user_id: account.user_id,
-          status,
-          site_id: siteId || undefined,
-          sort: 'date_created:desc',
-          range: `date_created:after:${fmtML(fromIso)}:before:${fmtML(toIso)}`,
-          limit: Math.min(limitPerPage, 200),
-          offset: off
-        })
-      },
-      {
-        label: 'v1:old/date_created',
-        path:  '/post-purchase/v1/claims/search',
-        makeParams: (off) => ({
-          'seller.id': account.user_id,
-          'date_created.from': fmtML(fromIso),
-          'date_created.to':   fmtML(toIso),
-          status,
-          site_id: siteId || undefined,
-          sort: 'date_created:desc',
-          limit: Math.min(limitPerPage, 200),
-          offset: off
-        })
-      },
-      {
-        label: 'v1:new/last_updated',
-        path:  '/post-purchase/v1/claims/search',
-        makeParams: (off) => ({
-          player_role: 'seller',
-          player_user_id: account.user_id,
-          status,
-          site_id: siteId || undefined,
-          sort: 'last_updated:desc',
-          range: `last_updated:after:${fmtML(fromIso)}:before:${fmtML(toIso)}`,
-          limit: Math.min(limitPerPage, 200),
-          offset: off
-        })
-      }
-    ];
-
-    for (const strat of strategies) {
-      let offset = 0;
-      let page   = 0;
-      let anyThisStrategy = false;
-      try {
-        while (totalFetched < max) {
-          const params = strat.makeParams(offset);
-          const { data } = await http.get(strat.path, { params });
-          const arr = Array.isArray(data?.data) ? data.data : [];
-          used.push({ status, page: page + 1, used: { path: strat.path, label: strat.label, params } });
-
-          if (!arr.length) break;
-
-          for (const it of arr) {
-            const cid = selectClaimId(it);
-            if (!cid) continue;
-            if (!collect.find(c => c.__cid === cid)) {
-              const copy = { ...it, __cid: cid };
-              collect.push(copy);
-              totalFetched++;
-              if (totalFetched >= max) break;
-            }
-          }
-
-          anyThisStrategy = true;
-          page++;
-          offset += params.limit || arr.length;
-        }
-      } catch (e) {
-        used.push({
-          status,
-          page: page + 1,
-          used: { path: strat.path, label: strat.label },
-          error: e?.response?.data || e?.message || String(e)
-        });
-      }
-
-      if (anyThisStrategy && collect.length) break;
-    }
-
-    return { items: collect, used };
-  }
-
-  // Detalhe do claim
+  // -------- Endpoints ML usados ----------
   async function getClaimDetail(http, claimId) {
     const { data } = await http.get(`/post-purchase/v1/claims/${claimId}`);
     return data;
   }
-
-  // Return (v2) vinculado ao claim
   async function getReturnV2ByClaim(http, claimId) {
     const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
-    return data; // { id, status, resource_id, triage?, ... }
+    return data; // { id, status, resource_id, ... }
   }
-
-  // -------- Order & Item detail (para enriquecer devolução) ----------
   async function getOrderDetail(http, orderId) {
     const { data } = await http.get(`/orders/${orderId}`);
     return data;
   }
-
   async function getItemDetail(http, itemId) {
     const { data } = await http.get(`/items/${itemId}`);
     return data;
   }
 
-  // custo de devolução
-  async function getReturnCost(http, claimId) {
-    const { data } = await http.get(`/post-purchase/v1/claims/${claimId}/charges/return-cost`);
-    return data; // { amount, currency_id, ... }
-  }
-
-  /**
-   * Tenta obter foto e SKU a partir do pedido do ML.
-   * Não lança erro — se der ruim, devolve { fotoUrl: null, skuFromOrder: null }.
-   */
-  async function tryGetPictureFromOrder(http, orderId) {
+  /** Tenta obter foto, SKU e valores (produto e frete) do pedido */
+  async function tryGetOrderInfo(http, orderId) {
+    const out = { fotoUrl: null, skuFromOrder: null, amountProduct: null, amountFreight: null };
     try {
       const order = await getOrderDetail(http, orderId);
+
+      // SKU + foto (primeiro item)
       const items = Array.isArray(order?.order_items) ? order.order_items : [];
-      if (!items.length) return { fotoUrl: null, skuFromOrder: null, order };
+      if (items.length) {
+        const it = items[0];
+        out.skuFromOrder =
+          normalizeSku(it, { item: it?.item }) || null;
 
-      const it = items[0]; // na prática, devolução quase sempre é 1 item
-      let skuFromOrder = normalizeSku(it, { item: it?.item }) || null;
-
-      let fotoUrl =
-        it?.item?.thumbnail ||
-        it?.item?.picture_url ||
-        it?.item?.secure_thumbnail ||
-        null;
-
-      // se ainda não temos foto, tenta o /items/{id} completo
-      if (!fotoUrl && it?.item?.id) {
-        try {
-          const fullItem = await getItemDetail(http, it.item.id);
-          if (Array.isArray(fullItem?.pictures) && fullItem.pictures.length) {
-            fotoUrl = fullItem.pictures[0]?.secure_url || fullItem.pictures[0]?.url || null;
-          }
-          if (!fotoUrl) {
-            fotoUrl = fullItem?.secure_thumbnail || fullItem?.thumbnail || null;
-          }
-        } catch (_) {
-          // não quebra o sync por causa de imagem
-        }
+        out.fotoUrl =
+          it?.item?.thumbnail ||
+          it?.item?.picture_url ||
+          it?.item?.secure_thumbnail ||
+          null;
       }
 
-      return { fotoUrl: fotoUrl || null, skuFromOrder, order };
+      // Se não veio foto, tenta /items/{id}
+      if (!out.fotoUrl && items[0]?.item?.id) {
+        try {
+          const fullItem = await getItemDetail(http, items[0].item.id);
+          if (Array.isArray(fullItem?.pictures) && fullItem.pictures.length) {
+            out.fotoUrl = fullItem.pictures[0]?.secure_url || fullItem.pictures[0]?.url || null;
+          }
+          if (!out.fotoUrl) {
+            out.fotoUrl = fullItem?.secure_thumbnail || fullItem?.thumbnail || null;
+          }
+        } catch (_) {}
+      }
+
+      // Valores em REAIS (não multiplicar por 100!)
+      // Soma de unit_price * quantity de todos os itens
+      let prod = 0;
+      for (const it of items) {
+        const qtt = Number(it?.quantity || 1);
+        const unit = Number(it?.unit_price || 0); // já vem em BRL com decimal
+        if (Number.isFinite(unit) && Number.isFinite(qtt)) {
+          prod += unit * qtt;
+        }
+      }
+      out.amountProduct = Number.isFinite(prod) ? Math.round(prod * 100) / 100 : null;
+
+      // Frete: /orders nem sempre expõe custo do vendedor. Para não inventar número,
+      // usamos 0 quando não há campo seguro.
+      const freightCandidates = [
+        order?.shipping?.shipping_option?.cost,
+        order?.shipping?.cost,
+        order?.total_shipping,     // alguns sites expõem
+      ].map(n => Number(n)).filter(n => Number.isFinite(n) && n >= 0);
+      out.amountFreight = freightCandidates.length ? freightCandidates[0] : 0;
+
+      return out;
     } catch (_) {
-      return { fotoUrl: null, skuFromOrder: null, order: null };
+      return out;
     }
-  }
-
-  async function enrichReturnFromML(req, returnId) {
-    const q = qOf(req);
-
-    const { rows } = await q(
-      `SELECT id, id_venda, loja_nome
-         FROM devolucoes
-        WHERE id = $1
-        LIMIT 1`,
-      [returnId]
-    );
-    if (!rows[0]) throw new Error('Devolução não encontrada');
-
-    const orderId = normalizeOrderId(rows[0].id_venda);
-    if (!orderId) throw new Error('Devolução não possui número do pedido');
-
-    const { http } = await getAuthedAxios(req);
-    const order    = await getOrderDetail(http, orderId);
-
-    const buyer = order?.buyer || {};
-    const buyerName =
-      [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim() ||
-      buyer.nickname || null;
-
-    const dataCompraIso =
-      order?.date_created ? dayjs(order.date_created).toISOString() : null;
-
-    let sku = null;
-    const items = Array.isArray(order?.order_items) ? order.order_items : [];
-    for (const it of items) {
-      sku = normalizeSku(it, { item: it?.item }) || sku;
-      if (sku) break;
-    }
-
-    // também grava valor_produto se faltar
-    const totalProd = sumOrderItemsTotal(order);
-
-    await q(`
-      UPDATE devolucoes
-         SET cliente_nome = COALESCE($1, cliente_nome),
-             data_compra  = COALESCE($2, data_compra),
-             loja_nome    = COALESCE($3, loja_nome),
-             sku          = COALESCE($4, sku),
-             valor_produto= COALESCE(NULLIF($5,0), valor_produto),
-             updated_at   = now()
-       WHERE id = $6
-    `, [buyerName, dataCompraIso, 'Mercado Livre', sku, totalProd || 0, returnId]);
-
-    await addReturnEvent(req, {
-      returnId,
-      type: 'ml-sync',
-      title: 'Enriquecido via ML',
-      message: `Dados trazidos do pedido ${orderId}`,
-      meta: { order_id: orderId },
-      idemp_key: `ml-enrich:${returnId}:${orderId}`
-    });
-
-    return { ok: true, order_id: orderId };
   }
 
   /* ------------------------------- rotas ------------------------------ */
@@ -558,7 +349,6 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
-  // DEBUG — claims (amostra + params usados)
   router.get('/api/ml/claims/search-debug', async (req, res) => {
     try {
       const now   = dayjs();
@@ -598,8 +388,7 @@ module.exports = function registerMlSync(app, opts = {}) {
     }
   });
 
-  // DEBUG — returns/search não existe
-  router.get('/api/ml/returns/search-debug', (req, res) => {
+  router.get('/api/ml/returns/search-debug', (_req, res) => {
     res.status(501).json({
       ok: false,
       error: 'returns search is not provided by ML; use claims/search + /v2/claims/{claim_id}/returns'
@@ -607,19 +396,8 @@ module.exports = function registerMlSync(app, opts = {}) {
     return;
   });
 
-  /**
-   * Importa devoluções por meio dos claims (com fallback e paginação)
-   * Query:
-   *  - statuses=opened,in_progress   (padrão)
-   *  - days=90  ou  from=YYYY-MM-DD&to=YYYY-MM-DD
-   *  - max=2000
-   *  - dry=1, silent=1, debug=1
-   *  - all=1  ← roda para todas as contas disponíveis
-   *
-   * Nunca retorna 400 em erro de claim — contabiliza em errors_detail e segue.
-   */
   router.get('/api/ml/claims/import', async (req, res) => {
-    const debug = isTrue(req.query.debug); // disponível para logs extras
+    const debug = isTrue(req.query.debug);
     try {
       const dry    = isTrue(req.query.dry);
       const silent = isTrue(req.query.silent);
@@ -656,14 +434,13 @@ module.exports = function registerMlSync(app, opts = {}) {
         : [await getAuthedAxios(req)];
 
       // checar se colunas extras existem (uma vez por import)
-      const colInfo    = await tableHasColumns('devolucoes', [
-        'tipo_reclamacao', 'foto_produto',
-        'ml_return_status', 'ml_claim_id',
-        'ml_claim_stage','ml_claim_status','ml_claim_type',
-        'ml_triage_stage','ml_triage_status','ml_triage_benefited','ml_triage_reason_id','ml_triage_product_condition','ml_triage_product_destination',
-        'valor_produto','valor_frete','cliente_nome','data_compra','sku','loja_nome','status','log_status'
+      const colInfo = await tableHasColumns('devolucoes', [
+        'tipo_reclamacao', 'foto_produto', 'valor_produto', 'valor_frete'
       ]);
-      const has = (c) => !!colInfo[c];
+      const hasTipoCol   = !!colInfo.tipo_reclamacao;
+      const hasFotoCol   = !!colInfo.foto_produto;
+      const hasProdCol   = !!colInfo.valor_produto;
+      const hasFreteCol  = !!colInfo.valor_frete;
 
       let processed = 0, created = 0, updated = 0, events = 0,
           errors = 0, skipped = 0;
@@ -680,16 +457,11 @@ module.exports = function registerMlSync(app, opts = {}) {
         const claimMap = new Map();
         for (const st of statusList) {
           const r = await fetchClaimsPaged(http, account, {
-            fromIso,
-            toIso,
-            status: st,
-            siteId: account.site_id,
-            limitPerPage: 200,
-            max
+            fromIso, toIso, status: st, siteId: account.site_id,
+            limitPerPage: 200, max
           });
           paramsUsed.push(...r.used.map(u => ({
-            ...u,
-            account: account.user_id
+            ...u, account: account.user_id
           })));
           for (const it of r.items) {
             const id = it.__cid || selectClaimId(it);
@@ -806,40 +578,15 @@ module.exports = function registerMlSync(app, opts = {}) {
             const internal = mapInternalStatusFromFlow(flow);
             let   sku      = normalizeSku(it, claimDet);
 
-            // foto + order detail (reuso para total do produto)
             let fotoUrl = null;
-            let orderDetail = null;
-            let totalProduto = null;
-            if (has('foto_produto') || has('valor_produto') || has('cliente_nome') || has('data_compra')) {
-              const imgInfo = await tryGetPictureFromOrder(http, order_id);
-              fotoUrl      = imgInfo.fotoUrl || null;
-              orderDetail  = imgInfo.order || null;
-              if (!sku && imgInfo.skuFromOrder) {
-                sku = imgInfo.skuFromOrder;
-              }
-              if (has('valor_produto') && orderDetail) {
-                totalProduto = sumOrderItemsTotal(orderDetail);
-              }
-            }
+            let prodAmount = null;
+            let freightAmount = null;
 
-            // ----- return cost (valor_frete)
-            let valorFrete = null;
-            if (has('valor_frete')) {
-              try {
-                const rc = await getReturnCost(http, claimId);
-                if (rc && rc.amount != null && Number(rc.amount) >= 0) {
-                  valorFrete = Number(rc.amount);
-                }
-              } catch (e) {
-                // 403/404 são comuns em algumas contas/estados — não quebra o import
-                errors_detail.push({
-                  account: account.user_id,
-                  kind: 'return_cost',
-                  claim_id: claimId,
-                  error: e?.response?.data || e?.message || String(e)
-                });
-              }
-            }
+            const info = await tryGetOrderInfo(http, order_id);
+            fotoUrl = info.fotoUrl || null;
+            if (!sku && info.skuFromOrder) sku = info.skuFromOrder;
+            prodAmount   = info.amountProduct;         // reais (ex.: 69.34)
+            freightAmount = info.amountFreight ?? 0;   // reais
 
             // ----- motivo canônico
             let tipoSug = null;
@@ -859,106 +606,58 @@ module.exports = function registerMlSync(app, opts = {}) {
               if (reasonKey && REASONKEY_TO_CANON_LOCAL[reasonKey]) tipoSug = REASONKEY_TO_CANON_LOCAL[reasonKey];
               if (!tipoSug && reasonId)   tipoSug = canonFromCodeLocal(reasonId);
               if (!tipoSug && reasonName) tipoSug = canonFromTextLocal(reasonName);
-            } catch (_) { /* ignore */ }
+            } catch (_) {}
 
             const returnId = await ensureReturnByOrder(req, {
-              order_id,
-              sku,
-              loja_nome: lojaNome,
-              created_by: 'ml-sync'
+              order_id, sku, loja_nome: lojaNome, created_by: 'ml-sync'
             });
 
             if (!dry) {
-              // montagem dinâmica do UPDATE conforme colunas existentes
-              const set  = [];
-              const args = [];
+              // Monta UPDATE de forma dinâmica conforme colunas existentes
+              const set = [
+                'log_status = COALESCE($1, log_status)',
+                'ml_return_status = COALESCE($2, ml_return_status)',
+                'status = COALESCE($3, status)',
+                'sku = COALESCE($4, sku)',
+                `loja_nome = CASE WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre') THEN COALESCE($5, loja_nome) ELSE loja_nome END`,
+                'ml_claim_id = COALESCE($6, ml_claim_id)',
+                'updated_at = now()'
+              ];
+              const params = [
+                flow,
+                String(ret?.status || ''),
+                internal,
+                sku,
+                lojaNome,
+                String(claimId)
+              ];
 
-              const push = (expr, val) => {
-                args.push(val);
-                set.push(`${expr} = $${args.length}`);
-              };
-
-              // status/logística
-              if (has('log_status'))        push('log_status', mapFlowFromReturn(ret?.status));
-              if (has('ml_return_status'))  push('ml_return_status', String(ret?.status || ''));
-              if (has('status'))            push('status', internal);
-
-              // foto/sku/loja
-              if (has('sku') && sku)        push('sku', sku);
-              if (has('loja_nome')) {
-                // Só sobrepõe "Mercado Livre" vazio
-                set.push(`loja_nome = CASE
-                  WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
-                  THEN $${args.length + 1}
-                  ELSE loja_nome END`);
-                args.push(lojaNome);
-              }
-              if (has('foto_produto') && fotoUrl) push('foto_produto', fotoUrl);
-
-              // vínculo claim
-              if (has('ml_claim_id'))       push('ml_claim_id', String(claimId));
-
-              // ml_claim_* (stage/status/type)
-              if (has('ml_claim_stage'))  push('ml_claim_stage',  String(claimDet?.stage  || ''));
-              if (has('ml_claim_status')) push('ml_claim_status', String(claimDet?.status || ''));
-              if (has('ml_claim_type'))   push('ml_claim_type',   String(claimDet?.type   || ''));
-
-              // triage (se vier aninhado no return v2)
-              const tri = ret?.triage || null;
-              if (tri) {
-                if (has('ml_triage_stage'))              push('ml_triage_stage',              String(tri.stage || ''));
-                if (has('ml_triage_status'))             push('ml_triage_status',             String(tri.status || ''));
-                if (has('ml_triage_benefited'))          push('ml_triage_benefited',          tri.benefited ?? null);
-                if (has('ml_triage_reason_id'))          push('ml_triage_reason_id',          String(tri.reason_id || ''));
-                if (has('ml_triage_product_condition'))  push('ml_triage_product_condition',  String(tri.product_condition || ''));
-                if (has('ml_triage_product_destination'))push('ml_triage_product_destination',String(tri.product_destination || ''));
+              if (hasFotoCol) {
+                set.splice(5, 0, 'foto_produto = COALESCE($7, foto_produto)');
+                params.splice(6, 0, fotoUrl);
               }
 
-              // valores
-              if (has('valor_produto') && totalProduto != null) {
-                // só define se estiver nulo/zero
-                set.push(`valor_produto = CASE WHEN COALESCE(valor_produto,0)=0 THEN $${args.length + 1} ELSE valor_produto END`);
-                args.push(Number(totalProduto));
+              if (hasProdCol) {
+                set.push('valor_produto = COALESCE($' + (params.length + 1) + ', valor_produto)');
+                params.push(prodAmount);
               }
-              if (has('valor_frete') && valorFrete != null) {
-                set.push(`valor_frete = CASE WHEN COALESCE(valor_frete,0)=0 THEN $${args.length + 1} ELSE valor_frete END`);
-                args.push(Number(valorFrete));
+              if (hasFreteCol) {
+                set.push('valor_frete = COALESCE($' + (params.length + 1) + ', valor_frete)');
+                params.push(freightAmount);
               }
-
-              // dados básicos do pedido (cliente/data) se disponíveis e vazios
-              if (orderDetail) {
-                const buyer = orderDetail?.buyer || {};
-                const buyerName =
-                  [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim() ||
-                  buyer.nickname || null;
-
-                const dataCompraIso =
-                  orderDetail?.date_created ? dayjs(orderDetail.date_created).toISOString() : null;
-
-                if (has('cliente_nome') && buyerName) {
-                  set.push(`cliente_nome = COALESCE(cliente_nome, $${args.length + 1})`);
-                  args.push(buyerName);
-                }
-                if (has('data_compra') && dataCompraIso) {
-                  set.push(`data_compra = COALESCE(data_compra, $${args.length + 1})`);
-                  args.push(dataCompraIso);
-                }
-              }
-
-              if (set.length) set.push('updated_at = now()');
 
               const sql = `
                 UPDATE devolucoes
                    SET ${set.join(', ')}
-                 WHERE id = $${args.length + 1}
+                 WHERE id = $${params.length + 1}
               `;
-              args.push(returnId);
+              params.push(returnId);
 
-              await qOf(req)(sql, args);
+              await qOf(req)(sql, params);
               updated++;
             }
 
-            if (!dry && has('tipo_reclamacao') && tipoSug) {
+            if (!dry && hasTipoCol && tipoSug) {
               try {
                 await qOf(req)(
                   `UPDATE devolucoes
@@ -967,7 +666,7 @@ module.exports = function registerMlSync(app, opts = {}) {
                       AND (COALESCE(tipo_reclamacao,'') = '')`,
                   [tipoSug, returnId]
                 );
-              } catch (_) { /* ignore */ }
+              } catch (_) {}
             }
 
             const idemp = `ml-claim:${account.user_id}:${claimId}:${order_id}`;
@@ -1026,28 +725,14 @@ module.exports = function registerMlSync(app, opts = {}) {
 
     } catch (e) {
       const detail = e?.response?.data || e?.message || String(e);
-      // Mesmo em falha geral, evita 400 para não quebrar o front polling.
       return res.status(200).json({ ok: false, error: detail });
     }
   });
 
-  // Enriquecer uma devolução específica com dados do pedido do ML (on-demand)
-  router.post('/api/ml/returns/:id/enrich', async (req, res) => {
-    try {
-      const { id } = req.params;
-      const out = await enrichReturnFromML(req, id);
-      return res.json({ ok: true, ...out });
-    } catch (e) {
-      const detail = e?.response?.data || e?.message || String(e);
-      return res.status(500).json({ ok: false, error: detail });
-    }
-  });
-
-  // Backfill simples para usar no pós-login (últimos N dias, padrão 7)
+  // Backfill simples (dica para o front)
   router.post('/api/ml/claims/backfill-on-login', async (req, res) => {
     try {
       const days = Math.max(1, parseInt(req.body?.days || '7', 10) || 7);
-      // dica: chame a rota GET de import pelo front, sem bloquear a navegação
       return res.json({
         ok: true,
         hint: `GET /api/ml/claims/import?days=${days}&statuses=opened,in_progress&silent=1&all=1`
