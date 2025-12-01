@@ -94,6 +94,7 @@
            ].join(','));
   }
 
+  // Parser robusto pt-BR/en-US: "5.442,00" -> 5442 ; "54,42" -> 54.42 ; "54.42" -> 54.42 ; "R$ 54,42" -> 54.42
   function toNum(v) {
     if (v === null || v === undefined || v === '') return 0;
     if (typeof v === 'number') return isFinite(v) ? v : 0;
@@ -477,13 +478,26 @@
 
     var human = humanizeCanon(canon) || (name || '—');
 
-    var el = $('ml_motivo_real');
-    if (el) {
+    // Tenta múltiplos alvos (compatibilidade de HTML)
+    var targets = [
+      '#ml_motivo_real',        // input/span principal
+      '#ml-claimed',
+      '.ml-claim-reason',
+      '#ml_claim_reason'
+    ];
+    var wrote = false;
+    for (var i=0;i<targets.length;i++){
+      var el = document.querySelector(targets[i]);
+      if (!el) continue;
       if ('value' in el) el.value = human;
       else el.textContent = human;
-      if (el.dataset) el.dataset.code = code || '';
-      el.title = (code ? code + ' · ' : '') + human;
+      wrote = true;
     }
+    if (!wrote) {
+      var elFallback = $('ml_motivo_real');
+      if (elFallback) { if ('value' in elFallback) elFallback.value = human; else elFallback.textContent = human; }
+    }
+
     var codeEl = $('ml_reason_code');
     if (codeEl) codeEl.textContent = code || '';
 
@@ -531,7 +545,7 @@
     return false;
   }
 
-    /* =============== UI fill =============== */
+  /* =============== UI fill =============== */
   function fill(d){
     var dvId=$('dv-id'); 
     if (dvId) dvId.textContent = d.id ? ('#' + d.id) : '';
@@ -622,8 +636,6 @@
       var rrCode = (d.raw && (d.raw.reason_id || (d.raw.claim && d.raw.claim.reason_id))) || null;
       var rrName = d.raw ? extractMlReason(d.raw) : null;
 
-      // preferimos o motivo_label do back (já humanizado),
-      // senão caímos no tipo_reclamacao / reclamacao
       var fallbackName =
         (d.raw && d.raw.motivo_label) ||
         d.tipo_reclamacao ||
@@ -633,20 +645,16 @@
       var candidate = rrCode || rrName || fallbackName;
 
       if (candidate) {
-        // Se temos info "oficial" do ML (code/name), usamos ela
         if (rrCode || rrName) {
           setMlReason(
             { code: rrCode, name: rrName || fallbackName },
-            { force: true }  // pode sobrescrever o "—" inicial, mas ainda sem lock
+            { force: true }
           );
         } else if (fallbackName) {
-          // Sem dado do ML (401/429 etc): usa o motivo local como CLIENTE ALEGOU
           setMlReason(fallbackName, { force: true });
         }
       }
 
-      // Se veio código/nome do ML, daí sim tentamos
-      // converter para canon e gravar de volta na devolução
       if (rrCode || rrName) {
         var txt   = rrName || '';
         var canon = canonFromText(txt) ||
