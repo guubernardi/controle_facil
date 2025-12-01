@@ -626,21 +626,46 @@ class DevolucoesFeed {
       btn.textContent = "Sincronizando...";
     }
 
-    try {
-      const url = `/api/returns/sync?days=${this.RANGE_DIAS}&silent=1`;
+    // helper pra tentar um endpoint e, só se der 404, cair pro próximo
+    const tryEndpoint = async (url) => {
       const res = await fetch(url, {
         method: "GET",
         headers: { Accept: "application/json" }
       });
 
-      if (!res.ok) throw new Error("Falha ao iniciar sincronização");
+      if (res.ok) return { ok: true, res };
+
+      let body = null;
+      try {
+        body = await res.json();
+      } catch (_) { /* ignore */ }
+
+      const msg = body?.error || body?.detail || body?.message || `HTTP ${res.status}`;
+      return { ok: false, res, msg };
+    };
+
+    try {
+      const qsBase = `days=${this.RANGE_DIAS}&silent=1`;
+
+      // 1) tenta o wrapper /api/returns/sync
+      let result = await tryEndpoint(`/api/returns/sync?${qsBase}`);
+
+      // 2) se não existir (404), cai direto no import
+      if (!result.ok && result.res && result.res.status === 404) {
+        const qsImport = `${qsBase}&all=1`;
+        result = await tryEndpoint(`/api/ml/claims/import?${qsImport}`);
+      }
+
+      if (!result.ok) {
+        throw new Error(result.msg || "Falha ao iniciar sincronização");
+      }
 
       await this.carregar();
       this.renderizar();
       this.toast("Sincronização", "Devoluções atualizadas com sucesso.", "success");
     } catch (e) {
       console.error("Erro na sincronização", e);
-      this.toast("Erro", "Não foi possível sincronizar as devoluções.", "error");
+      this.toast("Erro", e?.message || "Não foi possível sincronizar as devoluções.", "error");
     } finally {
       this.syncInProgress = false;
       if (btn) {
