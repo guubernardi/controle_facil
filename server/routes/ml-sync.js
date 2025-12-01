@@ -72,6 +72,19 @@ module.exports = function registerMlSync(app, opts = {}) {
     );
   }
 
+  // soma total do pedido (unit_price * quantity) com fallback
+  function sumOrderItemsTotal(order) {
+    const items = Array.isArray(order?.order_items) ? order.order_items
+                 : Array.isArray(order?.items)      ? order.items : [];
+    let sum = 0;
+    for (const it of items) {
+      const unit = Number(it?.unit_price ?? it?.sale_price ?? it?.price ?? 0);
+      const qty  = Number(it?.quantity ?? 1);
+      if (Number.isFinite(unit) && Number.isFinite(qty)) sum += unit * qty;
+    }
+    return sum > 0 ? sum : null;
+  }
+
   // pega um claimId seguro (somente numérico > 0)
   function selectClaimId(it) {
     const candidates = [
@@ -222,19 +235,25 @@ module.exports = function registerMlSync(app, opts = {}) {
     const s = String(retStatusRaw || '').toLowerCase();
 
     // to_be_sent → etiqueta emitida aguardando postagem
-    if (s === 'to_be_sent') return 'aguardando_postagem';
+    if (s === 'to_be_sent' || s === 'label_generated') return 'aguardando_postagem';
 
     // shipped / in_transit / to_be_received → em trânsito
-    if (s === 'shipped' || s === 'in_transit' || s === 'to_be_received') return 'em_transito';
+    if (s === 'shipped' || s === 'in_transit' || s === 'to_be_received' || s === 'pending_delivered' || s === 'return_to_buyer') {
+      return 'em_transito';
+    }
 
     // received / arrived / delivered → recebido no CD (fim logístico)
     if (s === 'received' || s === 'arrived' || s === 'delivered') return 'recebido_cd';
 
     // cancelled / refunded / closed / not_delivered / returned_to_sender → fluxo encerrado
-    if (s === 'cancelled' || s === 'refunded' || s === 'closed' || s === 'not_delivered' || s === 'returned_to_sender') return 'fechado';
+    if (s === 'cancelled' || s === 'refunded' || s === 'closed' || s === 'not_delivered' || s === 'returned_to_sender' || s === 'failed' || s === 'expired') {
+      return 'fechado';
+    }
 
     // inspeção / revisão não mapeiam diretamente no pipeline logístico
-    if (s === 'in_review' || s === 'under_review' || s === 'inspection') return 'aguardando_postagem';
+    if (s === 'in_review' || s === 'under_review' || s === 'inspection' || s === 'scheduled' || s === 'ready_to_ship') {
+      return 'aguardando_postagem';
+    }
 
     return 'pendente';
   }
@@ -398,7 +417,7 @@ module.exports = function registerMlSync(app, opts = {}) {
   // Return (v2) vinculado ao claim
   async function getReturnV2ByClaim(http, claimId) {
     const { data } = await http.get(`/post-purchase/v2/claims/${claimId}/returns`);
-    return data; // { id, status, resource_id, ... }
+    return data; // { id, status, resource_id, triage?, ... }
   }
 
   // -------- Order & Item detail (para enriquecer devolução) ----------
@@ -412,6 +431,12 @@ module.exports = function registerMlSync(app, opts = {}) {
     return data;
   }
 
+  // custo de devolução
+  async function getReturnCost(http, claimId) {
+    const { data } = await http.get(`/post-purchase/v1/claims/${claimId}/charges/return-cost`);
+    return data; // { amount, currency_id, ... }
+  }
+
   /**
    * Tenta obter foto e SKU a partir do pedido do ML.
    * Não lança erro — se der ruim, devolve { fotoUrl: null, skuFromOrder: null }.
@@ -420,7 +445,7 @@ module.exports = function registerMlSync(app, opts = {}) {
     try {
       const order = await getOrderDetail(http, orderId);
       const items = Array.isArray(order?.order_items) ? order.order_items : [];
-      if (!items.length) return { fotoUrl: null, skuFromOrder: null };
+      if (!items.length) return { fotoUrl: null, skuFromOrder: null, order };
 
       const it = items[0]; // na prática, devolução quase sempre é 1 item
       let skuFromOrder = normalizeSku(it, { item: it?.item }) || null;
@@ -446,9 +471,9 @@ module.exports = function registerMlSync(app, opts = {}) {
         }
       }
 
-      return { fotoUrl: fotoUrl || null, skuFromOrder };
+      return { fotoUrl: fotoUrl || null, skuFromOrder, order };
     } catch (_) {
-      return { fotoUrl: null, skuFromOrder: null };
+      return { fotoUrl: null, skuFromOrder: null, order: null };
     }
   }
 
@@ -485,15 +510,19 @@ module.exports = function registerMlSync(app, opts = {}) {
       if (sku) break;
     }
 
+    // também grava valor_produto se faltar
+    const totalProd = sumOrderItemsTotal(order);
+
     await q(`
       UPDATE devolucoes
          SET cliente_nome = COALESCE($1, cliente_nome),
              data_compra  = COALESCE($2, data_compra),
              loja_nome    = COALESCE($3, loja_nome),
              sku          = COALESCE($4, sku),
+             valor_produto= COALESCE(NULLIF($5,0), valor_produto),
              updated_at   = now()
-       WHERE id = $5
-    `, [buyerName, dataCompraIso, 'Mercado Livre', sku, returnId]);
+       WHERE id = $6
+    `, [buyerName, dataCompraIso, 'Mercado Livre', sku, totalProd || 0, returnId]);
 
     await addReturnEvent(req, {
       returnId,
@@ -590,7 +619,7 @@ module.exports = function registerMlSync(app, opts = {}) {
    * Nunca retorna 400 em erro de claim — contabiliza em errors_detail e segue.
    */
   router.get('/api/ml/claims/import', async (req, res) => {
-    const debug = isTrue(req.query.debug); // pode usar depois se quiser log extra
+    const debug = isTrue(req.query.debug); // disponível para logs extras
     try {
       const dry    = isTrue(req.query.dry);
       const silent = isTrue(req.query.silent);
@@ -627,9 +656,14 @@ module.exports = function registerMlSync(app, opts = {}) {
         : [await getAuthedAxios(req)];
 
       // checar se colunas extras existem (uma vez por import)
-      const colInfo    = await tableHasColumns('devolucoes', ['tipo_reclamacao', 'foto_produto']);
-      const hasTipoCol = !!colInfo.tipo_reclamacao;
-      const hasFotoCol = !!colInfo.foto_produto;
+      const colInfo    = await tableHasColumns('devolucoes', [
+        'tipo_reclamacao', 'foto_produto',
+        'ml_return_status', 'ml_claim_id',
+        'ml_claim_stage','ml_claim_status','ml_claim_type',
+        'ml_triage_stage','ml_triage_status','ml_triage_benefited','ml_triage_reason_id','ml_triage_product_condition','ml_triage_product_destination',
+        'valor_produto','valor_frete','cliente_nome','data_compra','sku','loja_nome','status','log_status'
+      ]);
+      const has = (c) => !!colInfo[c];
 
       let processed = 0, created = 0, updated = 0, events = 0,
           errors = 0, skipped = 0;
@@ -772,12 +806,38 @@ module.exports = function registerMlSync(app, opts = {}) {
             const internal = mapInternalStatusFromFlow(flow);
             let   sku      = normalizeSku(it, claimDet);
 
+            // foto + order detail (reuso para total do produto)
             let fotoUrl = null;
-            if (hasFotoCol) {
+            let orderDetail = null;
+            let totalProduto = null;
+            if (has('foto_produto') || has('valor_produto') || has('cliente_nome') || has('data_compra')) {
               const imgInfo = await tryGetPictureFromOrder(http, order_id);
-              fotoUrl = imgInfo.fotoUrl || null;
+              fotoUrl      = imgInfo.fotoUrl || null;
+              orderDetail  = imgInfo.order || null;
               if (!sku && imgInfo.skuFromOrder) {
                 sku = imgInfo.skuFromOrder;
+              }
+              if (has('valor_produto') && orderDetail) {
+                totalProduto = sumOrderItemsTotal(orderDetail);
+              }
+            }
+
+            // ----- return cost (valor_frete)
+            let valorFrete = null;
+            if (has('valor_frete')) {
+              try {
+                const rc = await getReturnCost(http, claimId);
+                if (rc && rc.amount != null && Number(rc.amount) >= 0) {
+                  valorFrete = Number(rc.amount);
+                }
+              } catch (e) {
+                // 403/404 são comuns em algumas contas/estados — não quebra o import
+                errors_detail.push({
+                  account: account.user_id,
+                  kind: 'return_cost',
+                  claim_id: claimId,
+                  error: e?.response?.data || e?.message || String(e)
+                });
               }
             }
 
@@ -809,64 +869,96 @@ module.exports = function registerMlSync(app, opts = {}) {
             });
 
             if (!dry) {
-              let sql, params;
-              if (hasFotoCol) {
-                sql = `
-                  UPDATE devolucoes
-                     SET log_status       = COALESCE($1, log_status),
-                         ml_return_status = COALESCE($2, ml_return_status),
-                         status           = COALESCE($3, status),
-                         sku              = COALESCE($4, sku),
-                         loja_nome        = CASE
-                           WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
-                             THEN COALESCE($5, loja_nome)
-                           ELSE loja_nome
-                         END,
-                         foto_produto     = COALESCE($6, foto_produto),
-                         ml_claim_id      = COALESCE($7, ml_claim_id),
-                         updated_at       = now()
-                   WHERE id = $8`;
-                params = [
-                  flow,
-                  String(ret?.status || ''),
-                  internal,
-                  sku,
-                  lojaNome,
-                  fotoUrl,
-                  String(claimId),
-                  returnId
-                ];
-              } else {
-                sql = `
-                  UPDATE devolucoes
-                     SET log_status       = COALESCE($1, log_status),
-                         ml_return_status = COALESCE($2, ml_return_status),
-                         status           = COALESCE($3, status),
-                         sku              = COALESCE($4, sku),
-                         loja_nome        = CASE
-                           WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
-                             THEN COALESCE($5, loja_nome)
-                           ELSE loja_nome
-                         END,
-                         ml_claim_id      = COALESCE($6, ml_claim_id),
-                         updated_at       = now()
-                   WHERE id = $7`;
-                params = [
-                  flow,
-                  String(ret?.status || ''),
-                  internal,
-                  sku,
-                  lojaNome,
-                  String(claimId),
-                  returnId
-                ];
+              // montagem dinâmica do UPDATE conforme colunas existentes
+              const set  = [];
+              const args = [];
+
+              const push = (expr, val) => {
+                args.push(val);
+                set.push(`${expr} = $${args.length}`);
+              };
+
+              // status/logística
+              if (has('log_status'))        push('log_status', mapFlowFromReturn(ret?.status));
+              if (has('ml_return_status'))  push('ml_return_status', String(ret?.status || ''));
+              if (has('status'))            push('status', internal);
+
+              // foto/sku/loja
+              if (has('sku') && sku)        push('sku', sku);
+              if (has('loja_nome')) {
+                // Só sobrepõe "Mercado Livre" vazio
+                set.push(`loja_nome = CASE
+                  WHEN (loja_nome IS NULL OR loja_nome = '' OR loja_nome = 'Mercado Livre')
+                  THEN $${args.length + 1}
+                  ELSE loja_nome END`);
+                args.push(lojaNome);
+              }
+              if (has('foto_produto') && fotoUrl) push('foto_produto', fotoUrl);
+
+              // vínculo claim
+              if (has('ml_claim_id'))       push('ml_claim_id', String(claimId));
+
+              // ml_claim_* (stage/status/type)
+              if (has('ml_claim_stage'))  push('ml_claim_stage',  String(claimDet?.stage  || ''));
+              if (has('ml_claim_status')) push('ml_claim_status', String(claimDet?.status || ''));
+              if (has('ml_claim_type'))   push('ml_claim_type',   String(claimDet?.type   || ''));
+
+              // triage (se vier aninhado no return v2)
+              const tri = ret?.triage || null;
+              if (tri) {
+                if (has('ml_triage_stage'))              push('ml_triage_stage',              String(tri.stage || ''));
+                if (has('ml_triage_status'))             push('ml_triage_status',             String(tri.status || ''));
+                if (has('ml_triage_benefited'))          push('ml_triage_benefited',          tri.benefited ?? null);
+                if (has('ml_triage_reason_id'))          push('ml_triage_reason_id',          String(tri.reason_id || ''));
+                if (has('ml_triage_product_condition'))  push('ml_triage_product_condition',  String(tri.product_condition || ''));
+                if (has('ml_triage_product_destination'))push('ml_triage_product_destination',String(tri.product_destination || ''));
               }
 
-              await qOf(req)(sql, params);
+              // valores
+              if (has('valor_produto') && totalProduto != null) {
+                // só define se estiver nulo/zero
+                set.push(`valor_produto = CASE WHEN COALESCE(valor_produto,0)=0 THEN $${args.length + 1} ELSE valor_produto END`);
+                args.push(Number(totalProduto));
+              }
+              if (has('valor_frete') && valorFrete != null) {
+                set.push(`valor_frete = CASE WHEN COALESCE(valor_frete,0)=0 THEN $${args.length + 1} ELSE valor_frete END`);
+                args.push(Number(valorFrete));
+              }
+
+              // dados básicos do pedido (cliente/data) se disponíveis e vazios
+              if (orderDetail) {
+                const buyer = orderDetail?.buyer || {};
+                const buyerName =
+                  [buyer.first_name, buyer.last_name].filter(Boolean).join(' ').trim() ||
+                  buyer.nickname || null;
+
+                const dataCompraIso =
+                  orderDetail?.date_created ? dayjs(orderDetail.date_created).toISOString() : null;
+
+                if (has('cliente_nome') && buyerName) {
+                  set.push(`cliente_nome = COALESCE(cliente_nome, $${args.length + 1})`);
+                  args.push(buyerName);
+                }
+                if (has('data_compra') && dataCompraIso) {
+                  set.push(`data_compra = COALESCE(data_compra, $${args.length + 1})`);
+                  args.push(dataCompraIso);
+                }
+              }
+
+              if (set.length) set.push('updated_at = now()');
+
+              const sql = `
+                UPDATE devolucoes
+                   SET ${set.join(', ')}
+                 WHERE id = $${args.length + 1}
+              `;
+              args.push(returnId);
+
+              await qOf(req)(sql, args);
               updated++;
             }
 
-            if (!dry && hasTipoCol && tipoSug) {
+            if (!dry && has('tipo_reclamacao') && tipoSug) {
               try {
                 await qOf(req)(
                   `UPDATE devolucoes
@@ -936,6 +1028,18 @@ module.exports = function registerMlSync(app, opts = {}) {
       const detail = e?.response?.data || e?.message || String(e);
       // Mesmo em falha geral, evita 400 para não quebrar o front polling.
       return res.status(200).json({ ok: false, error: detail });
+    }
+  });
+
+  // Enriquecer uma devolução específica com dados do pedido do ML (on-demand)
+  router.post('/api/ml/returns/:id/enrich', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const out = await enrichReturnFromML(req, id);
+      return res.json({ ok: true, ...out });
+    } catch (e) {
+      const detail = e?.response?.data || e?.message || String(e);
+      return res.status(500).json({ ok: false, error: detail });
     }
   });
 
