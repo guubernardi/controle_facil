@@ -64,10 +64,10 @@ class DevolucoesFeed {
       listaAbas.addEventListener("click", (e) => {
         const btn = e.target.closest(".aba");
         if (!btn) return;
-        
+
         listaAbas.querySelectorAll(".aba").forEach(b => b.classList.remove("is-active"));
         btn.classList.add("is-active");
-        
+
         this.filtros.status = btn.dataset.status || "todos";
         this.page = 1;
         this.renderizar();
@@ -148,7 +148,7 @@ class DevolucoesFeed {
 
   atualizarContadores() {
     const counts = { todos: 0, pendente: 0, em_analise: 0, disputa: 0, finalizado: 0 };
-    
+
     this.items.forEach(d => {
       counts.todos++;
       const grupo = this.identificarGrupo(d);
@@ -181,15 +181,11 @@ class DevolucoesFeed {
     const triageStage  = String(row.ml_triage_stage  || row.triage_stage  || "").toLowerCase();
     const triageStatus = String(row.ml_triage_status || row.triage_status || "").toLowerCase();
 
-    // stage/status "dispute" ou "mediation"
     if (stage.includes("dispute") || stage.includes("mediation")) return true;
     if (status.includes("mediation") || status.includes("dispute")) return true;
     if (type === "meditations") return true;
 
-    // triage pendente = tratamos como em mediação
     if (["seller_review_pending", "pending"].includes(triageStage)) return true;
-
-    // triage com status explícito de falha também é um caso de conflito ativo
     if (triageStatus === "failed" && triageStage !== "closed") return true;
 
     return false;
@@ -206,8 +202,6 @@ class DevolucoesFeed {
       s = String(statusOrRow || "").toLowerCase();
     }
 
-    // prioridade: se a claim está em mediação/disputa no ML,
-    // força a devolução pra aba "disputa"
     if (row && this.isEmMediacaoML(row)) {
       return "disputa";
     }
@@ -285,8 +279,12 @@ class DevolucoesFeed {
 
   // ===== Helpers de valores (Produto / Frete) =====
   getValorProduto(d) {
+    // Prioriza valor consolidado do backend (mesmo quando 0)
+    if (Object.prototype.hasOwnProperty.call(d, 'valor_produto') && d.valor_produto !== null) {
+      return this.toNumber(d.valor_produto);
+    }
+    // Fallback para campos legados/ML somente se não vier do backend
     const candidatos = [
-      d.valor_produto,
       d.valor_produto_ml,
       d.valor_item,
       d.item_price,
@@ -302,8 +300,12 @@ class DevolucoesFeed {
   }
 
   getValorFrete(d) {
+    // Prioriza valor consolidado do backend (mesmo quando 0)
+    if (Object.prototype.hasOwnProperty.call(d, 'valor_frete') && d.valor_frete !== null) {
+      return this.toNumber(d.valor_frete);
+    }
+    // Fallback legados
     const candidatos = [
-      d.valor_frete,
       d.frete,
       d.ml_valor_frete,
       d.ml_shipping_cost,
@@ -311,7 +313,7 @@ class DevolucoesFeed {
       d.valor_envio
     ];
     for (const v of candidatos) {
-      const n = this.toNumber(v);
+      const n = self.toNumber ? self.toNumber(v) : this.toNumber(v);
       if (n > 0) return n;
     }
     return 0;
@@ -344,7 +346,7 @@ class DevolucoesFeed {
     const total      = filtrados.length;
     const totalPages = Math.ceil(total / this.pageSize) || 1;
     if (this.page > totalPages) this.page = totalPages;
-    
+
     const inicio    = (this.page - 1) * this.pageSize;
     const fim       = inicio + this.pageSize;
     const pageItems = filtrados.slice(inicio, fim);
@@ -373,7 +375,7 @@ class DevolucoesFeed {
   criarCard(d) {
     const el = document.createElement("div");
     el.className = "card-devolucao";
-    
+
     const dataFonte =
       d.created_at ||
       d.updated_at ||
@@ -397,7 +399,7 @@ class DevolucoesFeed {
     });
 
     const fotoUrl  = d.foto_produto || "assets/img/box.jpg";
-    
+
     // Status da devolução no ML (case-insensitive)
     const rawStatusML = String(d.ml_return_status || "").toLowerCase();
     const statusML    = this.traduzirStatusML(rawStatusML);
@@ -431,7 +433,7 @@ class DevolucoesFeed {
           <div class="produto-titulo" title="${d.sku || "Produto sem nome"}">
             ${d.sku || "Produto não identificado"}
           </div>
-          
+
           <div class="motivo-linha text-muted">
             ${d.loja_nome || "Loja não inf."}
           </div>
@@ -448,7 +450,7 @@ class DevolucoesFeed {
           <span class="badge ${statusClass}">${statusML}</span>
           ${this.getBadgeInterno(d)}
         </div>
-        
+
         <div class="devolucao-cta">
           ${btnAction}
           <a href="devolucao-editar.html?id=${d.id}" class="botao botao-sm botao-outline">Ver</a>
@@ -464,7 +466,7 @@ class DevolucoesFeed {
     const st = String(stRaw || "").toLowerCase();
 
     const map = {
-      // principais
+      // principais (orders/shipments)
       pending:         "Pendente",
       shipped:         "Em trânsito",
       delivered:       "Entregue no CD",
@@ -472,21 +474,29 @@ class DevolucoesFeed {
       closed:          "Encerrado",
       expired:         "Expirado",
       label_generated: "Pronta para envio",
-      dispute:         "Mediação",
-      mediation:       "Mediação",
+      ready_to_ship:   "Pronta para envio",
 
-      // mapeando variações do /v2/claims/$CLAIM_ID/returns
+      // returns v2
+      to_be_sent:      "Pronta para envio",
+      in_transit:      "Em trânsito",
+      to_be_received:  "Em trânsito",
+      arrived:         "Entregue no CD",
+      received:        "Entregue no CD",
+      returned_to_sender: "Devolvido ao remetente",
+      not_delivered:   "Não entregue",
+      failed:          "Cancelado",
+
+      // claim mediação
+      dispute:   "Mediação",
+      mediation: "Mediação",
+
+      // variações antigas
       pending_cancel:     "Pendente",
       pending_expiration: "Pendente",
       pending_failure:    "Pendente",
       scheduled:          "Pendente",
       pending_delivered:  "Em trânsito",
-      return_to_buyer:    "Em trânsito",
-      failed:             "Cancelado",
-      not_delivered:      "Não entregue",
-
-      // shipment.status
-      ready_to_ship: "Pronta para envio"
+      return_to_buyer:    "Em trânsito"
     };
 
     return map[st] || (st || "—");
@@ -495,32 +505,26 @@ class DevolucoesFeed {
   getClassStatusML(stRaw) {
     const st = String(stRaw || "").toLowerCase();
 
-    // entregues
-    if (st === "delivered") return "badge-status-aprovado";
+    if (["delivered","arrived","received"].includes(st)) return "badge-status-aprovado";
 
-    // em trânsito / a caminho
-    if (["shipped", "pending_delivered", "return_to_buyer"].includes(st)) {
+    if (["shipped","pending_delivered","return_to_buyer","in_transit","to_be_received"].includes(st)) {
       return "badge-status-neutro";
     }
 
-    // pronta para envio / etiqueta gerada
-    if (["label_generated", "ready_to_ship", "scheduled"].includes(st)) {
+    if (["label_generated","ready_to_ship","scheduled","to_be_sent"].includes(st)) {
       return "badge-status-neutro";
     }
 
-    // problemas / cancelado / falha
-    if (["cancelled", "failed", "not_delivered", "expired"].includes(st)) {
+    if (["cancelled","failed","not_delivered","expired","returned_to_sender"].includes(st)) {
       return "badge-status-rejeitado";
     }
 
-    // default = pendente
     return "badge-status-pendente";
   }
 
   getBadgeInterno(row) {
     const s = String(row && row.status || "").toLowerCase();
 
-    // Prioridade: se a claim está em mediação no ML, mostra badge próprio
     if (this.isEmMediacaoML(row)) {
       return '<span class="badge badge-status-rejeitado">Em mediação (ML)</span>';
     }
@@ -538,7 +542,7 @@ class DevolucoesFeed {
     const nav = document.getElementById("paginacao");
     if (!nav) return;
     if (total <= 1) { nav.innerHTML = ""; return; }
-    
+
     let html = "";
     if (this.page > 1) {
       html += `<button class="page-btn" data-page="${this.page - 1}">‹</button>`;
@@ -575,7 +579,7 @@ class DevolucoesFeed {
       this.renderizar();
     };
   }
-  
+
   startAutoSync() {
     setInterval(async () => {
       await this.carregar();
@@ -617,18 +621,18 @@ class DevolucoesFeed {
       }
     }
   }
-  
+
   exportar() {
     if (!this.items.length) {
       return this.toast("Atenção", "Nada para exportar.", "warning");
     }
-    const header = ["ID", "Pedido", "Cliente", "Status", "Valor"];
+    const header = ["ID", "Pedido", "Cliente", "Status", "Valor (R$)"];
     const linhas = this.items.map(e => [
       e.id,
       e.id_venda,
       (e.cliente_nome || "").replace(/,/g, " "),
       e.status,
-      e.valor_produto
+      this.getValorProduto(e).toFixed(2).replace('.', ',')
     ].join(","));
 
     const csvContent = "data:text/csv;charset=utf-8," +
