@@ -5,7 +5,6 @@ const express = require('express');
 const router  = express.Router();
 const { query } = require('../db');
 
-// Usa o pool da request (quando existir) ou o global
 const qOf = (req) => req.q || query;
 
 /* ================= helpers ================= */
@@ -19,7 +18,7 @@ async function columnsOf(q, table) {
     );
     return new Set(rows.map(r => r.column_name));
   } catch {
-    return new Set(); // fallback
+    return new Set();
   }
 }
 
@@ -62,13 +61,12 @@ function humanizeReason(idOrText = '') {
   return idOrText || 'Outro';
 }
 
-// Parse robusto para valores monetários vindos como "R$ 1.234,56" / "69,34" / "1,234.56"
+// Parse seguro de dinheiro (aceita "R$ 1.234,56" / "69,34" / "1,234.56")
 function parseMoneyBR(raw) {
-  if (raw === null || raw === undefined) return null;
+  if (raw === null || raw === undefined || raw === '') return null;
   if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
 
   let s = String(raw).trim();
-  if (!s) return null;
   s = s.replace(/[^\d.,-]/g, '');
   if (!s) return null;
 
@@ -79,11 +77,11 @@ function parseMoneyBR(raw) {
     const lastComma = s.lastIndexOf(',');
     const lastDot   = s.lastIndexOf('.');
     if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.'); // pt-BR
-    else                     s = s.replace(/,/g, '');                    // en-US
-  } else if (hasComma && !hasDot) {
-    s = s.replace(/\./g, '').replace(',', '.');                          // vírgula decimal
-  } else if (!hasComma && hasDot) {
-    if (!/^\d+\.\d{1,4}$/.test(s)) s = s.replace(/\./g, '');             // pontos de milhar
+    else                     s = s.replace(/,/g, '');                    // en-US thousand sep
+  } else if (hasComma) {
+    s = s.replace(/\./g, '').replace(',', '.');                          // pt-BR
+  } else if (hasDot && !/^\d+\.\d{1,4}$/.test(s)) {
+    s = s.replace(/\./g, '');                                            // thousand sep
   }
 
   const n = parseFloat(s);
@@ -105,40 +103,23 @@ router.get('/', async (req, res) => {
     const has  = (c) => cols.has(c);
 
     const selectCols = [];
-
     [
-      'id',
-      'id_venda',
-      'cliente_nome',
-      'loja_nome',
-      'sku',
-      'status',
-      'log_status',
-      'created_at',
-      'updated_at',
-      'data_compra',
-      'cd_recebido_em',
-      'valor_produto',
-      'valor_frete'
+      'id','id_venda','cliente_nome','loja_nome','sku','status','log_status',
+      'created_at','updated_at','data_compra','cd_recebido_em','valor_produto','valor_frete'
     ].forEach(c => { if (has(c)) selectCols.push(c); });
-
     if (has('foto_produto'))     selectCols.push('foto_produto');
     if (has('ml_return_status')) selectCols.push('ml_return_status');
-
     if (has('ml_claim_id'))      selectCols.push('ml_claim_id');
     if (has('ml_claim_stage'))   selectCols.push('ml_claim_stage');
     if (has('ml_claim_status'))  selectCols.push('ml_claim_status');
     if (has('ml_claim_type'))    selectCols.push('ml_claim_type');
-
     if (has('ml_triage_stage'))               selectCols.push('ml_triage_stage');
     if (has('ml_triage_status'))              selectCols.push('ml_triage_status');
     if (has('ml_triage_benefited'))           selectCols.push('ml_triage_benefited');
     if (has('ml_triage_reason_id'))           selectCols.push('ml_triage_reason_id');
     if (has('ml_triage_product_condition'))   selectCols.push('ml_triage_product_condition');
     if (has('ml_triage_product_destination')) selectCols.push('ml_triage_product_destination');
-
-    if (has('tipo_reclamacao')) selectCols.push('tipo_reclamacao');
-
+    if (has('tipo_reclamacao'))               selectCols.push('tipo_reclamacao');
     if (!selectCols.length) selectCols.push('*');
 
     const params       = [];
@@ -146,8 +127,8 @@ router.get('/', async (req, res) => {
 
     const tenantId = getTenantId(req);
     if (tenantId && has('tenant_id')) {
-      whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
-      params.push(tenantId);
+      whereClauses.push(`(tenant_id::text = $${params.length + 1} OR tenant_id IS NULL)`);
+      params.push(String(tenantId));
     }
 
     if (search) {
@@ -169,9 +150,7 @@ router.get('/', async (req, res) => {
     if (status) {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
-        if (has('ml_return_status')) {
-          clause += ` OR ml_return_status IN ('shipped','pending_delivered','on_transit','in_transit')`;
-        }
+        if (has('ml_return_status')) clause += ` OR ml_return_status IN ('shipped','pending_delivered','on_transit','in_transit')`;
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'disputa') {
@@ -230,7 +209,7 @@ router.get('/', async (req, res) => {
     res.json(payload);
   } catch (e) {
     console.error('[returns:list] ERRO', e);
-    res.status(500).json({ error: 'Erro interno ao listar' });
+    res.status(500).json({ error: 'Erro interno ao listar', detail: String(e?.message || e) });
   }
 });
 
@@ -242,21 +221,19 @@ router.get('/sync', async (req, res) => {
     if (!qs.has('all'))    qs.set('all',  '1');
     if (!qs.has('silent')) qs.set('silent','1');
 
-    // Redireciona preservando método (GET) e query
     return res.redirect(307, `/api/ml/claims/import?${qs.toString()}`);
   } catch (e) {
     return res.status(500).json({ error: e.message || 'sync_redirect_failed' });
   }
 });
 
-/* =============== 3) DETALHES SIMPLIFICADO =============== */
+/* =============== 3) DETALHES =============== */
 router.get('/:id', async (req, res) => {
   const debug = req.query.debug === '1';
   try {
     const q        = qOf(req);
     const idParam  = String(req.params.id || '').trim();
     const tenantId = getTenantId(req);
-    const isNumeric = /^\d+$/.test(idParam);
 
     const cols       = await columnsOf(q, 'devolucoes');
     const hasIdVenda = cols.has('id_venda');
@@ -264,36 +241,36 @@ router.get('/:id', async (req, res) => {
 
     let row = null;
 
-    if (isNumeric) {
-      try {
-        const args = [ Number(idParam) ];
-        let sql = 'SELECT * FROM devolucoes WHERE id = $1';
-        if (hasTenant && tenantId) {
-          sql += ' AND (tenant_id = $2 OR tenant_id IS NULL)';
-          args.push(tenantId);
-        }
-        sql += ' LIMIT 1';
-        const r = await q(sql, args);
-        row = r.rows[0] || null;
-      } catch (err) {
-        console.warn('[returns:get] erro ao buscar por id:', err.message);
-        if (debug) return res.status(500).json({ error: 'sql_error_id', detail: err.message });
+    // 1) por id
+    try {
+      const args = [ idParam ];
+      let sql = 'SELECT * FROM devolucoes WHERE CAST(id AS TEXT) = $1';
+      if (hasTenant && tenantId) {
+        sql += ' AND (tenant_id::text = $2 OR tenant_id IS NULL)';
+        args.push(String(tenantId));
       }
+      sql += ' LIMIT 1';
+      const r = await q(sql, args);
+      row = r.rows[0] || null;
+    } catch (err) {
+      console.warn('[returns:get] erro por id:', err.message);
+      if (debug) return res.status(500).json({ error: 'sql_error_id', detail: err.message });
     }
 
+    // 2) por id_venda (fallback)
     if (!row && hasIdVenda) {
       try {
         const args2 = [ idParam ];
         let sql2 = 'SELECT * FROM devolucoes WHERE id_venda = $1';
         if (hasTenant && tenantId) {
-          sql2 += ' AND (tenant_id = $2 OR tenant_id IS NULL)';
-          args2.push(tenantId);
+          sql2 += ' AND (tenant_id::text = $2 OR tenant_id IS NULL)';
+          args2.push(String(tenantId));
         }
         sql2 += ' LIMIT 1';
         const r2 = await q(sql2, args2);
         row = r2.rows[0] || null;
       } catch (err) {
-        console.warn('[returns:get] erro ao buscar por id_venda:', err.message);
+        console.warn('[returns:get] erro por id_venda:', err.message);
         if (debug) return res.status(500).json({ error: 'sql_error_id_venda', detail: err.message });
       }
     }
@@ -306,8 +283,9 @@ router.get('/:id', async (req, res) => {
     res.json({ ...row, motivo_label });
   } catch (e) {
     console.error('[returns:get] ERRO', e);
-    if (debug) return res.status(500).json({ error: e.message || 'Erro interno ao buscar' });
-    res.status(500).json({ error: 'Erro interno ao buscar' });
+    const msg = e?.message || 'Erro interno ao buscar';
+    if (debug) return res.status(500).json({ error: msg });
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -345,7 +323,7 @@ router.patch('/:id', express.json(), async (req, res) => {
     push('nfe_chave',       body.nfe_chave);
     push('reclamacao',      body.reclamacao);
 
-    // valores com sanitização (evita NaN → 500)
+    // valores (evita NaN → 500)
     const vProd  = parseMoneyBR(body.valor_produto);
     const vFrete = parseMoneyBR(body.valor_frete);
     if (vProd  !== null) push('valor_produto', vProd);
@@ -374,8 +352,8 @@ router.patch('/:id', express.json(), async (req, res) => {
     const hasTenantNow = cols.has('tenant_id');
     const tenantId     = getTenantId(req);
     if (hasTenantNow && tenantId) {
-      whereArgs.push(tenantId);
-      where.push(`(tenant_id = $${whereArgs.length} OR tenant_id IS NULL)`);
+      whereArgs.push(String(tenantId));
+      where.push(`(tenant_id::text = $${whereArgs.length} OR tenant_id IS NULL)`);
     }
 
     const sql = `
@@ -390,7 +368,7 @@ router.patch('/:id', express.json(), async (req, res) => {
     res.json(rows[0]);
   } catch (e) {
     console.error('[returns:patch] ERRO', e);
-    res.status(500).json({ error: 'Erro ao atualizar' });
+    res.status(500).json({ error: 'Erro ao atualizar', detail: String(e?.message || e) });
   }
 });
 
@@ -428,8 +406,8 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
     const hasTenantNow = has('tenant_id');
     const tenantId     = getTenantId(req);
     if (hasTenantNow && tenantId) {
-      wargs.push(tenantId);
-      where.push(`(tenant_id = $${wargs.length} OR tenant_id IS NULL)`);
+      wargs.push(String(tenantId));
+      where.push(`(tenant_id::text = $${wargs.length} OR tenant_id IS NULL)`);
     }
 
     const { rows } = await q(
@@ -442,6 +420,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
 
+    // timeline (best effort)
     try {
       const hasRetEvents = await hasTable(q, 'return_events');
       const hasDevEvents = await hasTable(q, 'devolucoes_events');
@@ -466,7 +445,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
     res.json(rows[0]);
   } catch (e) {
     console.error('[returns:receive] ERRO', e);
-    res.status(500).json({ error: 'Erro ao registrar recebimento' });
+    res.status(500).json({ error: 'Erro ao registrar recebimento', detail: String(e?.message || e) });
   }
 });
 
