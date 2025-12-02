@@ -5,6 +5,7 @@ const express = require('express');
 const router  = express.Router();
 const { query } = require('../db');
 
+// Usa o pool da request (quando existir) ou o global
 const qOf = (req) => req.q || query;
 
 /* ================= helpers ================= */
@@ -18,7 +19,7 @@ async function columnsOf(q, table) {
     );
     return new Set(rows.map(r => r.column_name));
   } catch {
-    return new Set();
+    return new Set(); // fallback
   }
 }
 
@@ -37,55 +38,80 @@ function getTenantId(req) {
   return req.session?.user?.tenant_id || req.tenant?.id || null;
 }
 
-function humanizeReason(idOrText = '') {
-  const s = String(idOrText || '').toLowerCase();
-  const map = {
-    different_from_description: 'Produto diferente do anunciado',
-    not_as_described:           'Produto diferente do anunciado',
-    wrong_item:                 'Produto diferente do anunciado',
-    variations_mismatch:        'Variação errada',
-    size_color_mismatch:        'Variação errada',
-    damaged_item:               'Produto com defeito',
-    broken:                     'Produto com defeito',
-    incomplete_item:            'Produto incompleto',
-    missing_parts:              'Produto incompleto',
-    not_delivered:              'Entrega atrasada',
-    undelivered:                'Entrega atrasada'
+/* ======= Normalização/Rotulagem de Motivo ======= */
+
+// mapeia a chave canônica para rótulo amigável
+function labelFromCanon(key = '') {
+  const k = String(key || '').toLowerCase();
+  const MAP = {
+    nao_corresponde:         'Não corresponde à descrição',
+    produto_defeituoso:      'Produto com defeito',
+    produto_danificado:      'Produto danificado (transporte)',
+    produto_incompleto:      'Produto incompleto / faltando peças',
+    arrependimento_cliente:  'Arrependimento do cliente',
+    entrega_atrasada:        'Entrega atrasada / não entregue',
+    outro:                   'Outro'
   };
-  if (map[s]) return map[s];
-  if (/diferente.*anunciad|not.*describ/.test(s)) return 'Produto diferente do anunciado';
-  if (/cor|tamanho|variaç|variation/.test(s))     return 'Variação errada';
-  if (/defeit|quebrad|broken|damag/.test(s))      return 'Produto com defeito';
-  if (/incomplet|faltando|missing/.test(s))       return 'Produto incompleto';
-  if (/undeliver|not.*deliver|atras/.test(s))     return 'Entrega atrasada';
-  return idOrText || 'Outro';
+  return MAP[k] || null;
 }
 
-// Parse seguro de dinheiro (aceita "R$ 1.234,56" / "69,34" / "1,234.56")
-function parseMoneyBR(raw) {
-  if (raw === null || raw === undefined || raw === '') return null;
-  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+// tenta inferir a chave canônica a partir de texto livre
+function canonFromText(text = '') {
+  const s = String(text || '')
+    .normalize?.('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase() || String(text || '').toLowerCase();
 
-  let s = String(raw).trim();
-  s = s.replace(/[^\d.,-]/g, '');
-  if (!s) return null;
+  if (/(nao\s*quer\s*mais|mudou\s*de\s*ideia|buyer\s*remorse|changed\s*mind|preferiu\s*f(icar|ica)r)/.test(s))
+    return 'arrependimento_cliente';
+  if (/(tamanho|size|nao\s*cabe|doesn.?t\s*fit)/.test(s))
+    return 'arrependimento_cliente';
 
-  const hasComma = s.includes(',');
-  const hasDot   = s.includes('.');
+  if (/(defeit|nao\s*funciona|broken|not\s*working)/.test(s))
+    return 'produto_defeituoso';
+  if (/(avaria|danific|amass|quebrad|transporte|shipping\s*damage)/.test(s))
+    return 'produto_danificado';
+  if (/(falt(a|am)\s*pecas|faltando|incomplet|missing\s*parts)/.test(s))
+    return 'produto_incompleto';
+  if (/(diferent|descricao|descri[cç]ao|wrong\s*item|not\s*as\s*described)/.test(s))
+    return 'nao_corresponde';
+  if (/(nao\s*entreg|undelivered|delayed|entrega\s*atras)/.test(s))
+    return 'entrega_atrasada';
 
-  if (hasComma && hasDot) {
-    const lastComma = s.lastIndexOf(',');
-    const lastDot   = s.lastIndexOf('.');
-    if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.'); // pt-BR
-    else                     s = s.replace(/,/g, '');                    // en-US thousand sep
-  } else if (hasComma) {
-    s = s.replace(/\./g, '').replace(',', '.');                          // pt-BR
-  } else if (hasDot && !/^\d+\.\d{1,4}$/.test(s)) {
-    s = s.replace(/\./g, '');                                            // thousand sep
+  return null;
+}
+
+// tenta inferir a canônica a partir de códigos do ML (reason_id resumido)
+function canonFromCode(code = '') {
+  const c = String(code || '').toUpperCase();
+  if (c === 'CS')  return 'arrependimento_cliente';     // Compra cancelada / changed_mind
+  if (c === 'PNR') return 'entrega_atrasada';           // Produto não recebido
+  if (c.startsWith('PDD')) {
+    // PDD* engloba "produto diferente/defeituoso" – sem granularidade garantida
+    return 'nao_corresponde';
   }
+  return null;
+}
 
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : null;
+// rótulo “humano” legado (mantém retrocompat)
+function legacyHumanize(idOrText = '') {
+  const s = String(idOrText || '').toLowerCase();
+  const map = {
+    different_from_description: 'Não corresponde à descrição',
+    not_as_described:           'Não corresponde à descrição',
+    wrong_item:                 'Não corresponde à descrição',
+    variations_mismatch:        'Não corresponde à descrição',
+    size_color_mismatch:        'Não corresponde à descrição',
+    damaged_item:               'Produto danificado (transporte)',
+    broken:                     'Produto com defeito',
+    incomplete_item:            'Produto incompleto / faltando peças',
+    missing_parts:              'Produto incompleto / faltando peças',
+    not_delivered:              'Entrega atrasada / não entregue',
+    undelivered:                'Entrega atrasada / não entregue',
+    cs:                         'Arrependimento do cliente' // atalho se vier "cs"
+  };
+  if (map[s]) return map[s];
+  const viaText = canonFromText(s);
+  if (viaText) return labelFromCanon(viaText);
+  return idOrText || 'Outro';
 }
 
 /* =============== 1) LISTAGEM =============== */
@@ -103,23 +129,30 @@ router.get('/', async (req, res) => {
     const has  = (c) => cols.has(c);
 
     const selectCols = [];
+
     [
       'id','id_venda','cliente_nome','loja_nome','sku','status','log_status',
-      'created_at','updated_at','data_compra','cd_recebido_em','valor_produto','valor_frete'
+      'created_at','updated_at','data_compra','cd_recebido_em',
+      'valor_produto','valor_frete'
     ].forEach(c => { if (has(c)) selectCols.push(c); });
+
     if (has('foto_produto'))     selectCols.push('foto_produto');
     if (has('ml_return_status')) selectCols.push('ml_return_status');
+
     if (has('ml_claim_id'))      selectCols.push('ml_claim_id');
     if (has('ml_claim_stage'))   selectCols.push('ml_claim_stage');
     if (has('ml_claim_status'))  selectCols.push('ml_claim_status');
     if (has('ml_claim_type'))    selectCols.push('ml_claim_type');
+
     if (has('ml_triage_stage'))               selectCols.push('ml_triage_stage');
     if (has('ml_triage_status'))              selectCols.push('ml_triage_status');
     if (has('ml_triage_benefited'))           selectCols.push('ml_triage_benefited');
     if (has('ml_triage_reason_id'))           selectCols.push('ml_triage_reason_id');
     if (has('ml_triage_product_condition'))   selectCols.push('ml_triage_product_condition');
     if (has('ml_triage_product_destination')) selectCols.push('ml_triage_product_destination');
-    if (has('tipo_reclamacao'))               selectCols.push('tipo_reclamacao');
+
+    if (has('tipo_reclamacao')) selectCols.push('tipo_reclamacao');
+
     if (!selectCols.length) selectCols.push('*');
 
     const params       = [];
@@ -127,8 +160,8 @@ router.get('/', async (req, res) => {
 
     const tenantId = getTenantId(req);
     if (tenantId && has('tenant_id')) {
-      whereClauses.push(`(tenant_id::text = $${params.length + 1} OR tenant_id IS NULL)`);
-      params.push(String(tenantId));
+      whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
+      params.push(tenantId);
     }
 
     if (search) {
@@ -150,7 +183,9 @@ router.get('/', async (req, res) => {
     if (status) {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
-        if (has('ml_return_status')) clause += ` OR ml_return_status IN ('shipped','pending_delivered','on_transit','in_transit')`;
+        if (has('ml_return_status')) {
+          clause += ` OR ml_return_status IN ('shipped','pending_delivered','on_transit')`;
+        }
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'disputa') {
@@ -209,7 +244,7 @@ router.get('/', async (req, res) => {
     res.json(payload);
   } catch (e) {
     console.error('[returns:list] ERRO', e);
-    res.status(500).json({ error: 'Erro interno ao listar', detail: String(e?.message || e) });
+    res.status(500).json({ error: 'Erro interno ao listar' });
   }
 });
 
@@ -221,6 +256,7 @@ router.get('/sync', async (req, res) => {
     if (!qs.has('all'))    qs.set('all',  '1');
     if (!qs.has('silent')) qs.set('silent','1');
 
+    // Redireciona preservando método (GET) e query
     return res.redirect(307, `/api/ml/claims/import?${qs.toString()}`);
   } catch (e) {
     return res.status(500).json({ error: e.message || 'sync_redirect_failed' });
@@ -234,6 +270,7 @@ router.get('/:id', async (req, res) => {
     const q        = qOf(req);
     const idParam  = String(req.params.id || '').trim();
     const tenantId = getTenantId(req);
+    const isNumeric = /^\d+$/.test(idParam);
 
     const cols       = await columnsOf(q, 'devolucoes');
     const hasIdVenda = cols.has('id_venda');
@@ -241,51 +278,70 @@ router.get('/:id', async (req, res) => {
 
     let row = null;
 
-    // 1) por id
-    try {
-      const args = [ idParam ];
-      let sql = 'SELECT * FROM devolucoes WHERE CAST(id AS TEXT) = $1';
-      if (hasTenant && tenantId) {
-        sql += ' AND (tenant_id::text = $2 OR tenant_id IS NULL)';
-        args.push(String(tenantId));
+    if (isNumeric) {
+      try {
+        const args = [ Number(idParam) ];
+        let sql = 'SELECT * FROM devolucoes WHERE id = $1';
+        if (hasTenant && tenantId) {
+          sql += ' AND (tenant_id = $2 OR tenant_id IS NULL)';
+          args.push(tenantId);
+        }
+        sql += ' LIMIT 1';
+        const r = await q(sql, args);
+        row = r.rows[0] || null;
+      } catch (err) {
+        console.warn('[returns:get] erro ao buscar por id:', err.message);
+        if (debug) return res.status(500).json({ error: 'sql_error_id', detail: err.message });
       }
-      sql += ' LIMIT 1';
-      const r = await q(sql, args);
-      row = r.rows[0] || null;
-    } catch (err) {
-      console.warn('[returns:get] erro por id:', err.message);
-      if (debug) return res.status(500).json({ error: 'sql_error_id', detail: err.message });
     }
 
-    // 2) por id_venda (fallback)
     if (!row && hasIdVenda) {
       try {
         const args2 = [ idParam ];
         let sql2 = 'SELECT * FROM devolucoes WHERE id_venda = $1';
         if (hasTenant && tenantId) {
-          sql2 += ' AND (tenant_id::text = $2 OR tenant_id IS NULL)';
-          args2.push(String(tenantId));
+          sql2 += ' AND (tenant_id = $2 OR tenant_id IS NULL)';
+          args2.push(tenantId);
         }
         sql2 += ' LIMIT 1';
         const r2 = await q(sql2, args2);
         row = r2.rows[0] || null;
       } catch (err) {
-        console.warn('[returns:get] erro por id_venda:', err.message);
+        console.warn('[returns:get] erro ao buscar por id_venda:', err.message);
         if (debug) return res.status(500).json({ error: 'sql_error_id_venda', detail: err.message });
       }
     }
 
     if (!row) return res.status(404).json({ error: 'Não encontrado' });
 
-    const rawMotivo    = row.tipo_reclamacao || row.reclamacao || row.ml_return_status || '';
-    const motivo_label = humanizeReason(rawMotivo);
+    // ===== Motivo canônico/label =====
+    // Preferência: tipo_reclamacao (canônico) > reclamacao/descrição livre > ml_return_status (último recurso)
+    const rawCanon =
+      (row.tipo_reclamacao && String(row.tipo_reclamacao).toLowerCase()) || null;
 
-    res.json({ ...row, motivo_label });
+    // tenta achar código curto (CS/PNR/PDD*) se vier em algum campo textual
+    let shortCode = null;
+    for (const k of ['reclamacao','tipo_reclamacao','ml_return_status','ml_triage_reason_id']) {
+      if (row[k]) {
+        const m = String(row[k]).match(/\b(PNR|CS|PDD\d{0,4})\b/i);
+        if (m) { shortCode = m[1].toUpperCase(); break; }
+      }
+    }
+
+    const canon =
+      rawCanon ||
+      canonFromCode(shortCode) ||
+      canonFromText(row.reclamacao) ||
+      canonFromText(row.ml_return_status) ||
+      'outro';
+
+    const motivo_label = labelFromCanon(canon) || legacyHumanize(rawCanon || row.reclamacao || row.ml_return_status || 'outro');
+
+    res.json({ ...row, tipo_reclamacao: canon, motivo_label });
   } catch (e) {
     console.error('[returns:get] ERRO', e);
-    const msg = e?.message || 'Erro interno ao buscar';
-    if (debug) return res.status(500).json({ error: msg });
-    res.status(500).json({ error: msg });
+    if (debug) return res.status(500).json({ error: e.message || 'Erro interno ao buscar' });
+    res.status(500).json({ error: 'Erro interno ao buscar' });
   }
 });
 
@@ -305,38 +361,27 @@ router.patch('/:id', express.json(), async (req, res) => {
 
     function push(col, val, transform) {
       if (!has(col) || val === undefined) return;
-      const v = transform ? transform(val) : val;
-      if (v === undefined) return;
-      args.push(v);
+      args.push(transform ? transform(val) : val);
       set.push(`${col} = $${args.length}`);
     }
 
-    // meta
     push('id_venda',        body.id_venda);
     push('cliente_nome',    body.cliente_nome);
     push('loja_nome',       body.loja_nome);
     push('data_compra',     body.data_compra);
     push('status',          body.status);
     push('sku',             body.sku, v => String(v || '').toUpperCase());
-    push('tipo_reclamacao', body.tipo_reclamacao);
+    push('tipo_reclamacao', body.tipo_reclamacao); // aceita "arrependimento_cliente" etc.
     push('nfe_numero',      body.nfe_numero);
     push('nfe_chave',       body.nfe_chave);
     push('reclamacao',      body.reclamacao);
 
-    // valores (evita NaN → 500)
-    const vProd  = parseMoneyBR(body.valor_produto);
-    const vFrete = parseMoneyBR(body.valor_frete);
-    if (vProd  !== null) push('valor_produto', vProd);
-    if (vFrete !== null) push('valor_frete',  vFrete);
+    push('valor_produto',   body.valor_produto, Number);
+    push('valor_frete',     body.valor_frete, Number);
 
-    // fluxo
     push('log_status',      body.log_status);
 
-    // CD
-    if (has('cd_recebido_em')) {
-      const when = body.cd_recebido_em ? new Date(body.cd_recebido_em) : null;
-      push('cd_recebido_em', when && !Number.isNaN(when.getTime()) ? when.toISOString() : null);
-    }
+    push('cd_recebido_em',  body.cd_recebido_em || null);
     push('cd_responsavel',  body.cd_responsavel || null);
 
     if (has('updated_at')) set.push('updated_at = NOW()');
@@ -352,8 +397,8 @@ router.patch('/:id', express.json(), async (req, res) => {
     const hasTenantNow = cols.has('tenant_id');
     const tenantId     = getTenantId(req);
     if (hasTenantNow && tenantId) {
-      whereArgs.push(String(tenantId));
-      where.push(`(tenant_id::text = $${whereArgs.length} OR tenant_id IS NULL)`);
+      whereArgs.push(tenantId);
+      where.push(`(tenant_id = $${whereArgs.length} OR tenant_id IS NULL)`);
     }
 
     const sql = `
@@ -368,7 +413,7 @@ router.patch('/:id', express.json(), async (req, res) => {
     res.json(rows[0]);
   } catch (e) {
     console.error('[returns:patch] ERRO', e);
-    res.status(500).json({ error: 'Erro ao atualizar', detail: String(e?.message || e) });
+    res.status(500).json({ error: 'Erro ao atualizar' });
   }
 });
 
@@ -406,8 +451,8 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
     const hasTenantNow = has('tenant_id');
     const tenantId     = getTenantId(req);
     if (hasTenantNow && tenantId) {
-      wargs.push(String(tenantId));
-      where.push(`(tenant_id::text = $${wargs.length} OR tenant_id IS NULL)`);
+      wargs.push(tenantId);
+      where.push(`(tenant_id = $${wargs.length} OR tenant_id IS NULL)`);
     }
 
     const { rows } = await q(
@@ -420,7 +465,6 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
 
     if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
 
-    // timeline (best effort)
     try {
       const hasRetEvents = await hasTable(q, 'return_events');
       const hasDevEvents = await hasTable(q, 'devolucoes_events');
@@ -445,7 +489,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
     res.json(rows[0]);
   } catch (e) {
     console.error('[returns:receive] ERRO', e);
-    res.status(500).json({ error: 'Erro ao registrar recebimento', detail: String(e?.message || e) });
+    res.status(500).json({ error: 'Erro ao registrar recebimento' });
   }
 });
 
