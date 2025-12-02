@@ -38,6 +38,28 @@ function getTenantId(req) {
   return req.session?.user?.tenant_id || req.tenant?.id || null;
 }
 
+/* ======= Números seguros ======= */
+function isBlank(v) {
+  return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+}
+function toNumberSafe(v) {
+  if (isBlank(v)) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  let s = String(v).trim().replace(/[^\d.,-]/g, '');
+  if (!s) return null;
+
+  // Se houver vírgula e ela for o último separador, trate como pt-BR
+  const lastComma = s.lastIndexOf(',');
+  const lastDot   = s.lastIndexOf('.');
+  if (lastComma > lastDot) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else {
+    s = s.replace(/,/g, '');
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 /* ======= Normalização/Rotulagem de Motivo ======= */
 
 // mapeia a chave canônica para rótulo amigável
@@ -57,8 +79,12 @@ function labelFromCanon(key = '') {
 
 // tenta inferir a chave canônica a partir de texto livre
 function canonFromText(text = '') {
-  const s = String(text || '')
-    .normalize?.('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase() || String(text || '').toLowerCase();
+  let s;
+  try {
+    s = String(text || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+  } catch {
+    s = String(text || '').toLowerCase();
+  }
 
   if (/(nao\s*quer\s*mais|mudou\s*de\s*ideia|buyer\s*remorse|changed\s*mind|preferiu\s*f(icar|ica)r)/.test(s))
     return 'arrependimento_cliente';
@@ -84,14 +110,11 @@ function canonFromCode(code = '') {
   const c = String(code || '').toUpperCase();
   if (c === 'CS')  return 'arrependimento_cliente';     // Compra cancelada / changed_mind
   if (c === 'PNR') return 'entrega_atrasada';           // Produto não recebido
-  if (c.startsWith('PDD')) {
-    // PDD* engloba "produto diferente/defeituoso" – sem granularidade garantida
-    return 'nao_corresponde';
-  }
+  if (c.startsWith('PDD')) return 'nao_corresponde';     // PDD* (diferente/defeituoso)
   return null;
 }
 
-// rótulo “humano” legado (mantém retrocompat)
+// rótulo “humano” legado (retrocompat)
 function legacyHumanize(idOrText = '') {
   const s = String(idOrText || '').toLowerCase();
   const map = {
@@ -106,7 +129,7 @@ function legacyHumanize(idOrText = '') {
     missing_parts:              'Produto incompleto / faltando peças',
     not_delivered:              'Entrega atrasada / não entregue',
     undelivered:                'Entrega atrasada / não entregue',
-    cs:                         'Arrependimento do cliente' // atalho se vier "cs"
+    cs:                         'Arrependimento do cliente'
   };
   if (map[s]) return map[s];
   const viaText = canonFromText(s);
@@ -315,7 +338,6 @@ router.get('/:id', async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Não encontrado' });
 
     // ===== Motivo canônico/label =====
-    // Preferência: tipo_reclamacao (canônico) > reclamacao/descrição livre > ml_return_status (último recurso)
     const rawCanon =
       (row.tipo_reclamacao && String(row.tipo_reclamacao).toLowerCase()) || null;
 
@@ -359,28 +381,37 @@ router.patch('/:id', express.json(), async (req, res) => {
     const set  = [];
     const args = [];
 
+    // push genérico: ignora string vazia/null/undefined
     function push(col, val, transform) {
-      if (!has(col) || val === undefined) return;
-      args.push(transform ? transform(val) : val);
+      if (!has(col) || isBlank(val)) return;
+      const v = transform ? transform(val) : val;
+      if (v === null || v === undefined) return;
+      args.push(v);
       set.push(`${col} = $${args.length}`);
     }
 
+    // meta
     push('id_venda',        body.id_venda);
     push('cliente_nome',    body.cliente_nome);
     push('loja_nome',       body.loja_nome);
     push('data_compra',     body.data_compra);
     push('status',          body.status);
     push('sku',             body.sku, v => String(v || '').toUpperCase());
-    push('tipo_reclamacao', body.tipo_reclamacao); // aceita "arrependimento_cliente" etc.
+    push('tipo_reclamacao', body.tipo_reclamacao); // canônica
     push('nfe_numero',      body.nfe_numero);
     push('nfe_chave',       body.nfe_chave);
     push('reclamacao',      body.reclamacao);
 
-    push('valor_produto',   body.valor_produto, Number);
-    push('valor_frete',     body.valor_frete, Number);
+    // valores (somente se número válido)
+    const vp = toNumberSafe(body.valor_produto);
+    if (vp !== null) push('valor_produto', vp);
+    const vf = toNumberSafe(body.valor_frete);
+    if (vf !== null) push('valor_frete', vf);
 
+    // fluxo
     push('log_status',      body.log_status);
 
+    // CD
     push('cd_recebido_em',  body.cd_recebido_em || null);
     push('cd_responsavel',  body.cd_responsavel || null);
 
