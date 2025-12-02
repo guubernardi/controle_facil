@@ -69,13 +69,10 @@ const ALLOWED_LOG = new Set(['pendente','em_preparacao','em_transporte','recebid
 function normalizeLogStatus(v){
   if (isBlank(v)) return null;
   let s = String(v).toLowerCase().trim();
-  // sinônimos do front/ML
   if (s === 'em_transito') s = 'em_transporte';
   if (s === 'aguardando_postagem' || s === 'ready_to_ship' || s === 'to_be_sent') s = 'pendente';
-  if (ALLOWED_LOG.has(s)) return s;
-  return null; // valor inválido → não grava
+  return ALLOWED_LOG.has(s) ? s : null;
 }
-
 const ALLOWED_INTERNAL = new Set(['pendente','aprovado','rejeitado','finalizado','concluida','concluido']);
 function normalizeInternalStatus(v){
   if (isBlank(v)) return null;
@@ -83,7 +80,7 @@ function normalizeInternalStatus(v){
   return ALLOWED_INTERNAL.has(s) ? s : null;
 }
 
-/* ======= motivo (mesma lógica que você já vinha usando) ======= */
+/* ======= motivo ======= */
 function labelFromCanon(key=''){
   const k = String(key||'').toLowerCase();
   const MAP = {
@@ -110,11 +107,11 @@ function canonFromText(text=''){
   if (/(nao\s*entreg|undelivered|delayed|entrega\s*atras)/.test(s)) return 'entrega_atrasada';
   return null;
 }
-function canonFromCode(code=''){
+function canonFromMlReasonId(code=''){
   const c = String(code||'').toUpperCase();
-  if (c === 'CS') return 'arrependimento_cliente';
-  if (c === 'PNR') return 'entrega_atrasada';
-  if (c.startsWith('PDD')) return 'nao_corresponde';
+  if (c === 'CS')  return 'arrependimento_cliente'; // Compra cancelada (changed mind)
+  if (c === 'PNR') return 'entrega_atrasada';       // Produto não recebido
+  if (c.startsWith('PDD')) return 'nao_corresponde';// Diferente/defeituoso (genérico)
   return null;
 }
 function legacyHumanize(idOrText=''){
@@ -171,7 +168,8 @@ router.get('/', async (req, res) => {
     if (has('ml_triage_reason_id'))           selectCols.push('ml_triage_reason_id');
     if (has('ml_triage_product_condition'))   selectCols.push('ml_triage_product_condition');
     if (has('ml_triage_product_destination')) selectCols.push('ml_triage_product_destination');
-    if (has('tipo_reclamacao')) selectCols.push('tipo_reclamacao');
+    if (has('ml_claim_reason_id'))            selectCols.push('ml_claim_reason_id'); // novo
+    if (has('tipo_reclamacao'))               selectCols.push('tipo_reclamacao');
     if (!selectCols.length) selectCols.push('*');
 
     const params       = [];
@@ -317,22 +315,43 @@ router.get('/:id', async (req, res) => {
 
     if (!row) return res.status(404).json({ error: 'Não encontrado' });
 
-    // motivo canônico/label
-    const rawCanon = (row.tipo_reclamacao && String(row.tipo_reclamacao).toLowerCase()) || null;
-    let shortCode = null;
-    for (const k of ['reclamacao','tipo_reclamacao','ml_return_status','ml_triage_reason_id']) {
-      if (row[k]) { const m = String(row[k]).match(/\b(PNR|CS|PDD\d{0,4})\b/i); if (m){ shortCode = m[1].toUpperCase(); break; } }
+    // ===== Motivo (prioriza reason_id da CLAIM) =====
+    let claimReasonId =
+      row.ml_claim_reason_id || row.claim_reason_id || row.reason_id || row.ml_reason_id || null;
+
+    if (claimReasonId && typeof claimReasonId === 'string') {
+      claimReasonId = claimReasonId.trim().toUpperCase();
+    } else {
+      // fallback: tenta achar padrão nas strings
+      for (const k of ['reclamacao','tipo_reclamacao','ml_triage_reason_id','ml_return_status']) {
+        if (row[k]) {
+          const m = String(row[k]).match(/\b(PNR|CS|PDD\d{0,4})\b/i);
+          if (m) { claimReasonId = m[1].toUpperCase(); break; }
+        }
+      }
     }
+
+    const canonFromClaim = canonFromMlReasonId(claimReasonId);
+
+    // canônica final → preferimos a da claim; se não houver, inferimos por texto/legado
+    const rawCanon = (row.tipo_reclamacao && String(row.tipo_reclamacao).toLowerCase()) || null;
     const canon =
+      canonFromClaim ||
       rawCanon ||
-      canonFromCode(shortCode) ||
       canonFromText(row.reclamacao) ||
       canonFromText(row.ml_return_status) ||
       'outro';
 
-    const motivo_label = labelFromCanon(canon) || legacyHumanize(rawCanon || row.reclamacao || row.ml_return_status || 'outro');
+    const motivo_label =
+      labelFromCanon(canon) ||
+      legacyHumanize(rawCanon || row.reclamacao || row.ml_return_status || 'outro');
 
-    res.json({ ...row, tipo_reclamacao: canon, motivo_label });
+    res.json({
+      ...row,
+      tipo_reclamacao: canon,
+      motivo_label,                 // usado pelo card/label
+      ml_claim_reason_id: claimReasonId || null // útil para depurar/relatórios
+    });
   } catch (e) {
     console.error('[returns:get] ERRO', e);
     if (debug) return res.status(500).json({ error: e.message || 'Erro interno ao buscar' });
@@ -362,7 +381,6 @@ router.patch('/:id', express.json(), async (req, res) => {
       set.push(`${col} = $${args.length}`);
     }
 
-    // campos básicos
     push('id_venda',      body.id_venda);
     push('cliente_nome',  body.cliente_nome);
     push('loja_nome',     body.loja_nome);
@@ -375,16 +393,13 @@ router.patch('/:id', express.json(), async (req, res) => {
     push('nfe_chave',     body.nfe_chave);
     push('reclamacao',    body.reclamacao);
 
-    // valores
     const vp = toNumberSafe(body.valor_produto);
     if (vp !== null) push('valor_produto', vp);
     const vf = toNumberSafe(body.valor_frete);
     if (vf !== null) push('valor_frete', vf);
 
-    // fluxo logístico
     push('log_status',    body.log_status, normalizeLogStatus);
 
-    // CD
     push('cd_recebido_em', body.cd_recebido_em);
     push('cd_responsavel', body.cd_responsavel);
 
