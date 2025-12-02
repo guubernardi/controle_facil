@@ -62,6 +62,34 @@ function humanizeReason(idOrText = '') {
   return idOrText || 'Outro';
 }
 
+// Parse robusto para valores monetários vindos como "R$ 1.234,56" / "69,34" / "1,234.56"
+function parseMoneyBR(raw) {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+
+  let s = String(raw).trim();
+  if (!s) return null;
+  s = s.replace(/[^\d.,-]/g, '');
+  if (!s) return null;
+
+  const hasComma = s.includes(',');
+  const hasDot   = s.includes('.');
+
+  if (hasComma && hasDot) {
+    const lastComma = s.lastIndexOf(',');
+    const lastDot   = s.lastIndexOf('.');
+    if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.'); // pt-BR
+    else                     s = s.replace(/,/g, '');                    // en-US
+  } else if (hasComma && !hasDot) {
+    s = s.replace(/\./g, '').replace(',', '.');                          // vírgula decimal
+  } else if (!hasComma && hasDot) {
+    if (!/^\d+\.\d{1,4}$/.test(s)) s = s.replace(/\./g, '');             // pontos de milhar
+  }
+
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 /* =============== 1) LISTAGEM =============== */
 router.get('/', async (req, res) => {
   try {
@@ -142,7 +170,7 @@ router.get('/', async (req, res) => {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
         if (has('ml_return_status')) {
-          clause += ` OR ml_return_status IN ('shipped','pending_delivered','on_transit')`;
+          clause += ` OR ml_return_status IN ('shipped','pending_delivered','on_transit','in_transit')`;
         }
         clause += ')';
         whereClauses.push(clause);
@@ -299,10 +327,13 @@ router.patch('/:id', express.json(), async (req, res) => {
 
     function push(col, val, transform) {
       if (!has(col) || val === undefined) return;
-      args.push(transform ? transform(val) : val);
+      const v = transform ? transform(val) : val;
+      if (v === undefined) return;
+      args.push(v);
       set.push(`${col} = $${args.length}`);
     }
 
+    // meta
     push('id_venda',        body.id_venda);
     push('cliente_nome',    body.cliente_nome);
     push('loja_nome',       body.loja_nome);
@@ -314,12 +345,20 @@ router.patch('/:id', express.json(), async (req, res) => {
     push('nfe_chave',       body.nfe_chave);
     push('reclamacao',      body.reclamacao);
 
-    push('valor_produto',   body.valor_produto, Number);
-    push('valor_frete',     body.valor_frete, Number);
+    // valores com sanitização (evita NaN → 500)
+    const vProd  = parseMoneyBR(body.valor_produto);
+    const vFrete = parseMoneyBR(body.valor_frete);
+    if (vProd  !== null) push('valor_produto', vProd);
+    if (vFrete !== null) push('valor_frete',  vFrete);
 
+    // fluxo
     push('log_status',      body.log_status);
 
-    push('cd_recebido_em',  body.cd_recebido_em || null);
+    // CD
+    if (has('cd_recebido_em')) {
+      const when = body.cd_recebido_em ? new Date(body.cd_recebido_em) : null;
+      push('cd_recebido_em', when && !Number.isNaN(when.getTime()) ? when.toISOString() : null);
+    }
     push('cd_responsavel',  body.cd_responsavel || null);
 
     if (has('updated_at')) set.push('updated_at = NOW()');
