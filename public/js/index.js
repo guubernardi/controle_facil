@@ -110,7 +110,7 @@ class DevolucoesFeed {
     this.toggleSkeleton(true);
     try {
       const url = `/api/returns?limit=300&range_days=${this.RANGE_DIAS}`;
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      const res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-cache" });
       if (!res.ok) throw new Error("Erro ao buscar dados");
 
       const json = await res.json();
@@ -174,7 +174,7 @@ class DevolucoesFeed {
     if (!row || typeof row !== 'object') return false;
 
     const stage  = String(row.ml_claim_stage  || row.claim_stage  || row.ml_claim_stage_name || "").toLowerCase();
-    const status = String(row.ml_claim_status || row.claim_status || "").toLowerCase();
+       const status = String(row.ml_claim_status || row.claim_status || "").toLowerCase();
     const type   = String(row.ml_claim_type   || row.claim_type   || "").toLowerCase();
 
     // campos de triagem (reviews de /v2/claims/$CLAIM_ID/returns), se o backend mandar
@@ -260,58 +260,47 @@ class DevolucoesFeed {
     if (typeof raw === "number") return Number.isFinite(raw) ? raw : 0;
 
     let s = String(raw).trim();
-    // mantém apenas dígitos, vírgula e ponto
     s = s.replace(/[^\d.,-]/g, "");
     if (!s) return 0;
 
     const hasComma = s.includes(",");
     const hasDot   = s.includes(".");
 
-    // Tem vírgula e ponto → decide pelo último separador
     if (hasComma && hasDot) {
       const lastComma = s.lastIndexOf(",");
       const lastDot   = s.lastIndexOf(".");
       if (lastComma > lastDot) {
-        // pt-BR: vírgula decimal, pontos = milhar
         const n = parseFloat(s.replace(/\./g, "").replace(",", "."));
         return Number.isFinite(n) ? n : 0;
       } else {
-        // ponto como decimal (en-US), remove vírgulas de milhar
         const n = parseFloat(s.replace(/,/g, ""));
         return Number.isFinite(n) ? n : 0;
       }
     }
 
-    // Só vírgula → vírgula decimal
     if (hasComma && !hasDot) {
       const n = parseFloat(s.replace(/\./g, "").replace(",", "."));
       return Number.isFinite(n) ? n : 0;
     }
 
-    // Só ponto
     if (!hasComma && hasDot) {
-      // Se for padrão en-US com 1–4 casas decimais (ex: 54.42), trata como decimal
       if (/^\d+\.\d{1,4}$/.test(s)) {
         const n = parseFloat(s);
         return Number.isFinite(n) ? n : 0;
       }
-      // Caso contrário: pontos como milhar (ex: 6.934)
       const n = parseFloat(s.replace(/\./g, ""));
       return Number.isFinite(n) ? n : 0;
     }
 
-    // Só dígitos
     const n = parseFloat(s);
     return Number.isFinite(n) ? n : 0;
   }
 
   // ===== Helpers de valores (Produto / Frete) =====
   getValorProduto(d) {
-    // Prioriza valor consolidado do backend (mesmo quando 0)
     if (Object.prototype.hasOwnProperty.call(d, 'valor_produto') && d.valor_produto !== null) {
       return this.toNumber(d.valor_produto);
     }
-    // Fallback para campos legados/ML somente se não vier do backend
     const candidatos = [
       d.valor_produto_ml,
       d.valor_item,
@@ -328,11 +317,9 @@ class DevolucoesFeed {
   }
 
   getValorFrete(d) {
-    // Prioriza valor consolidado do backend (mesmo quando 0)
     if (Object.prototype.hasOwnProperty.call(d, 'valor_frete') && d.valor_frete !== null) {
       return this.toNumber(d.valor_frete);
     }
-    // Fallback legados
     const candidatos = [
       d.frete,
       d.ml_valor_frete,
@@ -341,7 +328,7 @@ class DevolucoesFeed {
       d.valor_envio
     ];
     for (const v of candidatos) {
-      const n = this.toNumber(v); // <-- fix: sempre usa this.toNumber
+      const n = this.toNumber(v);
       if (n > 0) return n;
     }
     return 0;
@@ -610,17 +597,19 @@ class DevolucoesFeed {
 
   startAutoSync() {
     setInterval(async () => {
-      await this.carregar();
-      this.renderizar();
+      // auto-sync silencioso: importa do ML e recarrega
+      await this.sincronizar({ auto: true });
     }, this.SYNC_MS);
   }
 
-  async sincronizar() {
+  async sincronizar(opts = {}) {
+    const auto = !!opts.auto;
+
     if (this.syncInProgress) return;
     this.syncInProgress = true;
 
     const btn = document.getElementById("botao-sync");
-    if (btn) {
+    if (btn && !auto) {
       btn.disabled = true;
       btn.dataset.labelOriginal = btn.textContent;
       btn.textContent = "Sincronizando...";
@@ -703,8 +692,8 @@ class DevolucoesFeed {
         if (alt.ok) {
           result = alt;
         } else {
-          // se os DOIS endpoints forem 404, explica direto
-          if (alt.res && alt.res.status === 404) {
+          // se os DOIS endpoints forem 404, explica direto (somente manual)
+          if (alt.res && alt.res.status === 404 && !auto) {
             throw new Error(
               "Endpoints de sincronização não existem no servidor. " +
               "(/api/returns/sync e /api/ml/claims/import retornaram 404)."
@@ -716,18 +705,19 @@ class DevolucoesFeed {
 
       if (!result.ok) {
         console.error("[sync] falha final", result);
-        throw new Error(result.msg || "Falha ao iniciar sincronização");
+        if (!auto) throw new Error(result.msg || "Falha ao iniciar sincronização");
+        // em auto, só loga e segue para recarregar do banco
       }
 
       await this.carregar();
       this.renderizar();
-      this.toast("Sincronização", "Devoluções atualizadas com sucesso.", "success");
+      if (!auto) this.toast("Sincronização", "Devoluções atualizadas com sucesso.", "success");
     } catch (e) {
       console.error("Erro na sincronização", e);
-      this.toast("Erro", e?.message || "Não foi possível sincronizar as devoluções.", "error");
+      if (!auto) this.toast("Erro", e?.message || "Não foi possível sincronizar as devoluções.", "error");
     } finally {
       this.syncInProgress = false;
-      if (btn) {
+      if (btn && !auto) {
         btn.disabled   = false;
         btn.textContent = btn.dataset.labelOriginal || "Sincronizar";
       }
