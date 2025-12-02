@@ -18,7 +18,7 @@ async function columnsOf(q, table) {
       [table]
     );
     return new Set(rows.map(r => r.column_name));
-  } catch (e) {
+  } catch {
     return new Set(); // fallback
   }
 }
@@ -78,7 +78,6 @@ router.get('/', async (req, res) => {
 
     const selectCols = [];
 
-    // colunas principais que o front usa na listagem
     [
       'id',
       'id_venda',
@@ -95,13 +94,9 @@ router.get('/', async (req, res) => {
       'valor_frete'
     ].forEach(c => { if (has(c)) selectCols.push(c); });
 
-    // extras de UI
     if (has('foto_produto'))     selectCols.push('foto_produto');
-
-    // status de devolução no ML
     if (has('ml_return_status')) selectCols.push('ml_return_status');
 
-    // dados de claim / triage do ML
     if (has('ml_claim_id'))      selectCols.push('ml_claim_id');
     if (has('ml_claim_stage'))   selectCols.push('ml_claim_stage');
     if (has('ml_claim_status'))  selectCols.push('ml_claim_status');
@@ -114,23 +109,19 @@ router.get('/', async (req, res) => {
     if (has('ml_triage_product_condition'))   selectCols.push('ml_triage_product_condition');
     if (has('ml_triage_product_destination')) selectCols.push('ml_triage_product_destination');
 
-    // motivo canônico, caso exista
     if (has('tipo_reclamacao')) selectCols.push('tipo_reclamacao');
 
-    // fallback extremo
     if (!selectCols.length) selectCols.push('*');
 
     const params       = [];
     const whereClauses = [];
 
-    // tenant
     const tenantId = getTenantId(req);
     if (tenantId && has('tenant_id')) {
       whereClauses.push(`(tenant_id = $${params.length + 1} OR tenant_id IS NULL)`);
       params.push(tenantId);
     }
 
-    // busca textual
     if (search) {
       const likes = [];
       if (has('id_venda'))     likes.push(`id_venda ILIKE $${params.length + 1}`);
@@ -142,17 +133,11 @@ router.get('/', async (req, res) => {
       params.push(`%${search}%`);
     }
 
-    // filtro por range de dias
     if (rangeDays > 0) {
-      const dcol = has('created_at')
-        ? 'created_at'
-        : (has('updated_at') ? 'updated_at' : null);
-      if (dcol) {
-        whereClauses.push(`${dcol} >= NOW() - INTERVAL '${rangeDays} days'`);
-      }
+      const dcol = has('created_at') ? 'created_at' : (has('updated_at') ? 'updated_at' : null);
+      if (dcol) whereClauses.push(`${dcol} >= NOW() - INTERVAL '${rangeDays} days'`);
     }
 
-    // filtro por status (usado eventualmente por outras telas / exports)
     if (status) {
       if (status === 'em_transporte') {
         let clause = `(status = 'em_transporte'`;
@@ -162,26 +147,12 @@ router.get('/', async (req, res) => {
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'disputa') {
-        // disputa / mediação: considera status interno, devolução no ML,
-        // stage/status da claim e infos da triage
         let clause = `(status IN ('disputa','mediacao','reclamacao')`;
-
-        if (has('ml_return_status')) {
-          clause += ` OR ml_return_status IN ('dispute','mediation','pending','open')`;
-        }
-        if (has('ml_claim_stage')) {
-          clause += ` OR LOWER(ml_claim_stage) IN ('dispute','mediation')`;
-        }
-        if (has('ml_claim_status')) {
-          clause += ` OR LOWER(ml_claim_status) IN ('dispute','mediation')`;
-        }
-        if (has('ml_triage_stage')) {
-          clause += ` OR LOWER(ml_triage_stage) IN ('seller_review_pending','pending')`;
-        }
-        if (has('ml_triage_status')) {
-          clause += ` OR LOWER(ml_triage_status) = 'failed'`;
-        }
-
+        if (has('ml_return_status')) clause += ` OR ml_return_status IN ('dispute','mediation','pending','open')`;
+        if (has('ml_claim_stage'))   clause += ` OR LOWER(ml_claim_stage) IN ('dispute','mediation')`;
+        if (has('ml_claim_status'))  clause += ` OR LOWER(ml_claim_status) IN ('dispute','mediation')`;
+        if (has('ml_triage_stage'))  clause += ` OR LOWER(ml_triage_stage) IN ('seller_review_pending','pending')`;
+        if (has('ml_triage_status')) clause += ` OR LOWER(ml_triage_status) = 'failed'`;
         clause += ')';
         whereClauses.push(clause);
       } else if (status === 'concluida') {
@@ -200,13 +171,11 @@ router.get('/', async (req, res) => {
       }
     }
 
-    const whereSql = whereClauses.length
-      ? 'WHERE ' + whereClauses.join(' AND ')
-      : '';
+    const whereSql = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
-    const orderCol = has('updated_at')
-      ? 'updated_at'
-      : (has('created_at') ? 'created_at' : 'id');
+    const orderCol = (has('updated_at') && 'updated_at')
+      || (has('created_at') && 'created_at')
+      || 'id';
 
     const sql = `
       SELECT ${selectCols.join(',\n             ')}
@@ -237,14 +206,19 @@ router.get('/', async (req, res) => {
   }
 });
 
-/* =============== 2) SYNC via ML =============== */
-router.get('/sync', (req, res) => {
-  const { days = '7', silent = '0' } = req.query;
-  const qs = new URLSearchParams();
-  if (days) qs.set('days', String(days));
-  qs.set('all', '1');
-  if (silent) qs.set('silent', String(silent));
-  return res.redirect(`/api/ml/claims/import?${qs.toString()}`);
+/* =============== 2) SYNC via ML (wrapper) =============== */
+router.get('/sync', async (req, res) => {
+  try {
+    const qs = new URLSearchParams(req.query);
+    if (!qs.has('days'))   qs.set('days', '30');
+    if (!qs.has('all'))    qs.set('all',  '1');
+    if (!qs.has('silent')) qs.set('silent','1');
+
+    // Redireciona preservando método (GET) e query
+    return res.redirect(307, `/api/ml/claims/import?${qs.toString()}`);
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'sync_redirect_failed' });
+  }
 });
 
 /* =============== 3) DETALHES SIMPLIFICADO =============== */
@@ -256,13 +230,12 @@ router.get('/:id', async (req, res) => {
     const tenantId = getTenantId(req);
     const isNumeric = /^\d+$/.test(idParam);
 
-    const cols      = await columnsOf(q, 'devolucoes');
+    const cols       = await columnsOf(q, 'devolucoes');
     const hasIdVenda = cols.has('id_venda');
     const hasTenant  = cols.has('tenant_id');
 
     let row = null;
 
-    // 1) tenta por ID numérico
     if (isNumeric) {
       try {
         const args = [ Number(idParam) ];
@@ -272,21 +245,14 @@ router.get('/:id', async (req, res) => {
           args.push(tenantId);
         }
         sql += ' LIMIT 1';
-
         const r = await q(sql, args);
         row = r.rows[0] || null;
       } catch (err) {
         console.warn('[returns:get] erro ao buscar por id:', err.message);
-        if (debug) {
-          return res.status(500).json({
-            error:  'sql_error_id',
-            detail: err.message
-          });
-        }
+        if (debug) return res.status(500).json({ error: 'sql_error_id', detail: err.message });
       }
     }
 
-    // 2) se não achou, tenta por id_venda (se coluna existir)
     if (!row && hasIdVenda) {
       try {
         const args2 = [ idParam ];
@@ -296,34 +262,23 @@ router.get('/:id', async (req, res) => {
           args2.push(tenantId);
         }
         sql2 += ' LIMIT 1';
-
         const r2 = await q(sql2, args2);
         row = r2.rows[0] || null;
       } catch (err) {
         console.warn('[returns:get] erro ao buscar por id_venda:', err.message);
-        if (debug) {
-          return res.status(500).json({
-            error:  'sql_error_id_venda',
-            detail: err.message
-          });
-        }
+        if (debug) return res.status(500).json({ error: 'sql_error_id_venda', detail: err.message });
       }
     }
 
-    if (!row) {
-      return res.status(404).json({ error: 'Não encontrado' });
-    }
+    if (!row) return res.status(404).json({ error: 'Não encontrado' });
 
-    // motivo “derivado” para o front
     const rawMotivo    = row.tipo_reclamacao || row.reclamacao || row.ml_return_status || '';
     const motivo_label = humanizeReason(rawMotivo);
 
     res.json({ ...row, motivo_label });
   } catch (e) {
     console.error('[returns:get] ERRO', e);
-    if (debug) {
-      return res.status(500).json({ error: e.message || 'Erro interno ao buscar' });
-    }
+    if (debug) return res.status(500).json({ error: e.message || 'Erro interno ao buscar' });
     res.status(500).json({ error: 'Erro interno ao buscar' });
   }
 });
@@ -333,9 +288,7 @@ router.patch('/:id', express.json(), async (req, res) => {
   try {
     const q  = qOf(req);
     const id = String(req.params.id || '').trim();
-    if (!/^\d+$/.test(id)) {
-      return res.status(400).json({ error: 'invalid_id' });
-    }
+    if (!/^\d+$/.test(id)) return res.status(400).json({ error: 'invalid_id' });
 
     const cols = await columnsOf(q, 'devolucoes');
     const has  = (c) => cols.has(c);
@@ -350,7 +303,6 @@ router.patch('/:id', express.json(), async (req, res) => {
       set.push(`${col} = $${args.length}`);
     }
 
-    // meta
     push('id_venda',        body.id_venda);
     push('cliente_nome',    body.cliente_nome);
     push('loja_nome',       body.loja_nome);
@@ -362,22 +314,17 @@ router.patch('/:id', express.json(), async (req, res) => {
     push('nfe_chave',       body.nfe_chave);
     push('reclamacao',      body.reclamacao);
 
-    // valores
     push('valor_produto',   body.valor_produto, Number);
     push('valor_frete',     body.valor_frete, Number);
 
-    // fluxo
     push('log_status',      body.log_status);
 
-    // CD
     push('cd_recebido_em',  body.cd_recebido_em || null);
     push('cd_responsavel',  body.cd_responsavel || null);
 
     if (has('updated_at')) set.push('updated_at = NOW()');
 
-    if (!set.length) {
-      return res.status(400).json({ error: 'empty_patch' });
-    }
+    if (!set.length) return res.status(400).json({ error: 'empty_patch' });
 
     const where     = [];
     const whereArgs = [];
@@ -400,9 +347,7 @@ router.patch('/:id', express.json(), async (req, res) => {
     `;
 
     const { rows } = await q(sql, [...args, ...whereArgs]);
-    if (!rows.length) {
-      return res.status(404).json({ error: 'Não encontrado' });
-    }
+    if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
     res.json(rows[0]);
   } catch (e) {
     console.error('[returns:patch] ERRO', e);
@@ -415,9 +360,7 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
   try {
     const q  = qOf(req);
     const id = String(req.params.id || '').trim();
-    if (!/^\d+$/.test(id)) {
-      return res.status(400).json({ error: 'invalid_id' });
-    }
+    if (!/^\d+$/.test(id)) return res.status(400).json({ error: 'invalid_id' });
 
     const { responsavel, when, updated_by } = req.body || {};
     const cols = await columnsOf(q, 'devolucoes');
@@ -458,11 +401,8 @@ router.patch('/:id/cd/receive', express.json(), async (req, res) => {
       [...args, ...wargs]
     );
 
-    if (!rows.length) {
-      return res.status(404).json({ error: 'Não encontrado' });
-    }
+    if (!rows.length) return res.status(404).json({ error: 'Não encontrado' });
 
-    // timeline
     try {
       const hasRetEvents = await hasTable(q, 'return_events');
       const hasDevEvents = await hasTable(q, 'devolucoes_events');
@@ -496,16 +436,12 @@ router.get('/:id/events', async (req, res) => {
   try {
     const q  = qOf(req);
     const id = String(req.params.id || '').trim();
-    if (!/^\d+$/.test(id)) {
-      return res.status(400).json({ error: 'invalid_id' });
-    }
+    if (!/^\d+$/.test(id)) return res.status(400).json({ error: 'invalid_id' });
 
     const hasRetEvents = await hasTable(q, 'return_events');
     const hasDevEvents = await hasTable(q, 'devolucoes_events');
 
-    if (!hasRetEvents && !hasDevEvents) {
-      return res.json({ items: [] });
-    }
+    if (!hasRetEvents && !hasDevEvents) return res.json({ items: [] });
 
     const params = [ Number(id) ];
     const sql = hasRetEvents
