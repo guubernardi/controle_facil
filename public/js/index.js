@@ -626,21 +626,105 @@ class DevolucoesFeed {
       btn.textContent = "Sincronizando...";
     }
 
-    try {
-      const url = `/api/returns/sync?days=${this.RANGE_DIAS}&silent=1`;
-      const res = await fetch(url, {
-        method: "GET",
-        headers: { Accept: "application/json" }
-      });
+    // helper: tenta um endpoint, captura status + mensagem
+    const tryEndpoint = async (url, label) => {
+      console.log("[sync] chamando", label, url);
+      let res;
+      try {
+        res = await fetch(url, {
+          method: "GET",
+          headers: { Accept: "application/json" }
+        });
+      } catch (err) {
+        console.error("[sync] erro de rede em", label, err);
+        return {
+          ok: false,
+          res: null,
+          label,
+          url,
+          msg: "Falha de rede ao chamar " + label + ": " + (err.message || String(err))
+        };
+      }
 
-      if (!res.ok) throw new Error("Falha ao iniciar sincronização");
+      console.log("[sync] resposta", label, res.status);
+
+      if (res.ok) return { ok: true, res, label, url };
+
+      let bodyJson = null;
+      let bodyText = "";
+      let msg = "";
+
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+      if (ct.includes("application/json")) {
+        try {
+          bodyJson = await res.json();
+        } catch (e) {
+          console.warn("[sync] falha ao ler JSON de", label, e);
+        }
+        msg =
+          bodyJson?.error ||
+          bodyJson?.detail ||
+          bodyJson?.message ||
+          "";
+      } else {
+        try {
+          bodyText = await res.text();
+          msg = (bodyText || "").slice(0, 200);
+        } catch (e) {
+          console.warn("[sync] falha ao ler texto de", label, e);
+        }
+      }
+
+      if (!msg) msg = `HTTP ${res.status}`;
+
+      return {
+        ok: false,
+        res,
+        label,
+        url,
+        msg,
+        bodyJson,
+        bodyText
+      };
+    };
+
+    try {
+      const qsBase = `days=${this.RANGE_DIAS}&silent=1`;
+
+      // 1) tenta o wrapper /api/returns/sync
+      let result = await tryEndpoint(`/api/returns/sync?${qsBase}`, "returns-sync");
+
+      // 2) se der 404, tenta direto o import do ML
+      if (!result.ok && result.res && result.res.status === 404) {
+        const qsImport = `${qsBase}&all=1`;
+        const alt = await tryEndpoint(`/api/ml/claims/import?${qsImport}`, "ml-claims-import");
+
+        if (alt.ok) {
+          result = alt;
+        } else {
+          // se os DOIS endpoints forem 404, explica direto
+          if (alt.res && alt.res.status === 404) {
+            throw new Error(
+              "Endpoints de sincronização não existem no servidor. " +
+              "(/api/returns/sync e /api/ml/claims/import retornaram 404)."
+            );
+          }
+          result = alt;
+        }
+      }
+
+      if (!result.ok) {
+        console.error("[sync] falha final", result);
+        throw new Error(result.msg || "Falha ao iniciar sincronização");
+      }
 
       await this.carregar();
       this.renderizar();
       this.toast("Sincronização", "Devoluções atualizadas com sucesso.", "success");
     } catch (e) {
       console.error("Erro na sincronização", e);
-      this.toast("Erro", "Não foi possível sincronizar as devoluções.", "error");
+      this.toast("Erro", e?.message || "Não foi possível sincronizar as devoluções.", "error");
     } finally {
       this.syncInProgress = false;
       if (btn) {
